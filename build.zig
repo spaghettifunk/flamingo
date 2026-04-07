@@ -4,20 +4,80 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const chilli_dep = b.dependency("chilli", .{});
-    const chilli_module = chilli_dep.module("chilli");
+    // nanoarrow static library
+    const nanoarrow = b.addLibrary(.{
+        .name = "nanoarrow",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    nanoarrow.addCSourceFile(.{
+        .file = b.path("vendor/nanoarrow/nanoarrow.c"),
+        .flags = &.{"-std=c99"},
+    });
+    nanoarrow.addIncludePath(b.path("vendor/nanoarrow"));
+    nanoarrow.linkLibC();
+
+    // Log.zig dependency
+    const logz = b.dependency("logz", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("logz");
+
+    // Chilli CLI dependency
+    const chilli = b.dependency("chilli", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("chilli");
+
+    // DuckDB dependency via zuckdb
+    const zuckdb = b.dependency("zuckdb", .{
+        .target = target,
+        .optimize = optimize,
+        .system_libduckdb = false,
+        .debug_duckdb = false,
+    }).module("zuckdb");
+
+    // HTTP webserver
+    const httpz = b.dependency("httpz", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("httpz");
+
+    // OpenTelemetry proto package ships protobuf as a dependency so we'll use it.
+    const otel_pb_dep = b.dependency("opentelemetry_proto", .{
+        .optimize = optimize,
+        .target = target,
+    });
+    const otel_proto_mod = otel_pb_dep.module("opentelemetry-proto");
+    const protobuf_mod = otel_pb_dep.builder.dependency("protobuf", .{
+        .optimize = optimize,
+        .target = target,
+    }).module("protobuf");
 
     const exe_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe_module.addImport("chilli", chilli_module);
+
+    exe_module.addImport("logz", logz);
+    exe_module.addImport("chilli", chilli);
+    exe_module.addImport("zuckdb", zuckdb);
+    exe_module.addImport("httpz", httpz);
+    exe_module.addImport("protobuf", protobuf_mod);
+    exe_module.addImport("opentelemetry-proto", otel_proto_mod);
 
     const exe = b.addExecutable(.{
-        .name = "artemis",
+        .name = "flamingo",
         .root_module = exe_module,
     });
+
+    exe.linkLibrary(nanoarrow);
+    exe.addIncludePath(b.path("vendor/nanoarrow"));
+    exe.linkLibC();
 
     b.installArtifact(exe);
 
