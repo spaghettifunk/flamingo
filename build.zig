@@ -26,6 +26,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }).module("logz");
 
+    // Toml dependency
+    const toml = b.dependency("toml", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("toml");
+
     // Chilli CLI dependency
     const chilli = b.dependency("chilli", .{
         .target = target,
@@ -64,6 +70,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe_module.addImport("logz", logz);
+    exe_module.addImport("toml", toml);
     exe_module.addImport("chilli", chilli);
     exe_module.addImport("zuckdb", zuckdb);
     exe_module.addImport("httpz", httpz);

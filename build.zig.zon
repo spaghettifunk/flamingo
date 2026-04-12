@@ -56,6 +56,10 @@
             .url = "git+https://github.com/karlseguin/log.zig#b4a0b6b38d8fad1b94649046a967a700df5ce576",
             .hash = "logz-0.0.0-O9YWXraFAgBQxWV4eh_4wp9axpoLhrzTIpYws4oxMLYh",
         },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml#a73c9423d88ed413204b39638fab7e9bccdb83fd",
+            .hash = "toml-0.3.0-bV14Be6EAQDr0fkyURz4jYFyTAMPcwlNN0FEPVjDnXTR",
+        },
     },
     .paths = .{
         "build.zig",

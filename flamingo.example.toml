@@ -1,0 +1,45 @@
+# flamingo configuration
+
+[node]
+role = "all"                  # all | router | ingester | querier | compactor | alertmanager
+
+[http]
+address = "127.0.0.1"
+port = 8801
+
+[storage]
+data_dir = "./data"           # base directory for WAL, local Parquet, cache
+
+[memtable]
+max_size_in_memory = 268435456  # 256 MB — MemTable seal threshold
+max_size_on_disk   = 134217728  # 128 MB — WAL file seal threshold
+persist_interval   = 5          # seconds between Immutable → Parquet flush
+push_interval      = 10         # seconds between local → S3 upload check
+max_retention_time = 600        # seconds before WAL file is force-uploaded
+
+[compactor]
+max_file_size    = 268435456    # 256 MB max compacted Parquet file
+thread_num       = 0            # 0 = CPU * 2
+
+[s3]
+provider    = "aws"             # aws | gcs | azure
+bucket_name = "test"
+region_name = "us-east-1"
+
+[meta]
+store = "sqlite"                # sqlite | postgres
+
+[cache]
+memory_cache_enabled  = true
+memory_cache_max_size = 0       # 0 = 50% of available RAM (bytes when set explicitly)
+
+[index]
+enable_inverted_index = false   # enable FTS indexing
+
+[performance]
+per_thread_lock       = false   # one WAL per CPU core; disable lock contention at high ingest
+cols_per_record_limit = 1000    # max fields per record
+
+[auth]
+root_user_email    = "flamingo@flamingo.com"
+root_user_password = "flamingo42"
