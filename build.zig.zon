@@ -32,26 +32,6 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .chilli = .{
-            .url = "https://github.com/CogitatorTech/chilli/archive/main.tar.gz",
-            .hash = "chilli-0.2.2-c19PrvIyAQAgsL0VkYCKq0DuxU7rZUpRuH991zsyOkYQ",
-        },
-        .zuckdb = .{
-            .url = "git+https://github.com/karlseguin/zuckdb.zig#54a22ace9db98cd97fba7f2fdd8fe16de07335ca",
-            .hash = "zuckdb-0.0.0-DpSXVNc4BgBkAOzXQcNkOwctDLGlKtnLnIUepn2I_S-g",
-        },
-        .nanoarrow = .{
-            .url = "https://github.com/apache/arrow-nanoarrow/archive/refs/tags/apache-arrow-nanoarrow-0.8.0.tar.gz",
-            .hash = "N-V-__8AAJW-WgAA1OoCKbjOoObKCeS69aUy_snBnB1yv013",
-        },
-        .httpz = .{
-            .url = "git+https://github.com/karlseguin/http.zig?ref=master#1a4d53b95bc4ac6c84cbc081727428de40c8c635",
-            .hash = "httpz-0.0.0-PNVzrNVOBwDlxyffzwONpI9j9dYqKWXxopU1ZCLt4C09",
-        },
-        .opentelemetry_proto = .{
-            .url = "git+https://github.com/zig-o11y/opentelemetry-proto?ref=v1.10.2#bf2cc41c1c0e9d5fd8849fcd3cb7788be3da90d5",
-            .hash = "opentelemetry_proto-1.10.0-S4Y0uxzcAgBM04e5dhBjFRj90MQwOPFY3FltfUwoQs1z",
-        },
         .logz = .{
             .url = "git+https://github.com/karlseguin/log.zig#b4a0b6b38d8fad1b94649046a967a700df5ce576",
             .hash = "logz-0.0.0-O9YWXraFAgBQxWV4eh_4wp9axpoLhrzTIpYws4oxMLYh",

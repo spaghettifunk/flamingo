@@ -1,0 +1,4 @@
+# flamingo configuration
+
+[storage]
+data_dir = "./data"
