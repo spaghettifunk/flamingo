@@ -7,3 +7,8 @@ data_dir = "./data"
 new_file = "ctrl+n"
 open_file = "ctrl+o"
 settings = "ctrl+p"
+toggle_explorer = "ctrl+e"
+switch_focus = "ctrl+w"
+
+[explorer]
+width_percentage = 20

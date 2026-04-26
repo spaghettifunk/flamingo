@@ -5,13 +5,14 @@ pub const DashboardAction = enum {
     None,
     NewFile,
     OpenFile,
+    OpenFolder,
     Settings,
     Quit,
 };
 
 pub const Dashboard = struct {
     selected_index: usize = 0,
-    const options = [_][]const u8{ "New File [Ctrl+N]", "Open File [Ctrl+O]", "Settings [Ctrl+P]", "Quit [Ctrl+Q]" };
+    const options = [_][]const u8{ "New File [Ctrl+N]", "Open File [Ctrl+O]", "Open Folder [Ctrl+F]", "Settings [Ctrl+P]", "Quit [Ctrl+Q]" };
 
     const logo =
         \\   ___ _               _                 
@@ -39,8 +40,9 @@ pub const Dashboard = struct {
             return switch (self.selected_index) {
                 0 => .NewFile,
                 1 => .OpenFile,
-                2 => .Settings,
-                3 => .Quit,
+                2 => .OpenFolder,
+                3 => .Settings,
+                4 => .Quit,
                 else => .None,
             };
         }

@@ -5,12 +5,19 @@ pub const KeybindingsConfig = struct {
     new_file: []const u8 = "ctrl+n",
     open_file: []const u8 = "ctrl+o",
     settings: []const u8 = "ctrl+p",
+    toggle_explorer: []const u8 = "ctrl+e",
+    switch_focus: []const u8 = "ctrl+w",
+};
+
+pub const ExplorerConfig = struct {
+    width_percentage: u8 = 20,
 };
 
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
     keybindings: KeybindingsConfig = .{},
+    explorer: ExplorerConfig = .{},
 };
 
 // ── Validation ───────────────────────────────────────────────────────────────

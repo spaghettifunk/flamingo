@@ -3,6 +3,7 @@ const context = @import("context.zig");
 const terminal = @import("terminal.zig");
 const buffer = @import("buffer.zig");
 const dashboard = @import("dashboard.zig");
+const explorer = @import("explorer.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -25,6 +26,9 @@ pub const Editor = struct {
     width: usize = 0,
     height: usize = 0,
     should_quit: bool = false,
+    tree: ?explorer.Explorer = null,
+    explorer_visible: bool = false,
+    explorer_focused: bool = false,
 
     pub fn init(ctx: *context.FlamingoContext) Editor {
         return Editor{
@@ -36,6 +40,9 @@ pub const Editor = struct {
         if (self.buf) |*b| {
             if (b.filename) |f| self.allocator.free(f);
             b.deinit();
+        }
+        if (self.tree) |*t| {
+            t.deinit();
         }
         self.command_buffer.deinit(self.allocator);
     }
@@ -84,6 +91,63 @@ pub const Editor = struct {
             self.error_message = null;
         }
 
+        const is_ctrl_e = event.ctrl and event.key == .Char and event.char == 'e';
+        const is_ctrl_w = event.ctrl and event.key == .Char and event.char == 'w';
+
+        if (is_ctrl_e) {
+            if (self.tree == null) {
+                self.tree = explorer.Explorer.init(self.allocator, ".") catch null;
+            }
+            self.explorer_visible = !self.explorer_visible;
+            if (self.explorer_visible) {
+                self.explorer_focused = true;
+            } else {
+                self.explorer_focused = false;
+            }
+            return;
+        }
+
+        if (is_ctrl_w) {
+            if (self.explorer_visible) {
+                self.explorer_focused = !self.explorer_focused;
+            }
+            return;
+        }
+
+        if (self.explorer_focused and self.explorer_visible and self.tree != null) {
+            if (self.mode == .Normal or self.mode == .Insert) {
+                if (event.key == .Up) {
+                    self.tree.?.moveUp();
+                    return;
+                } else if (event.key == .Down) {
+                    self.tree.?.moveDown();
+                    return;
+                } else if (event.key == .Enter) {
+                    if (self.tree.?.nodes.items.len > 0) {
+                        const node = self.tree.?.nodes.items[self.tree.?.selected_index];
+                        if (node.is_dir) {
+                            self.tree.?.toggleExpand() catch {};
+                        } else {
+                            if (buffer.Buffer.loadFromFile(self.allocator, node.absolute_path)) |b| {
+                                if (self.buf) |*old_b| {
+                                    if (old_b.filename) |f| self.allocator.free(f);
+                                    old_b.deinit();
+                                }
+                                self.buf = b;
+                                self.cursor_row = 0;
+                                self.cursor_col = 0;
+                                self.explorer_focused = false;
+                                self.mode = .Normal;
+                            } else |_| {
+                                self.error_message = "Could not open file";
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
         switch (self.mode) {
             .Dashboard => {
                 const action = self.dash.handleInput(event);
@@ -95,6 +159,15 @@ pub const Editor = struct {
                     .OpenFile => {
                         self.mode = .OpenFilePrompt;
                         self.command_buffer.clearRetainingCapacity();
+                    },
+                    .OpenFolder => {
+                        self.mode = .Normal;
+                        if (self.tree) |*t| {
+                            t.deinit();
+                        }
+                        self.tree = explorer.Explorer.init(self.allocator, ".") catch null;
+                        self.explorer_visible = self.tree != null;
+                        self.explorer_focused = self.tree != null;
                     },
                     .Quit => self.should_quit = true,
                     else => {},
@@ -330,11 +403,33 @@ pub const Editor = struct {
 
         try terminal.clearScreen(writer);
 
+        var buf_start_col: usize = 1;
+        var buf_width: usize = self.width;
+
+        if (self.explorer_visible and self.tree != null) {
+            const exp_width = (self.width * @as(usize, self.ctx.config.explorer.width_percentage)) / 100;
+            if (exp_width > 0) {
+                try self.tree.?.render(writer, exp_width, self.height, self.explorer_focused);
+                
+                for (1..self.height) |r| {
+                    try terminal.moveCursor(writer, r, exp_width + 1);
+                    try writer.writeAll("│");
+                }
+                buf_start_col = exp_width + 2;
+                buf_width = self.width -| (exp_width + 1);
+            }
+        }
+
         if (self.buf) |b| {
             for (b.lines.items, 0..) |line, r| {
                 if (r >= self.height - 1) break; // Leave room for status bar
-                try terminal.moveCursor(writer, r + 1, 1);
-                try writer.writeAll(line.items);
+                try terminal.moveCursor(writer, r + 1, buf_start_col);
+                
+                if (line.items.len > buf_width) {
+                    try writer.writeAll(line.items[0..buf_width]);
+                } else {
+                    try writer.writeAll(line.items);
+                }
             }
         }
 
@@ -367,8 +462,12 @@ pub const Editor = struct {
         // Move cursor to proper location
         if (self.mode == .Command) {
             try terminal.moveCursor(writer, self.height, 2 + self.command_buffer.items.len);
+        } else if (self.explorer_focused and self.explorer_visible and self.tree != null) {
+            try terminal.moveCursor(writer, self.height, self.width);
         } else {
-            try terminal.moveCursor(writer, self.cursor_row + 1, self.cursor_col + 1);
+            // Keep cursor in bounds of buf_width if possible
+            const vis_col = if (self.cursor_col > buf_width) buf_width else self.cursor_col;
+            try terminal.moveCursor(writer, self.cursor_row + 1, buf_start_col + vis_col);
         }
     }
 
