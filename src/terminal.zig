@@ -150,63 +150,112 @@ pub fn readKey(reader: anytype) !KeyEvent {
 
     // Handle escape sequences
     if (c == '\x1b') {
-        var seq: [3]u8 = undefined;
-        if ((try reader.read(seq[0..1])) == 0) {
+        var seq: [16]u8 = undefined;
+        var seq_len: usize = 0;
+        
+        if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
             event.key = .Esc;
             return event;
         }
-        if ((try reader.read(seq[1..2])) == 0) {
-            event.key = .Esc;
-            return event;
+        seq_len += 1;
+
+        var alt_prefix = false;
+        if (seq[0] == '\x1b') {
+            alt_prefix = true;
+            if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
+                event.key = .Esc;
+                return event;
+            }
+            seq[0] = seq[1];
         }
 
-        if (seq[0] == '[') {
-            if (seq[1] >= '0' and seq[1] <= '9') {
-                if ((try reader.read(seq[2..3])) == 0) {
-                    event.key = .Esc;
-                    return event;
+        if (seq[0] == '[' or seq[0] == 'O') {
+            while (seq_len < seq.len) {
+                if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) break;
+                const ch = seq[seq_len];
+                seq_len += 1;
+                if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or ch == '~') {
+                    break;
                 }
-                if (seq[2] == '~') {
-                    switch (seq[1]) {
-                        '1' => event.key = .Home,
-                        '3' => event.key = .Delete,
-                        '4' => event.key = .End,
-                        '5' => event.key = .PageUp,
-                        '6' => event.key = .PageDown,
-                        '7' => event.key = .Home,
-                        '8' => event.key = .End,
-                        else => {},
+            }
+            
+            if (seq[0] == '[') {
+                const last_ch = seq[seq_len - 1];
+                
+                var alt = false;
+                var ctrl = false;
+                var shift = false;
+                
+                if (std.mem.indexOfScalar(u8, seq[0..seq_len], ';')) |idx| {
+                    if (idx + 1 < seq_len) {
+                        const mod_char = seq[idx + 1];
+                        switch (mod_char) {
+                            '2' => shift = true,
+                            '3' => alt = true,
+                            '4' => { shift = true; alt = true; },
+                            '5' => ctrl = true,
+                            '6' => { shift = true; ctrl = true; },
+                            '7' => { alt = true; ctrl = true; },
+                            '8' => { shift = true; alt = true; ctrl = true; },
+                            else => {},
+                        }
                     }
                 }
-            } else {
-                switch (seq[1]) {
+                
+                event.alt = alt or alt_prefix;
+                event.ctrl = ctrl;
+                event.shift = shift;
+                
+                switch (last_ch) {
                     'A' => event.key = .Up,
                     'B' => event.key = .Down,
                     'C' => event.key = .Right,
                     'D' => event.key = .Left,
                     'H' => event.key = .Home,
                     'F' => event.key = .End,
+                    '~' => {
+                        if (seq_len > 1) {
+                            switch (seq[1]) {
+                                '1', '7' => event.key = .Home,
+                                '3' => event.key = .Delete,
+                                '4', '8' => event.key = .End,
+                                '5' => event.key = .PageUp,
+                                '6' => event.key = .PageDown,
+                                else => {},
+                            }
+                        }
+                    },
                     else => {},
                 }
-            }
-        } else if (seq[0] == 'O') {
-            switch (seq[1]) {
-                'H' => event.key = .Home,
-                'F' => event.key = .End,
-                else => {},
+            } else if (seq[0] == 'O') {
+                switch (seq[seq_len - 1]) {
+                    'H' => event.key = .Home,
+                    'F' => event.key = .End,
+                    else => {},
+                }
+                if (alt_prefix) event.alt = true;
             }
         } else {
-            // Alt+Char (Meta)
+            // Meta + Char
+            if (seq[0] == 'b') {
+                event.alt = true;
+                event.key = .Left;
+                return event;
+            } else if (seq[0] == 'f') {
+                event.alt = true;
+                event.key = .Right;
+                return event;
+            }
+
             event.alt = true;
             event.key = .Char;
             event.char = seq[0];
-            return event;
         }
         return event;
     }
 
     // Handle Control characters
-    if (c >= 1 and c <= 26 and c != '\r' and c != '\n' and c != '\t' and c != 8) {
+    if (c >= 1 and c <= 26 and c != 13 and c != 10 and c != 9 and c != 8) {
         event.ctrl = true;
         event.key = .Char;
         // Map 1-26 to 'a'-'z'

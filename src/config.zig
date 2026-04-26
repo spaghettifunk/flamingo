@@ -1,24 +1,21 @@
 const std = @import("std");
 const toml = @import("toml");
 
-pub const StorageConfig = struct {
-    /// Base directory for WAL files, local Parquet cache, and disk cache.
-    data_dir: []const u8 = "./data",
+pub const KeybindingsConfig = struct {
+    new_file: []const u8 = "ctrl+n",
+    open_file: []const u8 = "ctrl+o",
+    settings: []const u8 = "ctrl+p",
 };
 
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
-    storage: StorageConfig = .{},
+    keybindings: KeybindingsConfig = .{},
 };
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
-pub const ConfigError = error{
-    MissingS3BucketName,
-    MissingRootUserEmail,
-    MissingRootUserPassword,
-};
+pub const ConfigError = error{};
 
 // TODO: fill validation function
 pub fn validate(_: *const Config) ConfigError!void {}

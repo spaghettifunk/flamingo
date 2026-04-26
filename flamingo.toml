@@ -2,3 +2,8 @@
 
 [storage]
 data_dir = "./data"
+
+[keybindings]
+new_file = "ctrl+n"
+open_file = "ctrl+o"
+settings = "ctrl+p"
