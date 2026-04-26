@@ -162,6 +162,7 @@ pub const Editor = struct {
                         self.command_buffer.clearRetainingCapacity();
                     },
                     .OpenFolder => {
+                        self.closeBuffer();
                         self.mode = .Normal;
                         if (self.tree) |*t| {
                             t.deinit();
@@ -464,57 +465,53 @@ pub const Editor = struct {
         else
             0;
 
-        var last_screen_row: usize = 0;
+        const visible_rows = if (self.height > 1) self.height - 1 else 1;
+        for (1..visible_rows + 1) |screen_row| {
+            // 1. Move to the correct column for the right-hand panel
+            try terminal.moveCursor(writer, screen_row, buf_start_col);
 
-        if (self.buf) |b| {
-            const total_lines = b.lines.items.len;
-            const num_digits = @max(countDigits(total_lines), 2);
-            const content_width = buf_width -| gutter_width;
-            const visible_rows = if (self.height > 1) self.height - 1 else 1;
-            const first_line = self.scroll_row;
-            const last_line = @min(first_line + visible_rows, total_lines);
-            for (first_line..last_line) |r| {
-                const screen_row = r - first_line + 1;
-                last_screen_row = screen_row;
+            const buffer_line_idx = screen_row + self.scroll_row - 1;
+            if (self.buf) |b| {
+                if (buffer_line_idx < b.lines.items.len) {
+                    // --- Gutter ---
+                    const is_current = (buffer_line_idx == self.cursor_row);
+                    const line_num: usize = if (is_current)
+                        buffer_line_idx + 1 // absolute 1-based
+                    else if (buffer_line_idx > self.cursor_row)
+                        buffer_line_idx - self.cursor_row
+                    else
+                        self.cursor_row - buffer_line_idx;
 
-                // --- Gutter ---
-                try terminal.moveCursor(writer, screen_row, buf_start_col);
-                const is_current = (r == self.cursor_row);
-                const line_num: usize = if (is_current)
-                    r + 1 // absolute 1-based
-                else if (r > self.cursor_row)
-                    r - self.cursor_row
-                else
-                    self.cursor_row - r;
+                    const num_digits = @max(countDigits(b.lines.items.len), 2);
 
-                if (is_current) {
-                    try writer.writeAll("\x1b[33;1m"); // bold yellow — current line
-                } else {
-                    try writer.writeAll("\x1b[2;37m"); // dim grey  — relative distance
+                    if (is_current) {
+                        try writer.writeAll("\x1b[33;1m"); // bold yellow — current line
+                    } else {
+                        try writer.writeAll("\x1b[2;37m"); // dim grey  — relative distance
+                    }
+
+                    // Right-align the number
+                    const num_used = countDigits(line_num);
+                    const pad = num_digits - num_used;
+                    for (0..pad) |_| try writer.writeByte(' ');
+                    try writer.print("{d} \x1b[0m", .{line_num});
+
+                    // --- Line content ---
+                    // moveCursor is already at buf_start_col, but we need to offset past the gutter
+                    try terminal.moveCursor(writer, screen_row, buf_start_col + gutter_width);
+                    
+                    const content_width = buf_width -| gutter_width;
+                    const line = b.lines.items[buffer_line_idx];
+                    if (line.items.len > content_width) {
+                        try writer.writeAll(line.items[0..content_width]);
+                    } else {
+                        try writer.writeAll(line.items);
+                    }
                 }
-                // Right-align the number inside num_digits columns, then a space separator
-                const num_used = countDigits(line_num);
-                const pad = num_digits - num_used;
-                for (0..pad) |_| try writer.writeByte(' ');
-                try writer.print("{d} \x1b[0m", .{line_num});
-
-                // --- Line content ---
-                try terminal.moveCursor(writer, screen_row, buf_start_col + gutter_width);
-                const line = b.lines.items[r];
-                if (line.items.len > content_width) {
-                    try writer.writeAll(line.items[0..content_width]);
-                } else {
-                    try writer.writeAll(line.items);
-                }
-                // Erase tail of line so stale characters don't linger between frames
-                try terminal.eraseToLineEnd(writer);
             }
-        }
 
-        // Clear any rows below the last rendered line (handles file shrinkage / scroll up)
-        if (last_screen_row + 1 < self.height) {
-            try terminal.moveCursor(writer, last_screen_row + 1, 1);
-            try terminal.eraseToEnd(writer);
+            // 2. Erase the tail of the line (clears both stale content and avoids wiping explorer)
+            try terminal.eraseToLineEnd(writer);
         }
 
         // Draw status bar
