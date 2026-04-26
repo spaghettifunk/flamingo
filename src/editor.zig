@@ -23,6 +23,7 @@ pub const Editor = struct {
     error_message: ?[]const u8 = null,
     cursor_row: usize = 0,
     cursor_col: usize = 0,
+    scroll_row: usize = 0,
     width: usize = 0,
     height: usize = 0,
     should_quit: bool = false,
@@ -351,6 +352,7 @@ pub const Editor = struct {
             } else {
                 if (self.cursor_row > 0) self.cursor_row -= 1;
             }
+            self.clampScroll();
             return true;
         } else if (event.key == .Down) {
             if (event.alt) {
@@ -360,6 +362,7 @@ pub const Editor = struct {
                     if (self.cursor_row < b.lines.items.len - 1) self.cursor_row += 1;
                 }
             }
+            self.clampScroll();
             return true;
         } else if (event.key == .Left) {
             if (event.alt) {
@@ -380,6 +383,16 @@ pub const Editor = struct {
             return true;
         }
         return false;
+    }
+
+    /// Adjust scroll_row so cursor_row is always within the visible viewport.
+    fn clampScroll(self: *Editor) void {
+        const visible_rows = if (self.height > 1) self.height - 1 else 1; // reserve status bar
+        if (self.cursor_row < self.scroll_row) {
+            self.scroll_row = self.cursor_row;
+        } else if (self.cursor_row >= self.scroll_row + visible_rows) {
+            self.scroll_row = self.cursor_row - visible_rows + 1;
+        }
     }
 
     fn render(self: *Editor, writer: anytype) !void {
@@ -420,13 +433,48 @@ pub const Editor = struct {
             }
         }
 
+        // Hybrid (Vim-style) line number gutter: absolute on current line, relative elsewhere.
+        const gutter_width: usize = if (self.buf) |b|
+            @max(countDigits(b.lines.items.len), 2) + 2 // digits + " " left-pad + " " separator
+        else
+            0;
+
         if (self.buf) |b| {
-            for (b.lines.items, 0..) |line, r| {
-                if (r >= self.height - 1) break; // Leave room for status bar
-                try terminal.moveCursor(writer, r + 1, buf_start_col);
-                
-                if (line.items.len > buf_width) {
-                    try writer.writeAll(line.items[0..buf_width]);
+            const total_lines = b.lines.items.len;
+            const num_digits = @max(countDigits(total_lines), 2);
+            const content_width = buf_width -| gutter_width;
+            const visible_rows = if (self.height > 1) self.height - 1 else 1;
+            const first_line = self.scroll_row;
+            const last_line = @min(first_line + visible_rows, total_lines);
+            for (first_line..last_line) |r| {
+                const screen_row = r - first_line + 1;
+
+                // --- Gutter ---
+                try terminal.moveCursor(writer, screen_row, buf_start_col);
+                const is_current = (r == self.cursor_row);
+                const line_num: usize = if (is_current)
+                    r + 1 // absolute 1-based
+                else if (r > self.cursor_row)
+                    r - self.cursor_row
+                else
+                    self.cursor_row - r;
+
+                if (is_current) {
+                    try writer.writeAll("\x1b[33;1m"); // bold yellow — current line
+                } else {
+                    try writer.writeAll("\x1b[2;37m"); // dim grey  — relative distance
+                }
+                // Right-align the number inside num_digits columns, then a space separator
+                const num_used = countDigits(line_num);
+                const pad = num_digits - num_used;
+                for (0..pad) |_| try writer.writeByte(' ');
+                try writer.print("{d} \x1b[0m", .{line_num});
+
+                // --- Line content ---
+                try terminal.moveCursor(writer, screen_row, buf_start_col + gutter_width);
+                const line = b.lines.items[r];
+                if (line.items.len > content_width) {
+                    try writer.writeAll(line.items[0..content_width]);
                 } else {
                     try writer.writeAll(line.items);
                 }
@@ -465,9 +513,11 @@ pub const Editor = struct {
         } else if (self.explorer_focused and self.explorer_visible and self.tree != null) {
             try terminal.moveCursor(writer, self.height, self.width);
         } else {
-            // Keep cursor in bounds of buf_width if possible
-            const vis_col = if (self.cursor_col > buf_width) buf_width else self.cursor_col;
-            try terminal.moveCursor(writer, self.cursor_row + 1, buf_start_col + vis_col);
+            // Offset cursor past the line-number gutter
+            const content_width = buf_width -| gutter_width;
+            const vis_col = if (self.cursor_col > content_width) content_width else self.cursor_col;
+            const vis_row = self.cursor_row - self.scroll_row + 1;
+            try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
         }
     }
 
@@ -522,6 +572,15 @@ pub const Editor = struct {
     }
 
     const CharClass = enum { Space, Alphanum, Punctuation };
+
+    /// Returns the number of decimal digits needed to represent `n` (minimum 1).
+    fn countDigits(n: usize) usize {
+        if (n == 0) return 1;
+        var v = n;
+        var d: usize = 0;
+        while (v > 0) : (v /= 10) d += 1;
+        return d;
+    }
 
     fn getCharClass(self: *Editor, c: u8) CharClass {
         _ = self;
