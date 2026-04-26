@@ -351,6 +351,11 @@ pub const Editor = struct {
                 }
             } else {
                 if (self.cursor_row > 0) self.cursor_row -= 1;
+                // Clamp col to the new line's length after vertical movement
+                if (self.buf) |b| {
+                    const new_line_len = b.lines.items[self.cursor_row].items.len;
+                    if (self.cursor_col > new_line_len) self.cursor_col = new_line_len;
+                }
             }
             self.clampScroll();
             return true;
@@ -360,6 +365,9 @@ pub const Editor = struct {
             } else {
                 if (self.buf) |b| {
                     if (self.cursor_row < b.lines.items.len - 1) self.cursor_row += 1;
+                    // Clamp col to the new line's length after vertical movement
+                    const new_line_len = b.lines.items[self.cursor_row].items.len;
+                    if (self.cursor_col > new_line_len) self.cursor_col = new_line_len;
                 }
             }
             self.clampScroll();
