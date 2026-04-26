@@ -280,6 +280,21 @@ pub const Editor = struct {
         }
     }
 
+    /// Close the current buffer and return to the Dashboard home screen.
+    fn closeBuffer(self: *Editor) void {
+        if (self.buf) |*b| {
+            if (b.filename) |f| self.allocator.free(f);
+            b.deinit();
+            self.buf = null;
+        }
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+        self.scroll_row = 0;
+        self.explorer_visible = false;
+        self.explorer_focused = false;
+        self.mode = .Dashboard;
+    }
+
     fn executeCommand(self: *Editor) !void {
         if (self.command_buffer.items.len == 0) {
             self.mode = .Normal;
@@ -297,9 +312,9 @@ pub const Editor = struct {
                     return;
                 }
             }
-            self.should_quit = true;
+            self.closeBuffer();
         } else if (std.mem.eql(u8, cmd, "q!")) {
-            self.should_quit = true;
+            self.closeBuffer();
         } else if (std.mem.eql(u8, cmd, "w")) {
             const filename = it.next();
             if (self.buf) |*b| {
@@ -329,13 +344,13 @@ pub const Editor = struct {
                         self.mode = .Normal;
                         return;
                     };
-                    self.should_quit = true;
+                    self.closeBuffer();
                 } else {
                     self.error_message = "No file name";
                     self.mode = .Normal;
                 }
             } else {
-                self.should_quit = true;
+                self.closeBuffer();
             }
         } else {
             self.error_message = "Not an editor command";
@@ -406,7 +421,7 @@ pub const Editor = struct {
     fn render(self: *Editor, writer: anytype) !void {
         if (self.mode == .Dashboard or self.mode == .OpenFilePrompt) {
             try self.dash.render(writer, self.width, self.height);
-            
+
             if (self.mode == .OpenFilePrompt) {
                 try terminal.moveCursor(writer, self.height, 1);
                 try terminal.clearLine(writer);
@@ -422,7 +437,9 @@ pub const Editor = struct {
             return;
         }
 
-        try terminal.clearScreen(writer);
+        // Move to top-left WITHOUT blanking the screen — eliminates flicker.
+        // Each line erases its own tail via \x1b[K; leftover rows cleared below with \x1b[J.
+        try terminal.moveHome(writer);
 
         var buf_start_col: usize = 1;
         var buf_width: usize = self.width;
@@ -431,7 +448,7 @@ pub const Editor = struct {
             const exp_width = (self.width * @as(usize, self.ctx.config.explorer.width_percentage)) / 100;
             if (exp_width > 0) {
                 try self.tree.?.render(writer, exp_width, self.height, self.explorer_focused);
-                
+
                 for (1..self.height) |r| {
                     try terminal.moveCursor(writer, r, exp_width + 1);
                     try writer.writeAll("│");
@@ -447,6 +464,8 @@ pub const Editor = struct {
         else
             0;
 
+        var last_screen_row: usize = 0;
+
         if (self.buf) |b| {
             const total_lines = b.lines.items.len;
             const num_digits = @max(countDigits(total_lines), 2);
@@ -456,6 +475,7 @@ pub const Editor = struct {
             const last_line = @min(first_line + visible_rows, total_lines);
             for (first_line..last_line) |r| {
                 const screen_row = r - first_line + 1;
+                last_screen_row = screen_row;
 
                 // --- Gutter ---
                 try terminal.moveCursor(writer, screen_row, buf_start_col);
@@ -486,7 +506,15 @@ pub const Editor = struct {
                 } else {
                     try writer.writeAll(line.items);
                 }
+                // Erase tail of line so stale characters don't linger between frames
+                try terminal.eraseToLineEnd(writer);
             }
+        }
+
+        // Clear any rows below the last rendered line (handles file shrinkage / scroll up)
+        if (last_screen_row + 1 < self.height) {
+            try terminal.moveCursor(writer, last_screen_row + 1, 1);
+            try terminal.eraseToEnd(writer);
         }
 
         // Draw status bar
@@ -539,14 +567,14 @@ pub const Editor = struct {
                 return;
             }
             const line = b.lines.items[self.cursor_row].items;
-            
+
             // Skip spaces first (moving left)
             while (self.cursor_col > 0 and self.getCharClass(line[self.cursor_col - 1]) == .Space) {
                 self.cursor_col -= 1;
             }
-            
+
             if (self.cursor_col == 0) return;
-            
+
             const start_class = self.getCharClass(line[self.cursor_col - 1]);
             while (self.cursor_col > 0 and self.getCharClass(line[self.cursor_col - 1]) == start_class) {
                 self.cursor_col -= 1;
@@ -564,14 +592,14 @@ pub const Editor = struct {
                 }
                 return;
             }
-            
+
             // Skip spaces first
             while (self.cursor_col < line.len and self.getCharClass(line[self.cursor_col]) == .Space) {
                 self.cursor_col += 1;
             }
-            
+
             if (self.cursor_col >= line.len) return;
-            
+
             const start_class = self.getCharClass(line[self.cursor_col]);
             while (self.cursor_col < line.len and self.getCharClass(line[self.cursor_col]) == start_class) {
                 self.cursor_col += 1;

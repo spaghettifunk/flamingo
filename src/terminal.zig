@@ -124,8 +124,23 @@ pub fn clearScreen(writer: anytype) !void {
     try writer.writeAll("\x1b[2J\x1b[H");
 }
 
+/// Move cursor to top-left without erasing anything.
+pub fn moveHome(writer: anytype) !void {
+    try writer.writeAll("\x1b[H");
+}
+
+/// Erase from the current cursor position to the end of the screen.
+pub fn eraseToEnd(writer: anytype) !void {
+    try writer.writeAll("\x1b[J");
+}
+
 pub fn clearLine(writer: anytype) !void {
     try writer.writeAll("\x1b[2K");
+}
+
+/// Erase from the current cursor position to the end of the line.
+pub fn eraseToLineEnd(writer: anytype) !void {
+    try writer.writeAll("\x1b[K");
 }
 
 pub fn moveCursor(writer: anytype, row: usize, col: usize) !void {
