@@ -538,6 +538,13 @@ pub const Editor = struct {
             current_col += tab_len;
             if (current_col >= width) break;
         }
+
+        // Render separator on row 2
+        try terminal.moveCursor(writer, 2, start_col);
+        try terminal.eraseToLineEnd(writer);
+        try writer.writeAll("\x1b[2;37m"); // Dim Grey
+        for (0..width) |_| try writer.writeAll("─");
+        try writer.writeAll("\x1b[0m");
     }
 
     fn render(self: *Editor, writer: anytype) !void {
@@ -561,7 +568,6 @@ pub const Editor = struct {
 
         var buf_start_col: usize = 1;
         var buf_width: usize = self.width;
-        try self.renderTabs(writer, buf_start_col, buf_width);
 
         // Move to top-left (row 2, because of tabs) WITHOUT blanking the screen — eliminates flicker.
         // Each line erases its own tail via \x1b[K; leftover rows cleared below with \x1b[J.
@@ -582,6 +588,8 @@ pub const Editor = struct {
             }
         }
 
+        try self.renderTabs(writer, buf_start_col, buf_width);
+
         // Hybrid (Vim-style) line number gutter: absolute on current line, relative elsewhere.
         const tab = self.currentTab();
         const gutter_width: usize = if (tab) |t|
@@ -589,10 +597,10 @@ pub const Editor = struct {
         else
             0;
 
-        const visible_rows = if (self.height > 2) self.height - 2 else 1;
+        const visible_rows = if (self.height > 3) self.height - 3 else 1;
         for (1..visible_rows + 1) |screen_row| {
-            // 1. Move to the correct column for the right-hand panel (start at row 2)
-            try terminal.moveCursor(writer, screen_row + 1, buf_start_col);
+            // 1. Move to the correct column for the right-hand panel (start at row 3)
+            try terminal.moveCursor(writer, screen_row + 2, buf_start_col);
 
             if (tab) |t| {
                 const buffer_line_idx = screen_row + t.scroll_row - 1;
@@ -673,9 +681,9 @@ pub const Editor = struct {
             const content_width = buf_width -| gutter_width;
             const vis_col = if (t.cursor_col > content_width) content_width else t.cursor_col;
             const vis_row = if (t.cursor_row >= t.scroll_row)
-                t.cursor_row - t.scroll_row + 2 // +1 for 1-based, +1 for tabs
+                t.cursor_row - t.scroll_row + 3 // +1 for 1-based, +2 for tabs+sep
             else
-                2;
+                3;
             try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
         }
     }
