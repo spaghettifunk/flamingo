@@ -16,11 +16,11 @@ pub const EditorMode = enum {
 
 pub const Editor = struct {
     ctx: *context.FlamingoContext,
-    allocator: std.mem.Allocator = std.heap.page_allocator,
+    allocator: std.mem.Allocator,
     mode: EditorMode = .Dashboard,
     dash: dashboard.Dashboard = .{},
     buf: ?buffer.Buffer = null,
-    command_buffer: std.ArrayList(u8) = std.ArrayList(u8).empty,
+    command_buffer: std.ArrayListUnmanaged(u8) = .empty,
     error_message: ?[]const u8 = null,
     cursor_row: usize = 0,
     cursor_col: usize = 0,
@@ -32,15 +32,15 @@ pub const Editor = struct {
     explorer_visible: bool = false,
     explorer_focused: bool = false,
 
-    pub fn init(ctx: *context.FlamingoContext) Editor {
+    pub fn init(allocator: std.mem.Allocator, ctx: *context.FlamingoContext) Editor {
         return Editor{
+            .allocator = allocator,
             .ctx = ctx,
         };
     }
 
     pub fn deinit(self: *Editor) void {
         if (self.buf) |*b| {
-            if (b.filename) |f| self.allocator.free(f);
             b.deinit();
         }
         if (self.tree) |*t| {
@@ -139,7 +139,6 @@ pub const Editor = struct {
                             if (buffer.Buffer.loadFromFile(self.allocator, node.absolute_path)) |b| {
                                 if (self.buf) |*old_b| {
                                     logz.info().fmt("msg", "closing buffer: {s}", .{old_b.filename orelse "unsaved"}).log();
-                                    if (old_b.filename) |f| self.allocator.free(f);
                                     old_b.deinit();
                                 }
                                 logz.info().fmt("msg", "opened file: {s}", .{node.absolute_path}).log();
@@ -275,7 +274,6 @@ pub const Editor = struct {
                     if (self.command_buffer.items.len > 0) {
                         if (buffer.Buffer.loadFromFile(self.allocator, self.command_buffer.items)) |b| {
                             if (self.buf) |*old_b| {
-                                if (old_b.filename) |f| self.allocator.free(f);
                                 old_b.deinit();
                             }
                             self.buf = b;
@@ -299,7 +297,6 @@ pub const Editor = struct {
     /// Close the current buffer and return to the Dashboard home screen.
     fn closeBuffer(self: *Editor) void {
         if (self.buf) |*b| {
-            if (b.filename) |f| self.allocator.free(f);
             b.deinit();
             self.buf = null;
         }
@@ -335,8 +332,7 @@ pub const Editor = struct {
             const filename = it.next();
             if (self.buf) |*b| {
                 if (filename) |f| {
-                    if (b.filename) |old_f| self.allocator.free(old_f);
-                    b.filename = try self.allocator.dupe(u8, f);
+                    try b.setFilename(f);
                 }
                 if (b.filename) |f| {
                     b.saveToFile(f) catch {
@@ -351,8 +347,7 @@ pub const Editor = struct {
             const filename = it.next();
             if (self.buf) |*b| {
                 if (filename) |f| {
-                    if (b.filename) |old_f| self.allocator.free(old_f);
-                    b.filename = try self.allocator.dupe(u8, f);
+                    try b.setFilename(f);
                 }
                 if (b.filename) |f| {
                     b.saveToFile(f) catch {
@@ -641,8 +636,8 @@ pub const Editor = struct {
     }
 };
 
-pub fn start_editor(ctx: *context.FlamingoContext) !void {
-    var editor = Editor.init(ctx);
+pub fn start_editor(allocator: std.mem.Allocator, ctx: *context.FlamingoContext) !void {
+    var editor = Editor.init(allocator, ctx);
     defer editor.deinit();
     try editor.run();
 }

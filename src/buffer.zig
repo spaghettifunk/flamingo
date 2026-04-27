@@ -158,6 +158,14 @@ pub const Buffer = struct {
         if (self.filename) |f| {
             self.allocator.free(f);
         }
+        self.filename = null;
+    }
+
+    pub fn setFilename(self: *Buffer, filename: []const u8) !void {
+        if (self.filename) |old_f| {
+            self.allocator.free(old_f);
+        }
+        self.filename = try self.allocator.dupe(u8, filename);
     }
 
     pub fn insertChar(self: *Buffer, row: usize, col: usize, c: u8) !void {

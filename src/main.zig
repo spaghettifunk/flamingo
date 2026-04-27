@@ -10,7 +10,9 @@ const c = @cImport({
 });
 
 pub fn main() !void {
-    var alloc_impl: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    var alloc_impl: std.heap.GeneralPurposeAllocator(.{
+        .safety = true,
+    }) = .init;
     defer _ = alloc_impl.deinit();
     const allocator = alloc_impl.allocator();
 
@@ -39,7 +41,7 @@ pub fn main() !void {
     const stdout = std.fs.File.stdout();
     defer terminal.restoreTerminal(stdout);
 
-    try editor.start_editor(&ctx);
+    try editor.start_editor(allocator, &ctx);
 }
 
 pub fn panicHandler(msg: []const u8, trace: ?*std.builtin.StackTrace) noreturn {
