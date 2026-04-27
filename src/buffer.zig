@@ -33,7 +33,10 @@ pub const Line = struct {
     }
 
     pub fn deinit(self: *Line) void {
-        self.allocator.free(self.buf);
+        if (self.buf.len > 0) {
+            self.allocator.free(self.buf);
+            self.buf = &[_]u8{};
+        }
     }
 
     fn gapSize(self: *const Line) usize {
@@ -154,11 +157,12 @@ pub const Buffer = struct {
             line.deinit();
         }
         self.lines.deinit(self.allocator);
+        self.lines = std.ArrayList(Line).empty;
 
         if (self.filename) |f| {
             self.allocator.free(f);
+            self.filename = null;
         }
-        self.filename = null;
     }
 
     pub fn setFilename(self: *Buffer, filename: []const u8) !void {

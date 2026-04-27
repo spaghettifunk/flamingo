@@ -42,11 +42,14 @@ pub const Editor = struct {
     pub fn deinit(self: *Editor) void {
         if (self.buf) |*b| {
             b.deinit();
+            self.buf = null;
         }
         if (self.tree) |*t| {
             t.deinit();
+            self.tree = null;
         }
         self.command_buffer.deinit(self.allocator);
+        self.command_buffer = .empty;
     }
 
     pub fn run(self: *Editor) !void {

@@ -10,8 +10,14 @@ pub const FileNode = struct {
     depth: usize,
 
     pub fn deinit(self: *FileNode, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-        allocator.free(self.absolute_path);
+        if (self.name.len > 0) {
+            allocator.free(self.name);
+            self.name = &[_]u8{};
+        }
+        if (self.absolute_path.len > 0) {
+            allocator.free(self.absolute_path);
+            self.absolute_path = &[_]u8{};
+        }
     }
 };
 
@@ -55,7 +61,12 @@ pub const Explorer = struct {
             node.deinit(self.allocator);
         }
         self.nodes.deinit(self.allocator);
-        self.allocator.free(self.root_path);
+        self.nodes = std.ArrayList(FileNode).empty;
+
+        if (self.root_path.len > 0) {
+            self.allocator.free(self.root_path);
+            self.root_path = &[_]u8{};
+        }
     }
 
     fn loadDirectory(self: *Explorer, dir_path: []const u8, depth: usize, insert_idx: usize) !void {
