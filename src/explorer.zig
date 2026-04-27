@@ -142,7 +142,11 @@ pub const Explorer = struct {
     }
 
     pub fn render(self: *Explorer, writer: anytype, width: usize, height: usize, is_focused: bool) !void {
-        try terminal.moveCursor(writer, 1, 1);
+        try self.renderAt(writer, width, height, 1, is_focused);
+    }
+
+    pub fn renderAt(self: *Explorer, writer: anytype, width: usize, height: usize, start_row: usize, is_focused: bool) !void {
+        try terminal.moveCursor(writer, start_row, 1);
         try writer.writeAll("\x1b[7m"); // Invert
         const title = " EXPLORER ";
         try writer.writeAll(title);
@@ -150,19 +154,19 @@ pub const Explorer = struct {
         for (0..title_pad) |_| try writer.writeAll(" ");
         try writer.writeAll("\x1b[0m"); // Reset
 
-        const view_height = height -| 2; 
+        const view_height = height -| 2;
         if (view_height == 0) return;
 
         self.adjustScroll(view_height);
 
-        var row: usize = 2;
+        var row: usize = start_row + 1;
         var i = self.scroll_offset;
-        while (i < self.nodes.items.len and row <= view_height + 1) : (i += 1) {
+        while (i < self.nodes.items.len and row <= start_row + view_height) : (i += 1) {
             const node = self.nodes.items[i];
             try terminal.moveCursor(writer, row, 1);
-            
+
             if (is_focused and i == self.selected_index) {
-                try writer.writeAll("\x1b[7m"); 
+                try writer.writeAll("\x1b[7m");
             }
 
             for (0..node.depth) |_| {
@@ -200,7 +204,7 @@ pub const Explorer = struct {
             row += 1;
         }
 
-        while (row <= view_height + 1) : (row += 1) {
+        while (row <= start_row + view_height) : (row += 1) {
             try terminal.moveCursor(writer, row, 1);
             for (0..width) |_| try writer.writeAll(" ");
         }

@@ -68,6 +68,9 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
             if (part.len == 1) {
                 event.key = .Char;
                 event.char = part[0];
+            } else if (std.mem.eql(u8, part, "tab")) {
+                event.key = .Char;
+                event.char = '\t';
             }
         }
     }
@@ -246,6 +249,11 @@ pub fn readKey(reader: anytype) !KeyEvent {
                     'D' => event.key = .Left,
                     'H' => event.key = .Home,
                     'F' => event.key = .End,
+                    'Z' => {
+                        event.key = .Char;
+                        event.char = '\t';
+                        event.shift = true;
+                    },
                     '~' => {
                         if (seq_len > 1) {
                             switch (seq[1]) {
@@ -258,7 +266,18 @@ pub fn readKey(reader: anytype) !KeyEvent {
                             }
                         }
                     },
-                    else => {},
+                    else => {
+                        // If we only have \x1b[, it's ALT+[
+                        if (seq_len == 1 and seq[0] == '[') {
+                            event.alt = true;
+                            event.key = .Char;
+                            event.char = '[';
+                        } else if (seq_len == 1 and seq[0] == ']') {
+                            event.alt = true;
+                            event.key = .Char;
+                            event.char = ']';
+                        }
+                    },
                 }
             } else if (seq[0] == 'O') {
                 switch (seq[seq_len - 1]) {
@@ -288,11 +307,18 @@ pub fn readKey(reader: anytype) !KeyEvent {
     }
 
     // Handle Control characters
-    if (c >= 1 and c <= 26 and c != 13 and c != 10 and c != 9 and c != 8) {
+    // Handle Control characters (1-31)
+    if (c >= 1 and c <= 31 and c != 13 and c != 10 and c != 9 and c != 8) {
         event.ctrl = true;
         event.key = .Char;
-        // Map 1-26 to 'a'-'z'
-        event.char = c + 'a' - 1;
+        if (c <= 26) {
+            // Map 1-26 to 'a'-'z'
+            event.char = c + 'a' - 1;
+        } else {
+            // Handle 27-31: Ctrl+[, Ctrl+\, Ctrl+], Ctrl+^, Ctrl+_
+            const map = "[\\]^_";
+            event.char = map[c - 27];
+        }
         return event;
     }
 
@@ -304,6 +330,36 @@ pub fn readKey(reader: anytype) !KeyEvent {
         },
         127, 8 => event.key = .Backspace, // Backspace or Ctrl-H
         else => {
+            // Handle UTF-8 or Option keys on Mac
+            if (c >= 128) {
+                var utf8_buf: [4]u8 = undefined;
+                utf8_buf[0] = c;
+                const len: usize = if (c & 0xe0 == 0xc0) 2 else if (c & 0xf0 == 0xe0) 3 else if (c & 0xf8 == 0xf0) 4 else 1;
+
+                for (1..len) |i| {
+                    _ = try reader.read(utf8_buf[i .. i + 1]);
+                }
+
+                // Common Mac Option shortcuts in UTF-8
+                if (len == 3 and utf8_buf[0] == 0xe2 and utf8_buf[1] == 0x80) {
+                    if (utf8_buf[2] == 0x9c or utf8_buf[2] == 0x9d) { // “ or ”
+                        event.alt = true;
+                        event.key = .Char;
+                        event.char = '[';
+                        return event;
+                    } else if (utf8_buf[2] == 0x98 or utf8_buf[2] == 0x99) { // ‘ or ’
+                        event.alt = true;
+                        event.key = .Char;
+                        event.char = ']';
+                        return event;
+                    }
+                }
+
+                event.key = .Char;
+                event.char = c;
+                return event;
+            }
+
             event.key = .Char;
             event.char = c;
         },

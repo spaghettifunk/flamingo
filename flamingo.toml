@@ -1,14 +1,11 @@
 # flamingo configuration
 
-[storage]
-data_dir = "./data"
-
 [keybindings]
 new_file = "ctrl+n"
 open_file = "ctrl+o"
 settings = "ctrl+p"
-toggle_explorer = "ctrl+e"
-switch_focus = "ctrl+w"
+toggle_explorer = "ctrl+b"
+switch_focus = "ctrl+tab"
 
 [explorer]
 width_percentage = 20
