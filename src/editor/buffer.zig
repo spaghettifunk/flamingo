@@ -280,4 +280,70 @@ pub const Buffer = struct {
 
         return buf;
     }
+
+    pub fn jumpWordLeft(self: *Buffer, row: *usize, col: *usize) !void {
+        if (col.* == 0) {
+            if (row.* > 0) {
+                row.* -= 1;
+                col.* = self.lines.items[row.*].len();
+            }
+            return;
+        }
+        const l = self.lines.items[row.*];
+        const line = try l.slice(self.allocator);
+        defer self.allocator.free(line);
+
+        // Skip spaces first (moving left)
+        while (col.* > 0 and getCharClass(line[col.* - 1]) == .Space) {
+            col.* -= 1;
+        }
+
+        if (col.* == 0) return;
+
+        const start_class = getCharClass(line[col.* - 1]);
+        while (col.* > 0 and getCharClass(line[col.* - 1]) == start_class) {
+            col.* -= 1;
+        }
+    }
+
+    pub fn jumpWordRight(self: *Buffer, row: *usize, col: *usize) !void {
+        const l = self.lines.items[row.*];
+        const line = try l.slice(self.allocator);
+        defer self.allocator.free(line);
+        if (col.* >= line.len) {
+            if (row.* < self.lines.items.len - 1) {
+                row.* += 1;
+                col.* = 0;
+            }
+            return;
+        }
+
+        // Skip spaces first
+        while (col.* < line.len and getCharClass(line[col.*]) == .Space) {
+            col.* += 1;
+        }
+
+        if (col.* >= line.len) return;
+
+        const start_class = getCharClass(line[col.*]);
+        while (col.* < line.len and getCharClass(line[col.*]) == start_class) {
+            col.* += 1;
+        }
+    }
 };
+
+pub const CharClass = enum { Space, Alphanum, Punctuation };
+
+pub fn getCharClass(c: u8) CharClass {
+    if (c == ' ' or c == '\t' or c == '\n' or c == '\r') return .Space;
+    if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') return .Alphanum;
+    return .Punctuation;
+}
+
+pub fn countDigits(n: usize) usize {
+    if (n == 0) return 1;
+    var v = n;
+    var d: usize = 0;
+    while (v > 0) : (v /= 10) d += 1;
+    return d;
+}

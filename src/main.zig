@@ -1,8 +1,7 @@
 const std = @import("std");
-const context = @import("context.zig");
 const config = @import("config.zig");
 const logger = @import("logger.zig");
-const editor = @import("editor.zig");
+const editor = @import("editor/editor.zig");
 const terminal = @import("terminal.zig");
 
 const c = @cImport({
@@ -22,26 +21,19 @@ pub fn main() !void {
     const cfg = result.value;
     try config.validate(&cfg);
 
-    // setup context
-    var ctx = context.FlamingoContext{
-        .log_level = 0,
-        .start_time = std.time.timestamp(),
-        .config = cfg,
-    };
+    // initiate logger
+    try logger.init(allocator, 0);
+    defer logger.shutdown() catch {};
 
     _ = c.signal(c.SIGSEGV, handleSignal);
     _ = c.signal(c.SIGABRT, handleSignal);
     _ = c.signal(c.SIGINT, handleSignal);
     _ = c.signal(c.SIGTERM, handleSignal);
 
-    // initiate logger
-    try logger.init(allocator, ctx.log_level);
-    defer logger.shutdown() catch {};
-
     const stdout = std.fs.File.stdout();
     defer terminal.restoreTerminal(stdout);
 
-    try editor.start_editor(allocator, &ctx);
+    try editor.start_editor(allocator, cfg);
 }
 
 pub fn panicHandler(msg: []const u8, trace: ?*std.builtin.StackTrace) noreturn {

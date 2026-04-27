@@ -1,5 +1,5 @@
 const std = @import("std");
-const terminal = @import("terminal.zig");
+const terminal = @import("../terminal.zig");
 
 pub const DashboardAction = enum {
     None,

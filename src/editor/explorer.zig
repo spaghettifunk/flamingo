@@ -1,6 +1,6 @@
 const std = @import("std");
 const logz = @import("logz");
-const terminal = @import("terminal.zig");
+const terminal = @import("../terminal.zig");
 
 pub const FileNode = struct {
     name: []const u8,
