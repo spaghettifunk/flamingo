@@ -474,7 +474,7 @@ pub const Editor = struct {
 
         // Hybrid (Vim-style) line number gutter: absolute on current line, relative elsewhere.
         const gutter_width: usize = if (self.buf) |b|
-            @max(countDigits(b.lines.items.len), 2) + 2 // digits + " " left-pad + " " separator
+            self.calculateGutterWidth(b.lines.items.len)
         else
             0;
 
@@ -503,16 +503,17 @@ pub const Editor = struct {
                         try writer.writeAll("\x1b[2;37m"); // dim grey  — relative distance
                     }
 
-                    // Right-align the number
+                    // --- Render Gutter ---
+                    // Format: " " (1 space) + number (num_digits wide) + " " (1 space)
+                    try writer.writeByte(' ');
                     const num_used = countDigits(line_num);
                     const pad = num_digits - num_used;
                     for (0..pad) |_| try writer.writeByte(' ');
-                    try writer.print("{d} \x1b[0m", .{line_num});
+                    try writer.print("{d} ", .{line_num});
+                    try writer.writeAll("\x1b[0m"); // Reset
 
                     // --- Line content ---
-                    // moveCursor is already at buf_start_col, but we need to offset past the gutter
-                    try terminal.moveCursor(writer, screen_row, buf_start_col + gutter_width);
-
+                    // No need to moveCursor; we are exactly at buf_start_col + gutter_width
                     const content_width = buf_width -| gutter_width;
                     const line = b.lines.items[buffer_line_idx];
                     try line.writeTo(writer, content_width);
@@ -637,7 +638,30 @@ pub const Editor = struct {
         if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') return .Alphanum;
         return .Punctuation;
     }
+
+    /// Calculates total gutter width: 1 space + num_digits + 1 space separator.
+    pub fn calculateGutterWidth(self: *const Editor, total_lines: usize) usize {
+        _ = self;
+        return @max(countDigits(total_lines), 2) + 2;
+    }
 };
+
+test "Editor.calculateGutterWidth" {
+    var ctx = context.FlamingoContext{
+        .log_level = 0,
+        .start_time = 0,
+        .config = .{},
+    };
+    const ed = Editor.init(std.testing.allocator, &ctx);
+
+    // 1-99 lines => 2 digits min => 1 + 2 + 1 = 4
+    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(5));
+    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(99));
+
+    // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
+    try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
+    try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
+}
 
 pub fn start_editor(allocator: std.mem.Allocator, ctx: *context.FlamingoContext) !void {
     var editor = Editor.init(allocator, ctx);
