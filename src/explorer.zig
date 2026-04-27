@@ -1,4 +1,5 @@
 const std = @import("std");
+const logz = @import("logz");
 const terminal = @import("terminal.zig");
 
 pub const FileNode = struct {
@@ -39,6 +40,7 @@ pub const Explorer = struct {
     scroll_offset: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, root_path: []const u8) !Explorer {
+        logz.info().fmt("msg", "initializing explorer at: {s}", .{root_path}).log();
         var self = Explorer{
             .allocator = allocator,
             .root_path = try allocator.dupe(u8, root_path),
@@ -57,7 +59,11 @@ pub const Explorer = struct {
     }
 
     fn loadDirectory(self: *Explorer, dir_path: []const u8, depth: usize, insert_idx: usize) !void {
-        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+        logz.debug().fmt("msg", "loading directory: {s} (depth {d})", .{dir_path, depth}).log();
+        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+            logz.warn().fmt("msg", "failed to open directory {s}: {s}", .{dir_path, @errorName(err)}).log();
+            return;
+        };
         defer dir.close();
 
         var temp_nodes = std.ArrayList(FileNode).empty;
@@ -98,6 +104,7 @@ pub const Explorer = struct {
         if (!node.is_dir) return;
 
         if (node.is_expanded) {
+            logz.debug().fmt("msg", "collapsing node: {s}", .{node.name}).log();
             // Collapse
             node.is_expanded = false;
             const base_depth = node.depth;
@@ -116,6 +123,7 @@ pub const Explorer = struct {
 
             self.nodes.replaceRangeAssumeCapacity(self.selected_index + 1, remove_count, &[_]FileNode{});
         } else {
+            logz.debug().fmt("msg", "expanding node: {s}", .{node.name}).log();
             // Expand
             node.is_expanded = true;
             try self.loadDirectory(node.absolute_path, node.depth + 1, self.selected_index + 1);

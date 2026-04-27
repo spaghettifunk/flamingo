@@ -82,7 +82,7 @@ pub fn enableRawMode() !void {
     orig_termios = termios;
 
     var raw = termios;
-    
+
     // input flags: no break, no CR to NL, no parity check, no strip char, no start/stop output control
     raw.iflag.BRKINT = false;
     raw.iflag.ICRNL = false;
@@ -103,11 +103,16 @@ pub fn enableRawMode() !void {
     raw.cc[@intFromEnum(std.posix.V.TIME)] = 1; // 100ms timeout
 
     try std.posix.tcsetattr(fd, .FLUSH, raw);
+
+    var stdout = std.fs.File.stdout();
+    try stdout.writeAll("\x1b[?1049h"); // enter alt screen
+    try stdout.writeAll("\x1b[?25l"); // hide cursor
 }
 
 pub fn disableRawMode() void {
     if (orig_termios) |termios| {
         std.posix.tcsetattr(std.posix.STDIN_FILENO, .FLUSH, termios) catch {};
+        orig_termios = null;
     }
 }
 
@@ -167,7 +172,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
     if (c == '\x1b') {
         var seq: [16]u8 = undefined;
         var seq_len: usize = 0;
-        
+
         if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
             event.key = .Esc;
             return event;
@@ -193,34 +198,47 @@ pub fn readKey(reader: anytype) !KeyEvent {
                     break;
                 }
             }
-            
+
             if (seq[0] == '[') {
                 const last_ch = seq[seq_len - 1];
-                
+
                 var alt = false;
                 var ctrl = false;
                 var shift = false;
-                
+
                 if (std.mem.indexOfScalar(u8, seq[0..seq_len], ';')) |idx| {
                     if (idx + 1 < seq_len) {
                         const mod_char = seq[idx + 1];
                         switch (mod_char) {
                             '2' => shift = true,
                             '3' => alt = true,
-                            '4' => { shift = true; alt = true; },
+                            '4' => {
+                                shift = true;
+                                alt = true;
+                            },
                             '5' => ctrl = true,
-                            '6' => { shift = true; ctrl = true; },
-                            '7' => { alt = true; ctrl = true; },
-                            '8' => { shift = true; alt = true; ctrl = true; },
+                            '6' => {
+                                shift = true;
+                                ctrl = true;
+                            },
+                            '7' => {
+                                alt = true;
+                                ctrl = true;
+                            },
+                            '8' => {
+                                shift = true;
+                                alt = true;
+                                ctrl = true;
+                            },
                             else => {},
                         }
                     }
                 }
-                
+
                 event.alt = alt or alt_prefix;
                 event.ctrl = ctrl;
                 event.shift = shift;
-                
+
                 switch (last_ch) {
                     'A' => event.key = .Up,
                     'B' => event.key = .Down,
@@ -292,4 +310,20 @@ pub fn readKey(reader: anytype) !KeyEvent {
     }
 
     return event;
+}
+
+pub fn restoreTerminal(writer: std.fs.File) void {
+    // Restore termios first
+    disableRawMode();
+
+    // Best-effort ANSI reset (ignore errors)
+    writer.writeAll("\x1b[?1049l") catch {}; // leave alt screen
+    writer.writeAll("\x1b[?25h") catch {}; // show cursor
+    writer.writeAll("\x1b[0m") catch {}; // reset styles
+    writer.writeAll("\x1b[2J\x1b[H") catch {}; // clear + home
+
+    // Flush if possible (depends on writer type)
+    if (@hasDecl(@TypeOf(writer), "context")) {
+        writer.context.flush() catch {};
+    }
 }

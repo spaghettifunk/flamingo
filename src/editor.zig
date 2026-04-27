@@ -1,4 +1,5 @@
 const std = @import("std");
+const logz = @import("logz");
 const context = @import("context.zig");
 const terminal = @import("terminal.zig");
 const buffer = @import("buffer.zig");
@@ -50,9 +51,9 @@ pub const Editor = struct {
 
     pub fn run(self: *Editor) !void {
         const stdout = std.fs.File.stdout();
-        var out_buf: [4096]u8 = undefined;
-        var fw = stdout.writer(&out_buf);
-        const writer = &fw.interface;
+        var render_buffer = std.ArrayListUnmanaged(u8).empty;
+        defer render_buffer.deinit(self.allocator);
+        const writer = render_buffer.writer(self.allocator);
 
         const stdin = std.fs.File.stdin();
 
@@ -61,16 +62,22 @@ pub const Editor = struct {
 
         while (!self.should_quit) {
             const size = try terminal.getSize();
-            self.width = size.cols;
-            self.height = size.rows;
+            if (self.width != size.cols or self.height != size.rows) {
+                logz.info().fmt("msg", "terminal resized: {d}x{d}", .{ size.cols, size.rows }).log();
+                self.width = size.cols;
+                self.height = size.rows;
+            }
 
+            render_buffer.clearRetainingCapacity();
             try terminal.hideCursor(writer);
             try self.render(writer);
             try terminal.showCursor(writer);
-            try writer.flush();
+            try stdout.writeAll(render_buffer.items);
 
             const event = try terminal.readKey(stdin);
             if (event.key == .None) continue;
+
+            logz.debug().fmt("msg", "key event: key={s}, char={c}, ctrl={}, alt={}", .{ @tagName(event.key), event.char, event.ctrl, event.alt }).log();
 
             // Global quit sequence matching flamingo.toml config
             // For now hardcoded to Ctrl+Q
@@ -84,7 +91,7 @@ pub const Editor = struct {
 
         try terminal.clearScreen(writer);
         try terminal.moveCursor(writer, 1, 1);
-        try writer.flush();
+        try stdout.writeAll(render_buffer.items);
     }
 
     fn handleInput(self: *Editor, event: terminal.KeyEvent) !void {
@@ -131,15 +138,18 @@ pub const Editor = struct {
                         } else {
                             if (buffer.Buffer.loadFromFile(self.allocator, node.absolute_path)) |b| {
                                 if (self.buf) |*old_b| {
+                                    logz.info().fmt("msg", "closing buffer: {s}", .{old_b.filename orelse "unsaved"}).log();
                                     if (old_b.filename) |f| self.allocator.free(f);
                                     old_b.deinit();
                                 }
+                                logz.info().fmt("msg", "opened file: {s}", .{node.absolute_path}).log();
                                 self.buf = b;
                                 self.cursor_row = 0;
                                 self.cursor_col = 0;
                                 self.explorer_focused = false;
                                 self.mode = .Normal;
-                            } else |_| {
+                            } else |err| {
+                                logz.err().fmt("msg", "failed to open file {s}: {s}", .{ node.absolute_path, @errorName(err) }).log();
                                 self.error_message = "Could not open file";
                             }
                         }
@@ -162,12 +172,16 @@ pub const Editor = struct {
                         self.command_buffer.clearRetainingCapacity();
                     },
                     .OpenFolder => {
+                        logz.info().string("msg", "action: OpenFolder").log();
                         self.closeBuffer();
                         self.mode = .Normal;
                         if (self.tree) |*t| {
                             t.deinit();
                         }
-                        self.tree = explorer.Explorer.init(self.allocator, ".") catch null;
+                        self.tree = explorer.Explorer.init(self.allocator, ".") catch |err| {
+                            logz.err().fmt("msg", "failed to init explorer: {s}", .{@errorName(err)}).log();
+                            return;
+                        };
                         self.explorer_visible = self.tree != null;
                         self.explorer_focused = self.tree != null;
                     },
@@ -176,7 +190,7 @@ pub const Editor = struct {
                 }
             },
             .Normal => {
-                if (self.handleMovement(event)) {
+                if (try self.handleMovement(event)) {
                     // Handled
                 } else if (event.key == .Char and event.char == 'i') {
                     self.mode = .Insert;
@@ -191,13 +205,14 @@ pub const Editor = struct {
                         self.cursor_row = b.lines.items.len - 1;
                     }
                     const line = b.lines.items[self.cursor_row];
-                    if (self.cursor_col > line.items.len) {
-                        self.cursor_col = line.items.len;
+                    const len = line.len();
+                    if (self.cursor_col > len) {
+                        self.cursor_col = len;
                     }
                 }
             },
             .Insert => {
-                if (self.handleMovement(event)) {
+                if (try self.handleMovement(event)) {
                     // Handled
                 } else if (event.key == .Esc) {
                     self.mode = .Normal;
@@ -212,7 +227,7 @@ pub const Editor = struct {
                         const row = self.cursor_row;
                         var prev_len: usize = 0;
                         if (row > 0) {
-                            prev_len = b.lines.items[row - 1].items.len;
+                            prev_len = b.lines.items[row - 1].len();
                         }
 
                         if (try b.deleteCharBack(self.cursor_row, self.cursor_col)) {
@@ -359,17 +374,17 @@ pub const Editor = struct {
         }
     }
 
-    fn handleMovement(self: *Editor, event: terminal.KeyEvent) bool {
+    fn handleMovement(self: *Editor, event: terminal.KeyEvent) !bool {
         if (event.key == .Up) {
             if (event.alt) {
                 if (self.buf) |b| {
-                    self.cursor_col = b.lines.items[self.cursor_row].items.len;
+                    self.cursor_col = b.lines.items[self.cursor_row].len();
                 }
             } else {
                 if (self.cursor_row > 0) self.cursor_row -= 1;
                 // Clamp col to the new line's length after vertical movement
                 if (self.buf) |b| {
-                    const new_line_len = b.lines.items[self.cursor_row].items.len;
+                    const new_line_len = b.lines.items[self.cursor_row].len();
                     if (self.cursor_col > new_line_len) self.cursor_col = new_line_len;
                 }
             }
@@ -382,7 +397,7 @@ pub const Editor = struct {
                 if (self.buf) |b| {
                     if (self.cursor_row < b.lines.items.len - 1) self.cursor_row += 1;
                     // Clamp col to the new line's length after vertical movement
-                    const new_line_len = b.lines.items[self.cursor_row].items.len;
+                    const new_line_len = b.lines.items[self.cursor_row].len();
                     if (self.cursor_col > new_line_len) self.cursor_col = new_line_len;
                 }
             }
@@ -390,18 +405,18 @@ pub const Editor = struct {
             return true;
         } else if (event.key == .Left) {
             if (event.alt) {
-                self.jumpWordLeft();
+                try self.jumpWordLeft();
             } else {
                 if (self.cursor_col > 0) self.cursor_col -= 1;
             }
             return true;
         } else if (event.key == .Right) {
             if (event.alt) {
-                self.jumpWordRight();
+                try self.jumpWordRight();
             } else {
                 if (self.buf) |b| {
                     const line = b.lines.items[self.cursor_row];
-                    if (self.cursor_col < line.items.len) self.cursor_col += 1;
+                    if (self.cursor_col < line.len()) self.cursor_col += 1;
                 }
             }
             return true;
@@ -499,14 +514,10 @@ pub const Editor = struct {
                     // --- Line content ---
                     // moveCursor is already at buf_start_col, but we need to offset past the gutter
                     try terminal.moveCursor(writer, screen_row, buf_start_col + gutter_width);
-                    
+
                     const content_width = buf_width -| gutter_width;
                     const line = b.lines.items[buffer_line_idx];
-                    if (line.items.len > content_width) {
-                        try writer.writeAll(line.items[0..content_width]);
-                    } else {
-                        try writer.writeAll(line.items);
-                    }
+                    try line.writeTo(writer, content_width);
                 }
             }
 
@@ -549,21 +560,26 @@ pub const Editor = struct {
             // Offset cursor past the line-number gutter
             const content_width = buf_width -| gutter_width;
             const vis_col = if (self.cursor_col > content_width) content_width else self.cursor_col;
-            const vis_row = self.cursor_row - self.scroll_row + 1;
+            const vis_row = if (self.cursor_row >= self.scroll_row)
+                self.cursor_row - self.scroll_row + 1
+            else
+                1;
             try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
         }
     }
 
-    fn jumpWordLeft(self: *Editor) void {
+    fn jumpWordLeft(self: *Editor) !void {
         if (self.buf) |b| {
             if (self.cursor_col == 0) {
                 if (self.cursor_row > 0) {
                     self.cursor_row -= 1;
-                    self.cursor_col = b.lines.items[self.cursor_row].items.len;
+                    self.cursor_col = b.lines.items[self.cursor_row].len();
                 }
                 return;
             }
-            const line = b.lines.items[self.cursor_row].items;
+            const l = b.lines.items[self.cursor_row];
+            const line = try l.slice(self.allocator);
+            defer self.allocator.free(line);
 
             // Skip spaces first (moving left)
             while (self.cursor_col > 0 and self.getCharClass(line[self.cursor_col - 1]) == .Space) {
@@ -579,9 +595,11 @@ pub const Editor = struct {
         }
     }
 
-    fn jumpWordRight(self: *Editor) void {
+    fn jumpWordRight(self: *Editor) !void {
         if (self.buf) |b| {
-            const line = b.lines.items[self.cursor_row].items;
+            const l = b.lines.items[self.cursor_row];
+            const line = try l.slice(self.allocator);
+            defer self.allocator.free(line);
             if (self.cursor_col >= line.len) {
                 if (self.cursor_row < b.lines.items.len - 1) {
                     self.cursor_row += 1;

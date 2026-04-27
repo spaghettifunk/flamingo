@@ -9,7 +9,7 @@ pub fn init(allocator: std.mem.Allocator, log_level: u3) !void {
         .buffer_size = 4096,
         .large_buffer_count = 8,
         .large_buffer_size = 16384,
-        .output = .stdout,
+        .output = .{ .file = "flamingo.log" },
         .encoding = .logfmt,
     });
 }
