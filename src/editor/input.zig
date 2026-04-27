@@ -121,6 +121,10 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (event.key == .Char and event.char == ':') {
                 ed.mode = .Command;
                 ed.command_buffer.clearRetainingCapacity();
+            } else if (event.key == .Char and event.char == '/') {
+                ed.mode = .Search;
+                ed.search_buffer.clearRetainingCapacity();
+                if (ed.search_system) |*s| s.clear();
             }
 
             // Keep cursor within line bounds
@@ -210,6 +214,61 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.command_buffer.append(ed.allocator, event.char);
+            }
+        },
+        .Search => {
+            if (event.key == .Esc) {
+                ed.mode = .Normal;
+                if (ed.search_system) |*s| s.clear();
+                ed.search_buffer.clearRetainingCapacity();
+            } else if (event.key == .Backspace) {
+                if (ed.search_buffer.items.len > 0) {
+                    ed.search_buffer.shrinkRetainingCapacity(ed.search_buffer.items.len - 1);
+                    if (ed.currentTab()) |tab| {
+                        try ed.search_system.?.update(&tab.buf, ed.search_buffer.items);
+                        if (ed.search_system.?.getActiveMatch()) |m| {
+                            tab.cursor_row = m.row;
+                            tab.cursor_col = m.col;
+                            ed.clampScroll();
+                        }
+                    }
+                }
+            } else if (event.key == .Enter) {
+                ed.mode = .Normal;
+                if (ed.search_system) |*s| s.clear();
+                ed.search_buffer.clearRetainingCapacity();
+            } else if (event.key == .Down) {
+                if (ed.search_system) |*s| {
+                    s.nextMatch();
+                    if (s.getActiveMatch()) |m| {
+                        if (ed.currentTab()) |tab| {
+                            tab.cursor_row = m.row;
+                            tab.cursor_col = m.col;
+                            ed.clampScroll();
+                        }
+                    }
+                }
+            } else if (event.key == .Up) {
+                if (ed.search_system) |*s| {
+                    s.prevMatch();
+                    if (s.getActiveMatch()) |m| {
+                        if (ed.currentTab()) |tab| {
+                            tab.cursor_row = m.row;
+                            tab.cursor_col = m.col;
+                            ed.clampScroll();
+                        }
+                    }
+                }
+            } else if (event.key == .Char and !event.ctrl and !event.alt) {
+                try ed.search_buffer.append(ed.allocator, event.char);
+                if (ed.currentTab()) |tab| {
+                    try ed.search_system.?.update(&tab.buf, ed.search_buffer.items);
+                    if (ed.search_system.?.getActiveMatch()) |m| {
+                        tab.cursor_row = m.row;
+                        tab.cursor_col = m.col;
+                        ed.clampScroll();
+                    }
+                }
             }
         },
     }

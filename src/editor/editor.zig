@@ -6,6 +6,7 @@ const buffer = @import("buffer.zig");
 const dashboard = @import("dashboard.zig");
 const explorer = @import("explorer.zig");
 const input = @import("input.zig");
+const search = @import("search.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -13,6 +14,7 @@ pub const EditorMode = enum {
     Insert,
     Command,
     OpenFilePrompt,
+    Search,
 };
 
 pub const Tab = struct {
@@ -41,6 +43,8 @@ pub const Editor = struct {
     tree: ?explorer.Explorer = null,
     explorer_visible: bool = false,
     explorer_focused: bool = false,
+    search_buffer: std.ArrayListUnmanaged(u8) = .empty,
+    search_system: ?search.SearchSystem = null,
 
     pub fn init(allocator: std.mem.Allocator, cfg: config.Config) Editor {
         return Editor{
@@ -55,6 +59,7 @@ pub const Editor = struct {
             tab.deinit();
         }
         self.tabs.deinit(self.allocator);
+        self.tabs = std.ArrayList(Tab).empty;
 
         if (self.tree) |*t| {
             t.deinit();
@@ -62,6 +67,12 @@ pub const Editor = struct {
         }
         self.command_buffer.deinit(self.allocator);
         self.command_buffer = .empty;
+        self.search_buffer.deinit(self.allocator);
+        self.search_buffer = .empty;
+        if (self.search_system) |*s| {
+            s.deinit();
+            self.search_system = null;
+        }
     }
 
     pub fn currentTab(self: *Editor) ?*Tab {
@@ -164,7 +175,7 @@ pub const Editor = struct {
     /// Adjust scroll_row so cursor_row is always within the visible viewport.
     pub fn clampScroll(self: *Editor) void {
         const tab = self.currentTab() orelse return;
-        const top_reserved = 1; // tabs
+        const top_reserved = 2; // tabs + separator
         const bot_reserved = 1; // status bar
         const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 1;
         if (tab.cursor_row < tab.scroll_row) {
@@ -239,6 +250,10 @@ pub const Editor = struct {
             return;
         }
 
+        if (self.search_system == null) {
+            self.search_system = search.SearchSystem.init(self.allocator);
+        }
+
         var buf_start_col: usize = 1;
         var buf_width: usize = self.width;
 
@@ -270,7 +285,9 @@ pub const Editor = struct {
         else
             0;
 
-        const visible_rows = if (self.height > 3) self.height - 3 else 1;
+        const top_reserved = 2; // tabs + separator
+        const bot_reserved = 1; // status bar
+        const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 0;
         for (1..visible_rows + 1) |screen_row| {
             // 1. Move to the correct column for the right-hand panel (start at row 3)
             try terminal.moveCursor(writer, screen_row + 2, buf_start_col);
@@ -308,7 +325,48 @@ pub const Editor = struct {
                     // No need to moveCursor; we are exactly at buf_start_col + gutter_width
                     const content_width = buf_width -| gutter_width;
                     const line = t.buf.lines.items[buffer_line_idx];
-                    try line.writeTo(writer, content_width);
+                    
+                    var match_indices: ?[]const usize = null;
+                    var is_active_line = false;
+                    if (self.search_buffer.items.len > 0) {
+                        for (self.search_system.?.matches.items) |m| {
+                            if (m.row == buffer_line_idx) {
+                                match_indices = m.indices;
+                                if (self.search_system.?.active_match_idx) |idx| {
+                                    if (self.search_system.?.matches.items[idx].row == buffer_line_idx) {
+                                        is_active_line = true;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if (match_indices) |indices| {
+                        // Render line with highlights
+                        const line_content = try line.slice(self.allocator);
+                        defer self.allocator.free(line_content);
+                        
+                        var char_idx: usize = 0;
+                        var m_idx: usize = 0;
+                        while (char_idx < line_content.len and char_idx < content_width) : (char_idx += 1) {
+                            const is_match = if (m_idx < indices.len and indices[m_idx] == char_idx) true else false;
+                            if (is_match) {
+                                if (is_active_line and self.search_system.?.getActiveMatch().?.col == char_idx) {
+                                    try writer.writeAll("\x1b[48;5;214m\x1b[30m"); // Orange background, black text for active
+                                } else {
+                                    try writer.writeAll("\x1b[48;5;228m\x1b[30m"); // Light Yellow background, black text for other matches
+                                }
+                                try writer.writeByte(line_content[char_idx]);
+                                try writer.writeAll("\x1b[0m");
+                                m_idx += 1;
+                            } else {
+                                try writer.writeByte(line_content[char_idx]);
+                            }
+                        }
+                    } else {
+                        try line.writeTo(writer, content_width);
+                    }
                 }
             }
 
@@ -322,24 +380,50 @@ pub const Editor = struct {
 
         if (self.mode == .Command) {
             try writer.print(":{s}", .{self.command_buffer.items});
+        } else if (self.mode == .Search) {
+            try writer.writeAll("\x1b[48;5;228m\x1b[30m"); // Light Yellow, Black text
+            try writer.print("/{s}", .{self.search_buffer.items});
+            var written: usize = 1 + self.search_buffer.items.len;
+            if (self.search_system) |s| {
+                if (s.matches.items.len > 0) {
+                    var buf: [64]u8 = undefined;
+                    const match_info = try std.fmt.bufPrint(&buf, " ({d}/{d})", .{ (s.active_match_idx orelse 0) + 1, s.matches.items.len });
+                    try writer.writeAll(match_info);
+                    written += match_info.len;
+                } else {
+                    const no_match = " (no matches)";
+                    try writer.writeAll(no_match);
+                    written += no_match.len;
+                }
+            }
+            // Pad status bar
+            if (self.width > written) {
+                for (0..self.width - written) |_| {
+                    try writer.writeAll(" ");
+                }
+            }
+            try writer.writeAll("\x1b[0m"); // Reset
         } else if (self.error_message) |err_msg| {
             try writer.writeAll("\x1b[31;1m"); // Red, Bold
             try writer.print("{s}", .{err_msg});
             try writer.writeAll("\x1b[0m"); // Reset
         } else {
-            try writer.writeAll("\x1b[7m"); // Invert colors
+            const mode_color = if (self.mode == .Normal) "\x1b[48;5;121m\x1b[30m" else "\x1b[48;5;117m\x1b[30m";
+            try writer.writeAll(mode_color);
+            
             const mode_str = if (self.mode == .Normal) "-- NORMAL --" else "-- INSERT --";
             const tab_idx = if (tab) |t| t.cursor_row + 1 else 0;
             const col_idx = if (tab) |t| t.cursor_col + 1 else 0;
-            try writer.print(" {s} | Row: {d}, Col: {d} ", .{ mode_str, tab_idx, col_idx });
+            
+            var buf: [128]u8 = undefined;
+            const status_text = try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} ", .{ mode_str, tab_idx, col_idx });
+            try writer.writeAll(status_text);
 
             // Pad status bar
-            var padding: usize = 0;
-            if (self.width > 40) {
-                padding = self.width - 40;
-            }
-            for (0..padding) |_| {
-                try writer.writeAll(" ");
+            if (self.width > status_text.len) {
+                for (0..self.width - status_text.len) |_| {
+                    try writer.writeAll(" ");
+                }
             }
             try writer.writeAll("\x1b[0m"); // Reset
         }
@@ -347,6 +431,8 @@ pub const Editor = struct {
         // Move cursor to proper location
         if (self.mode == .Command) {
             try terminal.moveCursor(writer, self.height, 2 + self.command_buffer.items.len);
+        } else if (self.mode == .Search) {
+            try terminal.moveCursor(writer, self.height, 2 + self.search_buffer.items.len);
         } else if (self.explorer_focused and self.explorer_visible and self.tree != null) {
             try terminal.moveCursor(writer, self.height, self.width);
         } else if (tab) |t| {
