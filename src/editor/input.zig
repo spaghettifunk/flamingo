@@ -30,17 +30,17 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    const is_tab = event.key == .Char and event.char == '\t';
-    if (event.eql(switch_focus_key) or (is_tab and std.mem.eql(u8, ed.config.keybindings.switch_focus, "ctrl+tab"))) {
-        if (ed.explorer_visible) {
-            ed.explorer_focused = !ed.explorer_focused;
+    if (is_ctrl_w) {
+        if (ed.mode != .Dashboard) {
+            ed.closeTab();
         }
         return;
     }
 
-    if (is_ctrl_w) {
-        if (ed.mode != .Dashboard) {
-            ed.closeTab();
+    const is_tab = event.key == .Char and event.char == '\t';
+    if (event.eql(switch_focus_key) or (is_tab and std.mem.eql(u8, ed.config.keybindings.switch_focus, "ctrl+tab"))) {
+        if (ed.explorer_visible) {
+            ed.explorer_focused = !ed.explorer_focused;
         }
         return;
     }
@@ -79,26 +79,22 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             }
         }
         
-        if (event.alt) {
-            if (event.key == .Up) {
-                actions.moveLineUp(ed);
-                return;
-            } else if (event.key == .Down) {
-                if (event.shift) {
-                    try actions.duplicateLine(ed);
-                } else {
-                    actions.moveLineDown(ed);
-                }
-                return;
-            }
-        }
-
         if (event.ctrl and event.alt) {
             if (event.key == .Up) {
                 try actions.addCursorAbove(ed);
                 return;
             } else if (event.key == .Down) {
                 try actions.addCursorBelow(ed);
+                return;
+            }
+        }
+
+        if (event.alt) {
+            // Option+Up and Option+Down for cursor jumps (end/start of line)
+            // are handled in handleMovement to avoid conflicting with line moves.
+            // We only keep Alt+Shift+Down for duplication if desired.
+            if (event.key == .Down and event.shift) {
+                try actions.duplicateLine(ed);
                 return;
             }
         }

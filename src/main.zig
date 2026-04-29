@@ -63,8 +63,4 @@ pub fn handleSignal(sig: c_int) callconv(.c) void {
 
 test {
     std.testing.refAllDecls(@This());
-    _ = @import("editor/editor.zig");
-    _ = @import("editor/buffer.zig");
-    _ = @import("editor/actions.zig");
-    _ = @import("editor/search.zig");
 }

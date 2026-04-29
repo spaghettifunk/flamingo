@@ -91,10 +91,6 @@ pub const Editor = struct {
         self.command_buffer = .empty;
         self.search_buffer.deinit(self.allocator);
         self.search_buffer = .empty;
-        if (self.search_system) |*s| {
-            s.deinit();
-            self.search_system = null;
-        }
         if (self.clipboard) |c| {
             self.allocator.free(c);
             self.clipboard = null;
@@ -160,30 +156,35 @@ pub const Editor = struct {
 
     pub fn run(self: *Editor) !void {
         const stdout = std.fs.File.stdout();
-        var render_buffer = std.ArrayListUnmanaged(u8).empty;
-        defer render_buffer.deinit(self.allocator);
-        const writer = render_buffer.writer(self.allocator);
-
         const stdin = std.fs.File.stdin();
 
         try terminal.enableRawMode();
         defer terminal.disableRawMode();
 
-        while (!self.should_quit) {
-            const size = try terminal.getSize();
-            if (self.width != size.cols or self.height != size.rows) {
-                logz.info().fmt("msg", "terminal resized: {d}x{d}", .{ size.cols, size.rows }).log();
-                self.width = size.cols;
-                self.height = size.rows;
-            }
+        const size = try terminal.getSize();
+        self.width = size.cols;
+        self.height = size.rows;
 
+        try self.runWithIO(stdin, stdout);
+    }
+
+    /// Run the editor event loop with explicit reader/writer.
+    /// Using generic I/O allows tests to inject a `fixedBufferStream` reader
+    /// (synthetic key bytes) and an `ArrayList` writer (capture render output)
+    /// without touching a real TTY.
+    pub fn runWithIO(self: *Editor, reader: anytype, raw_writer: anytype) !void {
+        var render_buffer = std.ArrayListUnmanaged(u8).empty;
+        defer render_buffer.deinit(self.allocator);
+        const writer = render_buffer.writer(self.allocator);
+
+        while (!self.should_quit) {
             render_buffer.clearRetainingCapacity();
             try terminal.hideCursor(writer);
             try self.render(writer);
             try terminal.showCursor(writer);
-            try stdout.writeAll(render_buffer.items);
+            try raw_writer.writeAll(render_buffer.items);
 
-            const event = try terminal.readKey(stdin);
+            const event = try terminal.readKey(reader);
             if (event.key == .None) continue;
 
             logz.debug().fmt("msg", "key event: key={s}, char={c}, ctrl={}, alt={}", .{ @tagName(event.key), event.char, event.ctrl, event.alt }).log();
@@ -198,9 +199,10 @@ pub const Editor = struct {
             try input.handleInput(self, event);
         }
 
+        render_buffer.clearRetainingCapacity();
         try terminal.clearScreen(writer);
         try terminal.moveCursor(writer, 1, 1);
-        try stdout.writeAll(render_buffer.items);
+        try raw_writer.writeAll(render_buffer.items);
     }
 
     /// Adjust scroll_row so cursor_row is always within the visible viewport.
