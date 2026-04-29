@@ -37,15 +37,19 @@ pub const LspClient = struct {
         var client = try allocator.create(LspClient);
         errdefer allocator.destroy(client);
 
-        client.allocator = allocator;
-        client.plugin_name = try allocator.dupe(u8, plugin_name);
-        client.queue = queue;
-        client.quit_flag = std.atomic.Value(bool).init(false);
-        client.opened_files = std.StringHashMap(bool).init(allocator);
-        client.document_versions = std.StringHashMap(i32).init(allocator);
-        client.pending_requests = std.AutoHashMap(usize, RequestType).init(allocator);
+        client.* = .{
+            .allocator = allocator,
+            .plugin_name = try allocator.dupe(u8, plugin_name),
+            .queue = queue,
+            .quit_flag = std.atomic.Value(bool).init(false),
+            .opened_files = std.StringHashMap(bool).init(allocator),
+            .document_versions = std.StringHashMap(i32).init(allocator),
+            .pending_requests = std.AutoHashMap(usize, RequestType).init(allocator),
+            .process = std.process.Child.init(command, allocator),
+            .reader_thread = undefined,
+            .stderr_thread = undefined,
+        };
 
-        client.process = std.process.Child.init(command, allocator);
         client.process.stdin_behavior = .Pipe;
         client.process.stdout_behavior = .Pipe;
         client.process.stderr_behavior = .Pipe;
@@ -96,19 +100,21 @@ pub const LspClient = struct {
     }
 
     pub fn sendRequest(self: *LspClient, json_payload: []const u8) !void {
+        logz.info().fmt("msg", "Sending LSP request to {s}: {s}", .{ self.plugin_name, json_payload }).log();
         const stdin = self.process.stdin orelse return error.NoStdin;
 
-        var header_buf: [128]u8 = undefined;
-        const header = try std.fmt.bufPrint(&header_buf, "Content-Length: {d}\r\n\r\n", .{json_payload.len});
-        try stdin.writeAll(header);
-        try stdin.writeAll(json_payload);
+        var writer_buf: [1]u8 = undefined;
+        var w = stdin.writer(&writer_buf).interface;
+        try rpc.writeMessage(&w, json_payload);
     }
 
     pub fn send(self: *LspClient, payload: anytype) !void {
         var out = std.io.Writer.Allocating.init(self.allocator);
         defer out.deinit();
         try std.json.Stringify.value(payload, .{}, &out.writer);
-        try self.sendRequest(out.written());
+        const json = out.written();
+        logz.info().fmt("msg", "Stringified LSP payload: {s}", .{json}).log();
+        try self.sendRequest(json);
     }
 
     fn stderrLoop(self: *LspClient) void {

@@ -678,9 +678,12 @@ pub const Editor = struct {
         const tab = self.currentTab() orelse return;
         const mc = tab.mainCursor();
 
-        const top_reserved = 2;
-        const row = (mc.row - tab.scroll_row) + top_reserved + 2;
-        const col = mc.col + self.calculateGutterWidth(tab.buf.lines.items.len) + 1;
+        const explorer_width = if (self.explorer_visible) self.width / 5 else 0;
+        const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
+        
+        // Relative row in viewport
+        const rel_row = mc.row - tab.scroll_row;
+        const col = explorer_width + gutter_width + mc.col + 1;
 
         const items_val = self.completion_items.?;
         var items: []std.json.Value = &[_]std.json.Value{};
@@ -698,22 +701,73 @@ pub const Editor = struct {
             return;
         }
 
-        const visible_count = @min(items.len, 15);
+        const max_height = 10;
+        const visible_count = @min(items.len, max_height);
+        
+        // Flipped menu if near bottom
+        var row = rel_row + 3 + 1;
+        if (row + visible_count >= self.height - 1) {
+            row = (rel_row + 3) -| visible_count;
+        }
+
+        // Handle scrolling in the menu
+        var scroll_top: usize = 0;
+        if (self.completion_selected >= max_height) {
+            scroll_top = self.completion_selected - max_height + 1;
+        }
 
         // Draw background/border
         for (0..visible_count) |i| {
-            try terminal.moveCursor(writer, row + i, col);
-            try writer.writeAll("\x1b[48;5;236m"); // Dark grey background
+            const item_idx = scroll_top + i;
+            if (item_idx >= items.len) break;
 
-            if (i == self.completion_selected) {
-                try writer.writeAll("\x1b[48;5;25m"); // Blue selection
+            try terminal.moveCursor(writer, row + i, col);
+            
+            if (item_idx == self.completion_selected) {
+                try writer.writeAll("\x1b[48;5;25m\x1b[38;5;255m"); // Blue selection, white text
+            } else {
+                try writer.writeAll("\x1b[48;5;236m\x1b[38;5;250m"); // Dark grey background, light grey text
             }
 
-            const item = items[i].object;
+            const item = items[item_idx].object;
             const label = item.get("label").?.string;
+            const kind_val = if (item.get("kind")) |k| @as(u8, @intCast(k.integer)) else @as(u8, 0);
+            
+            const kind_str = switch (kind_val) {
+                1 => "Text",
+                2 => "Method",
+                3 => "Fn",
+                4 => "Const",
+                5 => "Field",
+                6 => "Var",
+                7 => "Class",
+                8 => "Intf",
+                9 => "Mod",
+                10 => "Prop",
+                13 => "Enum",
+                14 => "Key",
+                15 => "Snip",
+                21 => "Const",
+                22 => "Struct",
+                else => "",
+            };
 
-            // Pad to fixed width
-            try writer.print(" {s:<30} ", .{label[0..@min(label.len, 30)]});
+            // Pad to fixed width and show kind
+            try writer.print(" {s: <6} │ {s: <30} ", .{kind_str, label[0..@min(label.len, 30)]});
+            
+            // If selected, maybe show detail on the right
+            if (item_idx == self.completion_selected) {
+                if (item.get("detail")) |d| {
+                    if (d == .string) {
+                        const detail = d.string;
+                        const detail_col = col + 42;
+                        try terminal.moveCursor(writer, row + i, detail_col);
+                        try writer.writeAll("\x1b[48;5;238m\x1b[38;5;252m"); // Slightly lighter grey for detail
+                        try writer.print(" {s} ", .{detail[0..@min(detail.len, 40)]});
+                    }
+                }
+            }
+            
             try writer.writeAll("\x1b[0m");
         }
     }

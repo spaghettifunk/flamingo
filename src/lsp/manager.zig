@@ -46,11 +46,22 @@ pub const LspManager = struct {
     }
 
     fn sendInitialize(self: *LspManager, client: *lsp_client.LspClient) !void {
-        _ = self;
+        const cwd = std.fs.cwd().realpathAlloc(self.allocator, ".") catch |err| {
+            logz.err().fmt("msg", "Failed to get CWD for LSP rootUri: {any}", .{err}).log();
+            return err;
+        };
+        defer self.allocator.free(cwd);
+        const root_uri = try std.fmt.allocPrint(self.allocator, "file://{s}", .{cwd});
+        defer self.allocator.free(root_uri);
+
         client.state = .initializing;
         const req = protocol.InitializeRequest{
             .id = client.request_id,
-            .params = .{},
+            .params = .{
+                .processId = null, // Can be null
+                .rootUri = root_uri,
+                .capabilities = .{},
+            },
         };
         try client.pending_requests.put(client.request_id, .initialize);
         client.request_id += 1;
