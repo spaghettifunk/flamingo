@@ -17,14 +17,30 @@ pub const EditorMode = enum {
     Search,
 };
 
+pub const Pos = struct {
+    row: usize,
+    col: usize,
+};
+
+pub const Cursor = struct {
+    row: usize = 0,
+    col: usize = 0,
+    selection_start: ?Pos = null,
+};
+
 pub const Tab = struct {
     buf: buffer.Buffer,
-    cursor_row: usize = 0,
-    cursor_col: usize = 0,
+    cursors: std.ArrayListUnmanaged(Cursor),
+    main_cursor_idx: usize = 0,
     scroll_row: usize = 0,
 
-    pub fn deinit(self: *Tab) void {
+    pub fn deinit(self: *Tab, allocator: std.mem.Allocator) void {
         self.buf.deinit();
+        self.cursors.deinit(allocator);
+    }
+
+    pub fn mainCursor(self: *Tab) *Cursor {
+        return &self.cursors.items[self.main_cursor_idx];
     }
 };
 
@@ -45,18 +61,20 @@ pub const Editor = struct {
     explorer_focused: bool = false,
     search_buffer: std.ArrayListUnmanaged(u8) = .empty,
     search_system: ?search.SearchSystem = null,
+    clipboard: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, cfg: config.Config) Editor {
         return Editor{
             .allocator = allocator,
             .config = cfg,
             .tabs = std.ArrayList(Tab).empty,
+            .search_system = search.SearchSystem.init(allocator),
         };
     }
 
     pub fn deinit(self: *Editor) void {
         for (self.tabs.items) |*tab| {
-            tab.deinit();
+            tab.deinit(self.allocator);
         }
         self.tabs.deinit(self.allocator);
         self.tabs = std.ArrayList(Tab).empty;
@@ -64,6 +82,10 @@ pub const Editor = struct {
         if (self.tree) |*t| {
             t.deinit();
             self.tree = null;
+        }
+        if (self.search_system) |*s| {
+            s.deinit();
+            self.search_system = null;
         }
         self.command_buffer.deinit(self.allocator);
         self.command_buffer = .empty;
@@ -73,6 +95,10 @@ pub const Editor = struct {
             s.deinit();
             self.search_system = null;
         }
+        if (self.clipboard) |c| {
+            self.allocator.free(c);
+            self.clipboard = null;
+        }
     }
 
     pub fn currentTab(self: *Editor) ?*Tab {
@@ -81,14 +107,19 @@ pub const Editor = struct {
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
-        try self.tabs.append(self.allocator, .{ .buf = buf });
+        var cursors = std.ArrayListUnmanaged(Cursor).empty;
+        try cursors.append(self.allocator, .{});
+        try self.tabs.append(self.allocator, .{ 
+            .buf = buf,
+            .cursors = cursors,
+        });
         self.active_tab_index = self.tabs.items.len - 1;
     }
 
     pub fn closeTab(self: *Editor) void {
         if (self.tabs.items.len == 0) return;
         var tab = self.tabs.orderedRemove(self.active_tab_index);
-        tab.deinit();
+        tab.deinit(self.allocator);
 
         if (self.tabs.items.len == 0) {
             self.mode = .Dashboard;
@@ -118,7 +149,7 @@ pub const Editor = struct {
 
     pub fn closeAllTabs(self: *Editor) void {
         for (self.tabs.items) |*tab| {
-            tab.deinit();
+            tab.deinit(self.allocator);
         }
         self.tabs.clearRetainingCapacity();
         self.active_tab_index = 0;
@@ -175,13 +206,14 @@ pub const Editor = struct {
     /// Adjust scroll_row so cursor_row is always within the visible viewport.
     pub fn clampScroll(self: *Editor) void {
         const tab = self.currentTab() orelse return;
+        const mc = tab.mainCursor();
         const top_reserved = 2; // tabs + separator
         const bot_reserved = 1; // status bar
         const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 1;
-        if (tab.cursor_row < tab.scroll_row) {
-            tab.scroll_row = tab.cursor_row;
-        } else if (tab.cursor_row >= tab.scroll_row + visible_rows) {
-            tab.scroll_row = tab.cursor_row - visible_rows + 1;
+        if (mc.row < tab.scroll_row) {
+            tab.scroll_row = mc.row;
+        } else if (mc.row >= tab.scroll_row + visible_rows) {
+            tab.scroll_row = mc.row - visible_rows + 1;
         }
     }
 
@@ -296,13 +328,14 @@ pub const Editor = struct {
                 const buffer_line_idx = screen_row + t.scroll_row - 1;
                 if (buffer_line_idx < t.buf.lines.items.len) {
                     // --- Gutter ---
-                    const is_current = (buffer_line_idx == t.cursor_row);
+                    const mc = t.mainCursor();
+                    const is_current = (buffer_line_idx == mc.row);
                     const line_num: usize = if (is_current)
                         buffer_line_idx + 1 // absolute 1-based
-                    else if (buffer_line_idx > t.cursor_row)
-                        buffer_line_idx - t.cursor_row
+                    else if (buffer_line_idx > mc.row)
+                        buffer_line_idx - mc.row
                     else
-                        t.cursor_row - buffer_line_idx;
+                        mc.row - buffer_line_idx;
 
                     const num_digits = @max(buffer.countDigits(t.buf.lines.items.len), 2);
 
@@ -325,7 +358,9 @@ pub const Editor = struct {
                     // No need to moveCursor; we are exactly at buf_start_col + gutter_width
                     const content_width = buf_width -| gutter_width;
                     const line = t.buf.lines.items[buffer_line_idx];
-                    
+                    const line_content = try line.slice(self.allocator);
+                    defer self.allocator.free(line_content);
+
                     var match_indices: ?[]const usize = null;
                     var is_active_line = false;
                     if (self.search_buffer.items.len > 0) {
@@ -342,30 +377,45 @@ pub const Editor = struct {
                         }
                     }
 
-                    if (match_indices) |indices| {
-                        // Render line with highlights
-                        const line_content = try line.slice(self.allocator);
-                        defer self.allocator.free(line_content);
-                        
-                        var char_idx: usize = 0;
-                        var m_idx: usize = 0;
-                        while (char_idx < line_content.len and char_idx < content_width) : (char_idx += 1) {
-                            const is_match = if (m_idx < indices.len and indices[m_idx] == char_idx) true else false;
-                            if (is_match) {
-                                if (is_active_line and self.search_system.?.getActiveMatch().?.col == char_idx) {
-                                    try writer.writeAll("\x1b[48;5;214m\x1b[30m"); // Orange background, black text for active
-                                } else {
-                                    try writer.writeAll("\x1b[48;5;228m\x1b[30m"); // Light Yellow background, black text for other matches
+                    var char_idx: usize = 0;
+                    var m_idx: usize = 0;
+                    while (char_idx < line_content.len and char_idx < content_width) : (char_idx += 1) {
+                        var in_selection = false;
+                        for (t.cursors.items) |cursor| {
+                            if (cursor.selection_start) |ss| {
+                                const s_row = @min(ss.row, cursor.row);
+                                const e_row = @max(ss.row, cursor.row);
+                                const s_col = if (ss.row < cursor.row) ss.col else if (ss.row > cursor.row) cursor.col else @min(ss.col, cursor.col);
+                                const e_col = if (ss.row < cursor.row) cursor.col else if (ss.row > cursor.row) ss.col else @max(ss.col, cursor.col);
+
+                                if (buffer_line_idx > s_row and buffer_line_idx < e_row) {
+                                    in_selection = true;
+                                } else if (buffer_line_idx == s_row and buffer_line_idx == e_row) {
+                                    if (char_idx >= s_col and char_idx < e_col) in_selection = true;
+                                } else if (buffer_line_idx == s_row) {
+                                    if (char_idx >= s_col) in_selection = true;
+                                } else if (buffer_line_idx == e_row) {
+                                    if (char_idx < e_col) in_selection = true;
                                 }
-                                try writer.writeByte(line_content[char_idx]);
-                                try writer.writeAll("\x1b[0m");
-                                m_idx += 1;
-                            } else {
-                                try writer.writeByte(line_content[char_idx]);
                             }
                         }
-                    } else {
-                        try line.writeTo(writer, content_width);
+
+                        if (in_selection) {
+                            try writer.writeAll("\x1b[48;5;239m"); // Dark grey selection
+                        }
+
+                        const is_match = if (match_indices) |indices| (if (m_idx < indices.len and indices[m_idx] == char_idx) true else false) else false;
+                        if (is_match) {
+                            if (is_active_line and self.search_system.?.getActiveMatch().?.col == char_idx) {
+                                try writer.writeAll("\x1b[48;5;214m\x1b[30m"); // Orange background
+                            } else {
+                                try writer.writeAll("\x1b[48;5;228m\x1b[30m"); // Light Yellow background
+                            }
+                            m_idx += 1;
+                        }
+                        
+                        try writer.writeByte(line_content[char_idx]);
+                        try writer.writeAll("\x1b[0m");
                     }
                 }
             }
@@ -412,11 +462,13 @@ pub const Editor = struct {
             try writer.writeAll(mode_color);
             
             const mode_str = if (self.mode == .Normal) "-- NORMAL --" else "-- INSERT --";
-            const tab_idx = if (tab) |t| t.cursor_row + 1 else 0;
-            const col_idx = if (tab) |t| t.cursor_col + 1 else 0;
             
             var buf: [128]u8 = undefined;
-            const status_text = try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} ", .{ mode_str, tab_idx, col_idx });
+            const status_text = if (tab) |t| 
+                try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len })
+            else 
+                try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
+            
             try writer.writeAll(status_text);
 
             // Pad status bar
@@ -438,9 +490,29 @@ pub const Editor = struct {
         } else if (tab) |t| {
             // Offset cursor past the line-number gutter
             const content_width = buf_width -| gutter_width;
-            const vis_col = if (t.cursor_col > content_width) content_width else t.cursor_col;
-            const vis_row = if (t.cursor_row >= t.scroll_row)
-                t.cursor_row - t.scroll_row + 3 // +1 for 1-based, +2 for tabs+sep
+            
+            // Draw all cursors
+            for (t.cursors.items, 0..) |cursor, i| {
+                const vis_col = if (cursor.col > content_width) content_width else cursor.col;
+                if (cursor.row >= t.scroll_row and cursor.row < t.scroll_row + visible_rows) {
+                    const vis_row = cursor.row - t.scroll_row + 3;
+                    try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
+                    
+                    if (i == t.main_cursor_idx) {
+                        // Main cursor is handled by the terminal's hardware cursor usually, 
+                        // but we need to move it there last.
+                    } else {
+                        // Secondary cursors - just a block highlight or something
+                        try writer.writeAll("\x1b[7m \x1b[27m"); // Inverse space
+                    }
+                }
+            }
+
+            // Finally move hardware cursor to main cursor position
+            const mc = t.mainCursor();
+            const vis_col = if (mc.col > content_width) content_width else mc.col;
+            const vis_row = if (mc.row >= t.scroll_row)
+                mc.row - t.scroll_row + 3
             else
                 3;
             try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);

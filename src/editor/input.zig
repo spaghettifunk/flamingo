@@ -4,6 +4,7 @@ const terminal = @import("../terminal.zig");
 const editor = @import("editor.zig");
 const buffer = @import("buffer.zig");
 const explorer = @import("explorer.zig");
+const actions = @import("actions.zig");
 
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.error_message != null) {
@@ -52,6 +53,61 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (is_alt_close_bracket) {
         ed.prevTab();
         return;
+    }
+
+    // --- Global Actions (Normal & Insert) ---
+    if (ed.mode == .Normal or ed.mode == .Insert) {
+        if (event.ctrl) {
+            if (event.key == .Char) {
+                switch (event.char) {
+                    'a' => { actions.selectAll(ed); return; },
+                    'c' => { try actions.copy(ed); return; },
+                    'x' => { try actions.cut(ed); return; },
+                    'v' => { try actions.paste(ed); return; },
+                    's' => { 
+                        if (ed.currentTab()) |tab| {
+                            if (tab.buf.filename) |f| {
+                                try tab.buf.saveToFile(f);
+                            }
+                        }
+                        return; 
+                    },
+                    'd' => { try actions.duplicateLine(ed); return; },
+                    'k' => if (event.shift) { try actions.deleteLine(ed); return; },
+                    else => {},
+                }
+            }
+        }
+        
+        if (event.alt) {
+            if (event.key == .Up) {
+                actions.moveLineUp(ed);
+                return;
+            } else if (event.key == .Down) {
+                if (event.shift) {
+                    try actions.duplicateLine(ed);
+                } else {
+                    actions.moveLineDown(ed);
+                }
+                return;
+            }
+        }
+
+        if (event.ctrl and event.alt) {
+            if (event.key == .Up) {
+                try actions.addCursorAbove(ed);
+                return;
+            } else if (event.key == .Down) {
+                try actions.addCursorBelow(ed);
+                return;
+            }
+        }
+
+        if (event.key == .Esc) {
+            actions.clearSelections(ed);
+            if (ed.mode == .Insert) ed.mode = .Normal;
+            return;
+        }
     }
 
     if (ed.explorer_focused and ed.explorer_visible and ed.tree != null) {
@@ -129,13 +185,14 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
             // Keep cursor within line bounds
             if (ed.currentTab()) |tab| {
-                if (tab.cursor_row >= tab.buf.lines.items.len) {
-                    tab.cursor_row = tab.buf.lines.items.len - 1;
+                const mc = tab.mainCursor();
+                if (mc.row >= tab.buf.lines.items.len) {
+                    mc.row = tab.buf.lines.items.len - 1;
                 }
-                const line = tab.buf.lines.items[tab.cursor_row];
+                const line = tab.buf.lines.items[mc.row];
                 const len = line.len();
-                if (tab.cursor_col > len) {
-                    tab.cursor_col = len;
+                if (mc.col > len) {
+                    mc.col = len;
                 }
             }
         },
@@ -146,35 +203,38 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 ed.mode = .Normal;
             } else if (event.key == .Enter) {
                 if (ed.currentTab()) |tab| {
-                    try tab.buf.insertNewline(tab.cursor_row, tab.cursor_col);
-                    tab.cursor_row += 1;
-                    tab.cursor_col = 0;
+                    const mc = tab.mainCursor();
+                    try tab.buf.insertNewline(mc.row, mc.col);
+                    mc.row += 1;
+                    mc.col = 0;
                 }
             } else if (event.key == .Backspace) {
                 if (ed.currentTab()) |tab| {
-                    const row = tab.cursor_row;
+                    const mc = tab.mainCursor();
+                    const row = mc.row;
                     var prev_len: usize = 0;
                     if (row > 0) {
                         prev_len = tab.buf.lines.items[row - 1].len();
                     }
 
-                    if (try tab.buf.deleteCharBack(tab.cursor_row, tab.cursor_col)) {
-                        tab.cursor_row -= 1;
-                        tab.cursor_col = prev_len;
+                    if (try tab.buf.deleteCharBack(mc.row, mc.col)) {
+                        mc.row -= 1;
+                        mc.col = prev_len;
                     } else {
-                        if (tab.cursor_col > 0) tab.cursor_col -= 1;
+                        if (mc.col > 0) mc.col -= 1;
                     }
                 }
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 if (ed.currentTab()) |tab| {
+                    const mc = tab.mainCursor();
                     if (event.char == '\t') {
                         for (0..4) |_| {
-                            try tab.buf.insertChar(tab.cursor_row, tab.cursor_col, ' ');
-                            tab.cursor_col += 1;
+                            try tab.buf.insertChar(mc.row, mc.col, ' ');
+                            mc.col += 1;
                         }
                     } else {
-                        try tab.buf.insertChar(tab.cursor_row, tab.cursor_col, event.char);
-                        tab.cursor_col += 1;
+                        try tab.buf.insertChar(mc.row, mc.col, event.char);
+                        mc.col += 1;
                     }
                 }
             }
@@ -227,8 +287,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     if (ed.currentTab()) |tab| {
                         try ed.search_system.?.update(&tab.buf, ed.search_buffer.items);
                         if (ed.search_system.?.getActiveMatch()) |m| {
-                            tab.cursor_row = m.row;
-                            tab.cursor_col = m.col;
+                            const mc = tab.mainCursor();
+                            mc.row = m.row;
+                            mc.col = m.col;
                             ed.clampScroll();
                         }
                     }
@@ -242,8 +303,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     s.nextMatch();
                     if (s.getActiveMatch()) |m| {
                         if (ed.currentTab()) |tab| {
-                            tab.cursor_row = m.row;
-                            tab.cursor_col = m.col;
+                            const mc = tab.mainCursor();
+                            mc.row = m.row;
+                            mc.col = m.col;
                             ed.clampScroll();
                         }
                     }
@@ -253,8 +315,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     s.prevMatch();
                     if (s.getActiveMatch()) |m| {
                         if (ed.currentTab()) |tab| {
-                            tab.cursor_row = m.row;
-                            tab.cursor_col = m.col;
+                            const mc = tab.mainCursor();
+                            mc.row = m.row;
+                            mc.col = m.col;
                             ed.clampScroll();
                         }
                     }
@@ -264,8 +327,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 if (ed.currentTab()) |tab| {
                     try ed.search_system.?.update(&tab.buf, ed.search_buffer.items);
                     if (ed.search_system.?.getActiveMatch()) |m| {
-                        tab.cursor_row = m.row;
-                        tab.cursor_col = m.col;
+                        const mc = tab.mainCursor();
+                        mc.row = m.row;
+                        mc.col = m.col;
                         ed.clampScroll();
                     }
                 }
@@ -276,44 +340,55 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
 pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
+    
+    // Multi-cursor support: apply movement to all cursors
+    var handled = false;
+    for (tab.cursors.items) |*cursor| {
+        if (event.shift) {
+            if (cursor.selection_start == null) {
+                cursor.selection_start = .{ .row = cursor.row, .col = cursor.col };
+            }
+        } else if (!event.ctrl and !event.alt) {
+            // Only clear selection on plain arrows (no modifiers, except shift which extends)
+            cursor.selection_start = null;
+        }
 
-    if (event.key == .Up) {
-        if (event.alt) {
-            tab.cursor_col = tab.buf.lines.items[tab.cursor_row].len();
-        } else {
-            if (tab.cursor_row > 0) tab.cursor_row -= 1;
-            // Clamp col to the new line's length after vertical movement
-            const new_line_len = tab.buf.lines.items[tab.cursor_row].len();
-            if (tab.cursor_col > new_line_len) tab.cursor_col = new_line_len;
+        if (event.key == .Up) {
+            if (event.alt and !event.ctrl) {
+                cursor.col = tab.buf.lines.items[cursor.row].len();
+            } else {
+                if (cursor.row > 0) cursor.row -= 1;
+                const new_line_len = tab.buf.lines.items[cursor.row].len();
+                if (cursor.col > new_line_len) cursor.col = new_line_len;
+            }
+            handled = true;
+        } else if (event.key == .Down) {
+            if (event.alt and !event.ctrl) {
+                cursor.col = 0;
+            } else {
+                if (cursor.row < tab.buf.lines.items.len - 1) cursor.row += 1;
+                const new_line_len = tab.buf.lines.items[cursor.row].len();
+                if (cursor.col > new_line_len) cursor.col = new_line_len;
+            }
+            handled = true;
+        } else if (event.key == .Left) {
+            if (event.alt) {
+                try tab.buf.jumpWordLeft(&cursor.row, &cursor.col);
+            } else {
+                if (cursor.col > 0) cursor.col -= 1;
+            }
+            handled = true;
+        } else if (event.key == .Right) {
+            if (event.alt) {
+                try tab.buf.jumpWordRight(&cursor.row, &cursor.col);
+            } else {
+                const line = tab.buf.lines.items[cursor.row];
+                if (cursor.col < line.len()) cursor.col += 1;
+            }
+            handled = true;
         }
-        ed.clampScroll();
-        return true;
-    } else if (event.key == .Down) {
-        if (event.alt) {
-            tab.cursor_col = 0;
-        } else {
-            if (tab.cursor_row < tab.buf.lines.items.len - 1) tab.cursor_row += 1;
-            // Clamp col to the new line's length after vertical movement
-            const new_line_len = tab.buf.lines.items[tab.cursor_row].len();
-            if (tab.cursor_col > new_line_len) tab.cursor_col = new_line_len;
-        }
-        ed.clampScroll();
-        return true;
-    } else if (event.key == .Left) {
-        if (event.alt) {
-            try tab.buf.jumpWordLeft(&tab.cursor_row, &tab.cursor_col);
-        } else {
-            if (tab.cursor_col > 0) tab.cursor_col -= 1;
-        }
-        return true;
-    } else if (event.key == .Right) {
-        if (event.alt) {
-            try tab.buf.jumpWordRight(&tab.cursor_row, &tab.cursor_col);
-        } else {
-            const line = tab.buf.lines.items[tab.cursor_row];
-            if (tab.cursor_col < line.len()) tab.cursor_col += 1;
-        }
-        return true;
     }
-    return false;
+
+    if (handled) ed.clampScroll();
+    return handled;
 }

@@ -223,7 +223,7 @@ pub const Buffer = struct {
         try prev.ensureGap(current_data.len);
         prev.moveGap(prev.len());
 
-        @memcpy(prev.buf[prev.gap_start..], current_data);
+        @memcpy(prev.buf[prev.gap_start .. prev.gap_start + current_data.len], current_data);
         prev.gap_start += current_data.len;
 
         var removed = self.lines.orderedRemove(row);
@@ -330,6 +330,74 @@ pub const Buffer = struct {
             col.* += 1;
         }
     }
+
+    pub fn getRange(self: *Buffer, s_row: usize, s_col: usize, e_row: usize, e_col: usize) ![]u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(self.allocator);
+
+        var r = s_row;
+        while (r <= e_row) : (r += 1) {
+            const line_slice = try self.lines.items[r].slice(self.allocator);
+            defer self.allocator.free(line_slice);
+
+            const start = if (r == s_row) s_col else 0;
+            const end = if (r == e_row) e_col else line_slice.len;
+
+            if (start < line_slice.len) {
+                try out.appendSlice(self.allocator, line_slice[start..@min(end, line_slice.len)]);
+            }
+            if (r < e_row) {
+                try out.append(self.allocator, '\n');
+            }
+        }
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    pub fn deleteRange(self: *Buffer, s_row: usize, s_col: usize, e_row: usize, e_col: usize) !void {
+        if (s_row == e_row) {
+            var line = &self.lines.items[s_row];
+            line.moveGap(e_col);
+            const to_del = e_col - s_col;
+            line.gap_start -= to_del;
+            self.is_dirty = true;
+            return;
+        }
+
+        // Multiple lines
+        const first_line = &self.lines.items[s_row];
+        const last_line = &self.lines.items[e_row];
+
+        const last_data = try last_line.slice(self.allocator);
+        defer self.allocator.free(last_data);
+        const suffix = last_data[e_col..];
+
+        // Truncate first line
+        first_line.moveGap(s_col);
+        first_line.gap_end = first_line.buf.len;
+
+        // Append suffix of last line to first line
+        try first_line.ensureGap(suffix.len);
+        @memcpy(first_line.buf[first_line.gap_start .. first_line.gap_start + suffix.len], suffix);
+        first_line.gap_start += suffix.len;
+
+        // Remove lines in between
+        var i: usize = 0;
+        const count = e_row - s_row;
+        while (i < count) : (i += 1) {
+            var removed = self.lines.orderedRemove(s_row + 1);
+            removed.deinit();
+        }
+
+        self.is_dirty = true;
+    }
+
+    pub fn swapLines(self: *Buffer, row1: usize, row2: usize) void {
+        if (row1 >= self.lines.items.len or row2 >= self.lines.items.len) return;
+        const tmp = self.lines.items[row1];
+        self.lines.items[row1] = self.lines.items[row2];
+        self.lines.items[row2] = tmp;
+        self.is_dirty = true;
+    }
 };
 
 pub const CharClass = enum { Space, Alphanum, Punctuation };
@@ -346,4 +414,100 @@ pub fn countDigits(n: usize) usize {
     var d: usize = 0;
     while (v > 0) : (v /= 10) d += 1;
     return d;
+}
+
+test "Line basic operations" {
+    const allocator = std.testing.allocator;
+    var line = try Line.init(allocator);
+    defer line.deinit();
+
+    try line.insert(0, 'a');
+    try line.insert(1, 'b');
+    try line.insert(2, 'c');
+    
+    const s1 = try line.slice(allocator);
+    defer allocator.free(s1);
+    try std.testing.expectEqualStrings("abc", s1);
+
+    _ = line.deleteBack(2);
+    const s2 = try line.slice(allocator);
+    defer allocator.free(s2);
+    try std.testing.expectEqualStrings("ac", s2);
+}
+
+test "Buffer line merging" {
+    const allocator = std.testing.allocator;
+    var buf = Buffer{
+        .lines = std.ArrayList(Line).empty,
+        .allocator = allocator,
+    };
+    defer {
+        for (buf.lines.items) |*l| l.deinit();
+        buf.lines.deinit(allocator);
+    }
+
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "abc"));
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "def"));
+
+    // Delete at (1, 0) should merge "abc" and "def"
+    const merged = try buf.deleteCharBack(1, 0);
+    try std.testing.expect(merged);
+    try std.testing.expectEqual(@as(usize, 1), buf.lines.items.len);
+
+    const s = try buf.lines.items[0].slice(allocator);
+    defer allocator.free(s);
+    try std.testing.expectEqualStrings("abcdef", s);
+}
+
+test "Buffer range deletion" {
+    const allocator = std.testing.allocator;
+    var buf = Buffer{
+        .lines = std.ArrayList(Line).empty,
+        .allocator = allocator,
+    };
+    defer {
+        for (buf.lines.items) |*l| l.deinit();
+        buf.lines.deinit(allocator);
+    }
+
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 1"));
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 2"));
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 3"));
+
+    // Delete from (0, 5) to (2, 5)
+    // "line 1" -> "line "
+    // "line 3" -> " 3"
+    // Result: "line  3"
+    try buf.deleteRange(0, 5, 2, 5);
+    try std.testing.expectEqual(@as(usize, 1), buf.lines.items.len);
+    
+    const s = try buf.lines.items[0].slice(allocator);
+    defer allocator.free(s);
+    try std.testing.expectEqualStrings("line  3", s);
+}
+
+test "Buffer word jumps" {
+    const allocator = std.testing.allocator;
+    var buf = Buffer{
+        .lines = std.ArrayList(Line).empty,
+        .allocator = allocator,
+    };
+    defer {
+        for (buf.lines.items) |*l| l.deinit();
+        buf.lines.deinit(allocator);
+    }
+
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "hello world flamingo"));
+    
+    var row: usize = 0;
+    var col: usize = 0;
+    
+    try buf.jumpWordRight(&row, &col);
+    try std.testing.expectEqual(@as(usize, 5), col); // after "hello"
+    
+    try buf.jumpWordRight(&row, &col);
+    try std.testing.expectEqual(@as(usize, 11), col); // after " world"
+    
+    try buf.jumpWordLeft(&row, &col);
+    try std.testing.expectEqual(@as(usize, 6), col); // start of "world"
 }
