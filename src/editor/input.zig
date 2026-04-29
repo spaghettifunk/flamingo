@@ -37,8 +37,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    const is_tab = event.key == .Char and event.char == '\t';
-    if (event.eql(switch_focus_key) or (is_tab and std.mem.eql(u8, ed.config.keybindings.switch_focus, "ctrl+tab"))) {
+    // const is_tab = event.key == .Char and event.char == '\t';
+    if (event.eql(switch_focus_key)) {
         if (ed.explorer_visible) {
             ed.explorer_focused = !ed.explorer_focused;
         }
@@ -60,25 +60,43 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         if (event.ctrl) {
             if (event.key == .Char) {
                 switch (event.char) {
-                    'a' => { actions.selectAll(ed); return; },
-                    'c' => { try actions.copy(ed); return; },
-                    'x' => { try actions.cut(ed); return; },
-                    'v' => { try actions.paste(ed); return; },
-                    's' => { 
+                    'a' => {
+                        actions.selectAll(ed);
+                        return;
+                    },
+                    'c' => {
+                        try actions.copy(ed);
+                        return;
+                    },
+                    'x' => {
+                        try actions.cut(ed);
+                        return;
+                    },
+                    'v' => {
+                        try actions.paste(ed);
+                        return;
+                    },
+                    's' => {
                         if (ed.currentTab()) |tab| {
                             if (tab.buf.filename) |f| {
                                 try tab.buf.saveToFile(f);
                             }
                         }
-                        return; 
+                        return;
                     },
-                    'd' => { try actions.duplicateLine(ed); return; },
-                    'k' => if (event.shift) { try actions.deleteLine(ed); return; },
+                    'd' => {
+                        try actions.duplicateLine(ed);
+                        return;
+                    },
+                    'k' => if (event.shift) {
+                        try actions.deleteLine(ed);
+                        return;
+                    },
                     else => {},
                 }
             }
         }
-        
+
         if (event.ctrl and event.alt) {
             if (event.key == .Up) {
                 try actions.addCursorAbove(ed);
@@ -336,7 +354,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
 pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
-    
+
     // Multi-cursor support: apply movement to all cursors
     var handled = false;
     for (tab.cursors.items) |*cursor| {

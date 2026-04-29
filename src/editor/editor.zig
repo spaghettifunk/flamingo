@@ -7,6 +7,8 @@ const dashboard = @import("dashboard.zig");
 const explorer = @import("explorer.zig");
 const input = @import("input.zig");
 const search = @import("search.zig");
+const lsp_manager = @import("../lsp/manager.zig");
+const event_queue = @import("event_queue.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -62,13 +64,30 @@ pub const Editor = struct {
     search_buffer: std.ArrayListUnmanaged(u8) = .empty,
     search_system: ?search.SearchSystem = null,
     clipboard: ?[]u8 = null,
+    event_queue: *event_queue.EventQueue,
+    lsp_mgr: ?lsp_manager.LspManager = null,
 
-    pub fn init(allocator: std.mem.Allocator, cfg: config.Config) Editor {
+    // Completion state
+    completion_items: ?std.json.Value = null,
+    completion_active: bool = false,
+    completion_selected: usize = 0,
+
+    diagnostics: std.StringHashMap(std.json.Value),
+
+    pub fn init(allocator: std.mem.Allocator, cfg: config.Config) !Editor {
+        const queue = try allocator.create(event_queue.EventQueue);
+        queue.* = event_queue.EventQueue.init(allocator);
+
+        const mgr = try lsp_manager.LspManager.init(allocator, queue);
+
         return Editor{
             .allocator = allocator,
             .config = cfg,
             .tabs = std.ArrayList(Tab).empty,
             .search_system = search.SearchSystem.init(allocator),
+            .event_queue = queue,
+            .lsp_mgr = mgr,
+            .diagnostics = std.StringHashMap(std.json.Value).init(allocator),
         };
     }
 
@@ -95,6 +114,20 @@ pub const Editor = struct {
             self.allocator.free(c);
             self.clipboard = null;
         }
+
+        if (self.lsp_mgr) |*mgr| {
+            var it = self.diagnostics.iterator();
+            while (it.next()) |entry| {
+                mgr.freeValue(entry.value_ptr.*);
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.diagnostics.deinit();
+            mgr.deinit();
+            self.lsp_mgr = null;
+        }
+        self.event_queue.quit = true;
+        self.event_queue.deinit();
+        self.allocator.destroy(self.event_queue);
     }
 
     pub fn currentTab(self: *Editor) ?*Tab {
@@ -105,11 +138,26 @@ pub const Editor = struct {
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
         var cursors = std.ArrayListUnmanaged(Cursor).empty;
         try cursors.append(self.allocator, .{});
-        try self.tabs.append(self.allocator, .{ 
+        try self.tabs.append(self.allocator, .{
             .buf = buf,
             .cursors = cursors,
         });
         self.active_tab_index = self.tabs.items.len - 1;
+
+        if (self.lsp_mgr) |*mgr| {
+            if (buf.filename) |fname| {
+                mgr.startLspForFile(fname) catch |err| {
+                    logz.err().fmt("msg", "Failed to start LSP: {any}", .{err}).log();
+                };
+
+                const content = try buf.toString(self.allocator);
+                defer self.allocator.free(content);
+
+                mgr.notifyOpen(fname, content) catch |err| {
+                    logz.err().fmt("msg", "Failed to notify open: {any}", .{err}).log();
+                };
+            }
+        }
     }
 
     pub fn closeTab(self: *Editor) void {
@@ -178,9 +226,63 @@ pub const Editor = struct {
         const writer = render_buffer.writer(self.allocator);
 
         while (!self.should_quit) {
+            // Pump events
+            while (self.event_queue.tryPop()) |ev| {
+                switch (ev) {
+                    .lsp_message => |msg| {
+                        defer self.allocator.free(msg.message);
+                        if (self.lsp_mgr) |*mgr| {
+                            const res = mgr.handleMessage(msg.plugin_name, msg.message) catch |err| blk: {
+                                logz.err().fmt("msg", "Error handling LSP msg: {any}", .{err}).log();
+                                break :blk lsp_manager.LspManager.HandleResult.none;
+                            };
+
+                            switch (res) {
+                                .initialized => {
+                                    for (self.tabs.items) |tab| {
+                                        if (tab.buf.filename) |fname| {
+                                            const ext = std.fs.path.extension(fname);
+                                            if (mgr.plugin_mgr.getPluginForExtension(ext)) |p| {
+                                                if (std.mem.eql(u8, p.name, msg.plugin_name)) {
+                                                    const content = try tab.buf.toString(self.allocator);
+                                                    defer self.allocator.free(content);
+                                                    mgr.notifyOpen(fname, content) catch {};
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                .completion => |items| {
+                                    if (self.completion_items) |old| {
+                                        mgr.freeValue(old);
+                                    }
+                                    self.completion_items = items;
+                                    self.completion_active = true;
+                                    self.completion_selected = 0;
+                                },
+                                .diagnostics => |diag_val| {
+                                    const uri = diag_val.object.get("uri").?.string;
+                                    // filename is after file://
+                                    const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
+                                    
+                                    if (self.diagnostics.get(fname)) |old| {
+                                        mgr.freeValue(old);
+                                    }
+                                    
+                                    const fname_copy = try self.allocator.dupe(u8, fname);
+                                    try self.diagnostics.put(fname_copy, diag_val);
+                                },
+                                .none => {},
+                            }
+                        }
+                    },
+                }
+            }
+
             render_buffer.clearRetainingCapacity();
             try terminal.hideCursor(writer);
             try self.render(writer);
+            try self.renderCompletionMenu(writer);
             try terminal.showCursor(writer);
             try raw_writer.writeAll(render_buffer.items);
 
@@ -196,7 +298,39 @@ pub const Editor = struct {
                 continue;
             }
 
+            if (self.completion_active) {
+                if (try self.handleCompletionInput(event)) continue;
+            }
+
             try input.handleInput(self, event);
+
+            // Notify LSP of change if buffer is dirty
+            if (self.currentTab()) |tab| {
+                if (tab.buf.is_dirty and tab.buf.filename != null) {
+                    if (self.lsp_mgr) |*mgr| {
+                        const content = try tab.buf.toString(self.allocator);
+                        defer self.allocator.free(content);
+                        mgr.notifyChange(tab.buf.filename.?, content) catch |err| {
+                            logz.err().fmt("msg", "Failed to notify change: {any}", .{err}).log();
+                        };
+                    }
+                }
+
+                // Trigger completion
+                const is_dot = (event.key == .Char and event.char == '.');
+                const is_ctrl_space = (event.ctrl and event.key == .Char and event.char == ' ');
+
+                if (is_dot or is_ctrl_space) {
+                    if (tab.buf.filename != null) {
+                        if (self.lsp_mgr) |*mgr| {
+                            const mc = tab.mainCursor();
+                            mgr.requestCompletion(tab.buf.filename.?, mc.row, mc.col) catch |err| {
+                                logz.err().fmt("msg", "Failed to request completion: {any}", .{err}).log();
+                            };
+                        }
+                    }
+                }
+            }
         }
 
         render_buffer.clearRetainingCapacity();
@@ -415,7 +549,7 @@ pub const Editor = struct {
                             }
                             m_idx += 1;
                         }
-                        
+
                         try writer.writeByte(line_content[char_idx]);
                         try writer.writeAll("\x1b[0m");
                     }
@@ -462,15 +596,26 @@ pub const Editor = struct {
         } else {
             const mode_color = if (self.mode == .Normal) "\x1b[48;5;121m\x1b[30m" else "\x1b[48;5;117m\x1b[30m";
             try writer.writeAll(mode_color);
-            
+
             const mode_str = if (self.mode == .Normal) "-- NORMAL --" else "-- INSERT --";
-            
+
             var buf: [128]u8 = undefined;
-            const status_text = if (tab) |t| 
-                try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len })
-            else 
+            const status_text = if (tab) |t| blk: {
+                var diag_count: usize = 0;
+                if (t.buf.filename) |fname| {
+                    if (self.diagnostics.get(fname)) |dv| {
+                        diag_count = dv.object.get("diagnostics").?.array.items.len;
+                    }
+                }
+
+                if (diag_count > 0) {
+                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | ERR: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, diag_count });
+                } else {
+                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len });
+                }
+            } else
                 try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
-            
+
             try writer.writeAll(status_text);
 
             // Pad status bar
@@ -492,16 +637,16 @@ pub const Editor = struct {
         } else if (tab) |t| {
             // Offset cursor past the line-number gutter
             const content_width = buf_width -| gutter_width;
-            
+
             // Draw all cursors
             for (t.cursors.items, 0..) |cursor, i| {
                 const vis_col = if (cursor.col > content_width) content_width else cursor.col;
                 if (cursor.row >= t.scroll_row and cursor.row < t.scroll_row + visible_rows) {
                     const vis_row = cursor.row - t.scroll_row + 3;
                     try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
-                    
+
                     if (i == t.main_cursor_idx) {
-                        // Main cursor is handled by the terminal's hardware cursor usually, 
+                        // Main cursor is handled by the terminal's hardware cursor usually,
                         // but we need to move it there last.
                     } else {
                         // Secondary cursors - just a block highlight or something
@@ -526,11 +671,129 @@ pub const Editor = struct {
         _ = self;
         return @max(buffer.countDigits(total_lines), 2) + 2;
     }
+
+    fn renderCompletionMenu(self: *Editor, writer: anytype) !void {
+        if (!self.completion_active or self.completion_items == null) return;
+
+        const tab = self.currentTab() orelse return;
+        const mc = tab.mainCursor();
+
+        const top_reserved = 2;
+        const row = (mc.row - tab.scroll_row) + top_reserved + 2;
+        const col = mc.col + self.calculateGutterWidth(tab.buf.lines.items.len) + 1;
+
+        const items_val = self.completion_items.?;
+        var items: []std.json.Value = &[_]std.json.Value{};
+
+        if (items_val == .array) {
+            items = items_val.array.items;
+        } else if (items_val == .object) {
+            if (items_val.object.get("items")) |v| {
+                if (v == .array) items = v.array.items;
+            }
+        }
+
+        if (items.len == 0) {
+            self.completion_active = false;
+            return;
+        }
+
+        const visible_count = @min(items.len, 15);
+
+        // Draw background/border
+        for (0..visible_count) |i| {
+            try terminal.moveCursor(writer, row + i, col);
+            try writer.writeAll("\x1b[48;5;236m"); // Dark grey background
+
+            if (i == self.completion_selected) {
+                try writer.writeAll("\x1b[48;5;25m"); // Blue selection
+            }
+
+            const item = items[i].object;
+            const label = item.get("label").?.string;
+
+            // Pad to fixed width
+            try writer.print(" {s:<30} ", .{label[0..@min(label.len, 30)]});
+            try writer.writeAll("\x1b[0m");
+        }
+    }
+
+    fn handleCompletionInput(self: *Editor, event: terminal.KeyEvent) !bool {
+        if (!self.completion_active or self.completion_items == null) return false;
+
+        const items_val = self.completion_items.?;
+        var items: []std.json.Value = &[_]std.json.Value{};
+        if (items_val == .array) {
+            items = items_val.array.items;
+        } else if (items_val == .object) {
+            if (items_val.object.get("items")) |v| {
+                if (v == .array) items = v.array.items;
+            }
+        }
+
+        switch (event.key) {
+            .Up => {
+                if (self.completion_selected > 0) {
+                    self.completion_selected -= 1;
+                } else if (items.len > 0) {
+                    self.completion_selected = items.len - 1;
+                }
+                return true;
+            },
+            .Down => {
+                if (self.completion_selected < items.len - 1) {
+                    self.completion_selected += 1;
+                } else {
+                    self.completion_selected = 0;
+                }
+                return true;
+            },
+            .Enter => {
+                if (items.len == 0) {
+                    self.completion_active = false;
+                    return false;
+                }
+                const item = items[self.completion_selected].object;
+                const label = item.get("label").?.string;
+                const insertText = if (item.get("insertText")) |it| it.string else label;
+
+                // Insert the completion
+                if (self.currentTab()) |tab| {
+                    const mc = tab.mainCursor();
+                    // Simple insertion for now.
+                    // TODO: handle overwrite and snippets.
+                    for (insertText) |c| {
+                        try tab.buf.insertChar(mc.row, mc.col, c);
+                        mc.col += 1;
+                    }
+                }
+
+                self.completion_active = false;
+                return true;
+            },
+            .Esc => {
+                self.completion_active = false;
+                return true;
+            },
+            .Char => {
+                if (!std.ascii.isAlphanumeric(event.char)) {
+                    self.completion_active = false;
+                    return false;
+                }
+                return false;
+            },
+            else => {
+                self.completion_active = false;
+                return false;
+            },
+        }
+    }
 };
 
 test "Editor.calculateGutterWidth" {
     const cfg = config.Config{};
-    const ed = Editor.init(std.testing.allocator, cfg);
+    var ed = try Editor.init(std.testing.allocator, cfg);
+    defer ed.deinit();
 
     // 1-99 lines => 2 digits min => 1 + 2 + 1 = 4
     try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(5));
@@ -542,7 +805,7 @@ test "Editor.calculateGutterWidth" {
 }
 
 pub fn start_editor(allocator: std.mem.Allocator, cfg: config.Config) !void {
-    var editor = Editor.init(allocator, cfg);
+    var editor = try Editor.init(allocator, cfg);
     defer editor.deinit();
     try editor.run();
 }

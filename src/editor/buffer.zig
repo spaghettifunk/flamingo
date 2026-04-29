@@ -248,6 +248,18 @@ pub const Buffer = struct {
         self.is_dirty = false;
     }
 
+    pub fn toString(self: *const Buffer, allocator: std.mem.Allocator) ![]u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(allocator);
+        for (self.lines.items) |*line| {
+            const data = try line.slice(allocator);
+            defer allocator.free(data);
+            try out.appendSlice(allocator, data);
+            try out.append(allocator, '\n');
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
     pub fn loadFromFile(allocator: std.mem.Allocator, filename: []const u8) !Buffer {
         logz.debug().fmt("msg", "loading file: {s}", .{filename}).log();
         const file = try std.fs.cwd().openFile(filename, .{});

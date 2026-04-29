@@ -29,7 +29,7 @@ fn expectLine(a: std.mem.Allocator, ed: *editor_mod.Editor, row: usize, expected
 
 test "Dashboard → Normal via Enter on 'New File'" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.mode);
@@ -433,7 +433,7 @@ test "Option+Right: word jump moves cursor right" {
 
 test "Option+[ cycles to next tab" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b0 = try buffer_mod.Buffer.init(a);
@@ -449,7 +449,7 @@ test "Option+[ cycles to next tab" {
 
 test "Option+] cycles to previous tab" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b0 = try buffer_mod.Buffer.init(a);

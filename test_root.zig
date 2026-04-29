@@ -9,6 +9,7 @@ test {
     _ = @import("tests/editor_test.zig");
     _ = @import("tests/actions_test.zig");
     _ = @import("tests/input_test.zig");
+    _ = @import("tests/lsp_test.zig");
 
     // Core modules (to run internal tests)
     _ = @import("src/editor/editor.zig");

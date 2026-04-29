@@ -306,12 +306,13 @@ pub fn readKey(reader: anytype) !KeyEvent {
         return event;
     }
 
-    // Handle Control characters
-    // Handle Control characters (1-31)
-    if (c >= 1 and c <= 31 and c != 13 and c != 10 and c != 9 and c != 8) {
+    // Handle Control characters (0-31)
+    if (c <= 31 and c != 13 and c != 10 and c != 9 and c != 8) {
         event.ctrl = true;
         event.key = .Char;
-        if (c <= 26) {
+        if (c == 0) {
+            event.char = ' ';
+        } else if (c <= 26) {
             // Map 1-26 to 'a'-'z'
             event.char = c + 'a' - 1;
         } else {

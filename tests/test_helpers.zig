@@ -34,7 +34,7 @@ pub fn setupLogger(allocator: std.mem.Allocator) !LoggerHandle {
 /// `lines`. The caller must call `ed.deinit()` when done.
 pub fn makeEditor(allocator: std.mem.Allocator, lines: []const []const u8) !editor_mod.Editor {
     const cfg = config.Config{};
-    var ed = editor_mod.Editor.init(allocator, cfg);
+    var ed = try editor_mod.Editor.init(allocator, cfg);
     errdefer ed.deinit();
 
     var buf = try buffer_mod.Buffer.init(allocator);
@@ -66,9 +66,9 @@ pub fn makeEditor(allocator: std.mem.Allocator, lines: []const []const u8) !edit
 }
 
 /// Creates an Editor in Dashboard mode with no tabs (simulates a fresh start).
-pub fn makeEmptyEditor(allocator: std.mem.Allocator) editor_mod.Editor {
+pub fn makeEmptyEditor(allocator: std.mem.Allocator) !editor_mod.Editor {
     const cfg = config.Config{};
-    var ed = editor_mod.Editor.init(allocator, cfg);
+    var ed = try editor_mod.Editor.init(allocator, cfg);
     ed.width = 80;
     ed.height = 24;
     return ed;
