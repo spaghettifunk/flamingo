@@ -474,16 +474,16 @@ test "Buffer range deletion" {
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 2"));
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 3"));
 
-    // Delete from (0, 5) to (2, 5)
-    // "line 1" -> "line "
-    // "line 3" -> " 3"
-    // Result: "line  3"
+    // Delete from (0, 5) to (2, 5):
+    // row 0 prefix [0..5] = "line " (5 chars)
+    // row 2 suffix [5..]  = "3"
+    // merged result        = "line 3"
     try buf.deleteRange(0, 5, 2, 5);
     try std.testing.expectEqual(@as(usize, 1), buf.lines.items.len);
     
     const s = try buf.lines.items[0].slice(allocator);
     defer allocator.free(s);
-    try std.testing.expectEqualStrings("line  3", s);
+    try std.testing.expectEqualStrings("line 3", s);
 }
 
 test "Buffer word jumps" {

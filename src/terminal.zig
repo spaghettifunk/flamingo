@@ -121,8 +121,8 @@ pub fn disableRawMode() void {
 
 pub fn getSize() !struct { rows: usize, cols: usize } {
     var winsize: std.posix.winsize = undefined;
-    const err = std.posix.system.ioctl(std.posix.STDOUT_FILENO, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
-    if (std.posix.errno(err) != .SUCCESS) {
+    const rc = std.posix.system.ioctl(std.posix.STDOUT_FILENO, std.posix.T.IOCGWINSZ, @intFromPtr(&winsize));
+    if (rc != 0) {
         return error.IoctlError;
     }
     return .{ .rows = winsize.row, .cols = winsize.col };
