@@ -71,6 +71,9 @@ pub const Editor = struct {
     event_queue: *event_queue.EventQueue,
     lsp_mgr: ?lsp_manager.LspManager = null,
     is_deinitialized: bool = false,
+    fps_sample_start_ns: ?i96 = null,
+    fps_frame_count: usize = 0,
+    fps: u32 = 0,
 
     // Completion state
     completion_items: ?std.json.Value = null,
@@ -254,6 +257,26 @@ pub const Editor = struct {
         try self.runWithIO(&stdin_reader.interface, &stdout_writer.interface);
     }
 
+    fn updateFps(self: *Editor) void {
+        const now = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+
+        if (self.fps_sample_start_ns == null) {
+            self.fps_sample_start_ns = now;
+            self.fps_frame_count = 0;
+            self.fps = 0;
+            return;
+        }
+
+        self.fps_frame_count += 1;
+        const elapsed_ns = now - self.fps_sample_start_ns.?;
+        if (elapsed_ns >= std.time.ns_per_s) {
+            const frames: i128 = @intCast(self.fps_frame_count);
+            self.fps = @intCast(@divTrunc(frames * std.time.ns_per_s, @as(i128, elapsed_ns)));
+            self.fps_sample_start_ns = now;
+            self.fps_frame_count = 0;
+        }
+    }
+
     /// Run the editor event loop with explicit reader/writer.
     /// Using generic I/O allows tests to inject a `fixedBufferStream` reader
     /// (synthetic key bytes) and an `ArrayList` writer (capture render output)
@@ -330,6 +353,7 @@ pub const Editor = struct {
                 }
             }
 
+            self.updateFps();
             aw.clearRetainingCapacity();
             try terminal.hideCursor(writer);
             try self.render(writer);
@@ -666,11 +690,11 @@ pub const Editor = struct {
                 }
 
                 if (diag_count > 0) {
-                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | ERR: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, diag_count });
+                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | ERR: {d} | FPS: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, diag_count, self.fps });
                 } else {
-                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len });
+                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | FPS: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, self.fps });
                 }
-            } else try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
+            } else try std.fmt.bufPrint(&buf, " {s} | No file open | FPS: {d} ", .{ mode_str, self.fps });
 
             try writer.writeAll(status_text);
 

@@ -4719,7 +4719,7 @@ TS_PUBLIC const TSLanguage *tree_sitter_toml(void) {
     .public_symbol_map = ts_symbol_map,
     .alias_map = ts_non_terminal_alias_map,
     .alias_sequences = &ts_alias_sequences[0][0],
-    .lex_modes = ts_lex_modes,
+    .lex_modes = (const void*)ts_lex_modes,
     .lex_fn = ts_lex,
     .external_scanner = {
       &ts_external_scanner_states[0][0],

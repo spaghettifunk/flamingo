@@ -72,6 +72,7 @@ pub fn build(b: *std.Build) void {
     lib_tests.root_module.addImport("logz", logz);
     lib_tests.root_module.addImport("toml", toml);
     lib_tests.root_module.addImport("tree-sitter", tree_sitter.module("tree_sitter"));
+
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-zig");
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-go");
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-toml");
@@ -84,15 +85,16 @@ pub fn build(b: *std.Build) void {
 fn addTreeSitterGrammar(b: *std.Build, module: *std.Build.Module, comptime name: []const u8) void {
     const root = "vendor/" ++ name;
     module.addIncludePath(b.path(root ++ "/src"));
+    module.addIncludePath(b.path("vendor/tree-sitter-headers/src"));
     module.addCSourceFile(.{
         .file = b.path(root ++ "/src/parser.c"),
-        .flags = &.{"-std=c11"},
+        .flags = &.{ "-std=c11", "-Dversion=abi_version", "-DTSFieldMapSlice=TSMapSlice" },
     });
 
     if (comptime std.mem.eql(u8, name, "tree-sitter-toml") or std.mem.eql(u8, name, "tree-sitter-yaml")) {
         module.addCSourceFile(.{
             .file = b.path(root ++ "/src/scanner.c"),
-            .flags = &.{"-std=c11"},
+            .flags = &.{ "-std=c11", "-Dversion=abi_version", "-DTSFieldMapSlice=TSMapSlice" },
         });
     }
 }
