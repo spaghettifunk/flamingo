@@ -14,7 +14,7 @@ test "Config: zero-value has correct defaults" {
     try std.testing.expectEqualStrings("ctrl+p", cfg.keybindings.settings);
     try std.testing.expectEqualStrings("ctrl+q", cfg.keybindings.quit);
     try std.testing.expectEqualStrings("ctrl+b", cfg.keybindings.toggle_explorer);
-    try std.testing.expectEqualStrings("ctrl+tab", cfg.keybindings.switch_focus);
+    try std.testing.expectEqualStrings("ctrl+e", cfg.keybindings.switch_focus);
     try std.testing.expectEqualStrings("ctrl+w", cfg.keybindings.close_tab);
     try std.testing.expectEqualStrings("ctrl+s", cfg.keybindings.save);
     try std.testing.expectEqualStrings("alt+left", cfg.keybindings.word_left);

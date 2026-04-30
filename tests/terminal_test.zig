@@ -71,6 +71,13 @@ test "parseKeyChord: ctrl+tab" {
     try std.testing.expectEqual(@as(u8, '\t'), ct.char);
 }
 
+test "parseKeyChord: ctrl+e" {
+    const ce = terminal.parseKeyChord("ctrl+e");
+    try std.testing.expect(ce.ctrl);
+    try std.testing.expectEqual(Key.Char, ce.key);
+    try std.testing.expectEqual(@as(u8, 'e'), ce.char);
+}
+
 test "parseKeyChord: ctrl+space" {
     const cs = terminal.parseKeyChord("ctrl+space");
     try std.testing.expect(cs.ctrl);
@@ -201,6 +208,13 @@ test "readKey: Option+Right (ESC f) — macOS word-jump" {
     const ev = try readKeyFrom("\x1bf");
     try std.testing.expectEqual(Key.Right, ev.key);
     try std.testing.expect(ev.alt);
+}
+
+test "readKey: Ctrl+E" {
+    const ev = try readKeyFrom(&[_]u8{5});
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'e'), ev.char);
+    try std.testing.expect(ev.ctrl);
 }
 
 test "readKey: ctrl+char encoding (byte 1 = Ctrl+A)" {

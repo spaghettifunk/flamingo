@@ -153,6 +153,19 @@ pub const Editor = struct {
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
+        if (buf.filename) |new_filename| {
+            for (self.tabs.items, 0..) |*tab, i| {
+                if (tab.buf.filename) |existing_filename| {
+                    if (std.mem.eql(u8, existing_filename, new_filename)) {
+                        var duplicate = buf;
+                        duplicate.deinit();
+                        self.active_tab_index = i;
+                        return;
+                    }
+                }
+            }
+        }
+
         var cursors = std.ArrayListUnmanaged(Cursor).empty;
         try cursors.append(self.allocator, .{});
         try self.tabs.append(self.allocator, .{

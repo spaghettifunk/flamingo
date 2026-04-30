@@ -39,6 +39,44 @@ test "Editor: addTab increases count and sets active index" {
     try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
 }
 
+test "Editor: addTab focuses existing tab for duplicate filename" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    var first = try Buffer.init(a);
+    try first.setFilename("/tmp/flamingo-duplicate.txt");
+    try ed.addTab(first);
+
+    var other = try Buffer.init(a);
+    try other.setFilename("/tmp/flamingo-other.txt");
+    try ed.addTab(other);
+    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+
+    var duplicate = try Buffer.init(a);
+    try duplicate.setFilename("/tmp/flamingo-duplicate.txt");
+    try ed.addTab(duplicate);
+
+    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+}
+
+test "Editor: addTab still allows multiple unsaved tabs" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    const first = try Buffer.init(a);
+    try ed.addTab(first);
+
+    const second = try Buffer.init(a);
+    try ed.addTab(second);
+
+    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+}
+
 test "Editor: closeTab on only tab switches to Dashboard" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
