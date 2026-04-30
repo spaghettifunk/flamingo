@@ -146,7 +146,50 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (ed.explorer_focused and ed.explorer_visible and ed.tree != null) {
         if (ed.mode == .Normal or ed.mode == .Insert) {
-            if (matches(event, keys.explorer_up)) {
+            if (ed.tree.?.search_active) {
+                if (matches(event, keys.normal_mode)) {
+                    ed.tree.?.cancelSearch();
+                    return;
+                } else if (matches(event, keys.prompt_backspace)) {
+                    try ed.tree.?.backspaceSearch();
+                    return;
+                } else if (matches(event, keys.explorer_up)) {
+                    ed.tree.?.moveUp();
+                    return;
+                } else if (matches(event, keys.explorer_down)) {
+                    ed.tree.?.moveDown();
+                    return;
+                } else if (matches(event, keys.explorer_open)) {
+                    if (ed.tree.?.selectedSearchResult()) |result| {
+                        const path = try ed.allocator.dupe(u8, result.absolute_path);
+                        defer ed.allocator.free(path);
+                        const is_dir = result.is_dir;
+
+                        try ed.tree.?.finishSearch();
+                        if (is_dir) {
+                            ed.tree.?.toggleExpand() catch {};
+                        } else {
+                            if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, path)) |b| {
+                                try ed.addTab(b);
+                                ed.explorer_focused = false;
+                                ed.mode = .Normal;
+                            } else |err| {
+                                logz.err().fmt("msg", "failed to open file {s}: {s}", .{ path, @errorName(err) }).log();
+                                ed.error_message = "Could not open file";
+                            }
+                        }
+                    } else {
+                        ed.tree.?.finishSearch() catch {};
+                    }
+                    return;
+                } else if (event.key == .Char and !event.ctrl and !event.alt) {
+                    try ed.tree.?.appendSearchChar(event.char);
+                    return;
+                }
+            } else if (matches(event, keys.search_mode)) {
+                try ed.tree.?.startSearch();
+                return;
+            } else if (matches(event, keys.explorer_up)) {
                 ed.tree.?.moveUp();
                 return;
             } else if (matches(event, keys.explorer_down)) {

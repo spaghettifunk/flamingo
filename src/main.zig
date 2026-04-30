@@ -15,7 +15,7 @@ pub fn main(init: std.process.Init) !void {
     global_io = io;
     const allocator = std.heap.smp_allocator;
 
-    var result = try config.loadFile(io, allocator, "flamingo.toml");
+    var result = try config.loadFile(io, allocator, "config.toml");
     defer result.deinit();
 
     const cfg = result.value;

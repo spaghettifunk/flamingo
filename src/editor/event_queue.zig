@@ -50,7 +50,9 @@ pub const EventQueue = struct {
     pub fn tryPop(self: *EventQueue) ?Event {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        if (self.items.items.len == 0) return null;
+        if (self.items.items.len == 0) {
+            return null;
+        }
         return self.items.orderedRemove(0);
     }
 };
