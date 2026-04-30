@@ -32,6 +32,7 @@ pub fn build(b: *std.Build) void {
     exe_module.addImport("logz", logz);
     exe_module.addImport("toml", toml);
     exe_module.addImport("tree-sitter", tree_sitter.module("tree_sitter"));
+
     addTreeSitterGrammar(b, exe_module, "tree-sitter-zig");
     addTreeSitterGrammar(b, exe_module, "tree-sitter-go");
     addTreeSitterGrammar(b, exe_module, "tree-sitter-toml");
