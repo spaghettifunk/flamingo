@@ -88,6 +88,7 @@ pub const Highlighter = struct {
     query: ?*ts.Query = null,
     tree: ?*ts.Tree = null,
     source: []u8 = &.{},
+    parsed_revision: ?u64 = null,
     spans: std.ArrayList(HighlightSpan) = .empty,
     line_starts: std.ArrayList(usize) = .empty,
 
@@ -116,11 +117,7 @@ pub const Highlighter = struct {
             return;
         };
 
-        const content = try buf.toString(self.allocator);
-        errdefer self.allocator.free(content);
-
-        if (self.language == next_language and std.mem.eql(u8, self.source, content)) {
-            self.allocator.free(content);
+        if (self.language == next_language and self.parsed_revision == buf.revision) {
             return;
         }
 
@@ -132,6 +129,9 @@ pub const Highlighter = struct {
             self.query = createQuery(next_language) catch null;
         }
 
+        const content = try buf.toString(self.allocator);
+        errdefer self.allocator.free(content);
+
         self.clearParsedState();
         self.source = content;
         try self.rebuildLineStarts();
@@ -139,6 +139,7 @@ pub const Highlighter = struct {
         const parser = self.parser orelse return;
         const tree = parser.parseString(self.source, null) orelse return;
         self.tree = tree;
+        self.parsed_revision = buf.revision;
 
         const query = self.query orelse return;
         try self.collectSpans(query, tree.rootNode());
@@ -233,6 +234,7 @@ pub const Highlighter = struct {
         }
         self.spans.clearRetainingCapacity();
         self.line_starts.clearRetainingCapacity();
+        self.parsed_revision = null;
     }
 };
 
@@ -337,4 +339,32 @@ test "highlighter captures supported language styles" {
         try highlighter.ensureForBuffer(&buf);
         try std.testing.expect(highlighter.hasStyle(case.style));
     }
+}
+
+test "highlighter skips unchanged buffer revision and reparses changed revision" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("main.zig");
+    try buf.insertChar(0, 0, 'c');
+    try buf.insertChar(0, 1, 'o');
+    try buf.insertChar(0, 2, 'n');
+    try buf.insertChar(0, 3, 's');
+    try buf.insertChar(0, 4, 't');
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+
+    try highlighter.ensureForBuffer(&buf);
+    const first_revision = highlighter.parsed_revision;
+    const first_source_ptr = highlighter.source.ptr;
+
+    try highlighter.ensureForBuffer(&buf);
+    try std.testing.expectEqual(first_revision, highlighter.parsed_revision);
+    try std.testing.expectEqual(first_source_ptr, highlighter.source.ptr);
+
+    try buf.insertChar(0, 5, ' ');
+    try highlighter.ensureForBuffer(&buf);
+    try std.testing.expectEqual(buf.revision, highlighter.parsed_revision.?);
 }

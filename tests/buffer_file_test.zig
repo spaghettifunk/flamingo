@@ -138,7 +138,10 @@ test "Buffer: saveToFile sets filename and marks not dirty" {
     try b.insertChar(0, 0, 'h');
     try b.insertChar(0, 1, 'i');
     try std.testing.expect(b.is_dirty);
+    const revision = b.revision;
 
     try b.saveToFile(std.testing.io, file_path);
     try std.testing.expect(!b.is_dirty);
+    try std.testing.expectEqual(revision, b.revision);
+    try std.testing.expectEqual(revision, b.saved_revision);
 }

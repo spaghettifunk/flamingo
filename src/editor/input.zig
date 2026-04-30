@@ -6,13 +6,16 @@ const buffer = @import("buffer.zig");
 const explorer = @import("explorer.zig");
 const actions = @import("actions.zig");
 
-fn binding(chord: []const u8) terminal.KeyEvent {
-    return terminal.parseKeyChord(chord);
-}
-
-fn matches(event: terminal.KeyEvent, chord: []const u8) bool {
-    const expected = binding(chord);
+fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     if (event.eql(expected)) return true;
+
+    // macOS Option+Delete is commonly delivered by terminals as
+    // Alt+Backspace, while the user-facing shortcut is named Alt+Delete.
+    if (expected.alt and expected.key == .Delete) {
+        var alt_backspace = expected;
+        alt_backspace.key = .Backspace;
+        return event.eql(alt_backspace);
+    }
 
     // Most terminals encode Ctrl+Shift+letter the same way as Ctrl+letter, so
     // the shift bit can be lost before it reaches the editor.
@@ -27,13 +30,13 @@ fn matches(event: terminal.KeyEvent, chord: []const u8) bool {
     return false;
 }
 
-fn matchesMovement(event: terminal.KeyEvent, chord: []const u8) bool {
-    if (matches(event, chord)) return true;
+fn matchesMovement(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
+    if (matches(event, expected)) return true;
 
     // Shift extends a selection while preserving the underlying movement key.
     var without_shift = event;
     without_shift.shift = false;
-    return event.shift and without_shift.eql(binding(chord));
+    return event.shift and without_shift.eql(expected);
 }
 
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
@@ -41,7 +44,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         ed.error_message = null;
     }
 
-    const keys = ed.config.keybindings;
+    const keys = ed.keys;
 
     if (matches(event, keys.toggle_explorer)) {
         if (ed.tree == null) {
@@ -104,6 +107,18 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     try tab.buf.saveToFile(ed.io, f);
                 }
             }
+            return;
+        }
+        if (matches(event, keys.undo)) {
+            try actions.undo(ed);
+            return;
+        }
+        if (matches(event, keys.redo)) {
+            try actions.redo(ed);
+            return;
+        }
+        if (matches(event, keys.delete_word_back)) {
+            try actions.deleteWordBack(ed);
             return;
         }
         if (matches(event, keys.duplicate_line)) {
@@ -380,7 +395,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
 pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
-    const keys = ed.config.keybindings;
+    const keys = ed.keys;
 
     // Multi-cursor support: apply movement to all cursors
     var handled = false;

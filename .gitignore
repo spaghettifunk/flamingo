@@ -5,3 +5,5 @@ zig-pkg
 .DS_Store
 
 *.log
+
+tracing

@@ -317,6 +317,19 @@ pub fn readKey(reader: anytype) !KeyEvent {
                             }
                         }
                     },
+                    'u' => {
+                        if (std.mem.indexOfScalar(u8, seq[0..seq_len], ';')) |idx| {
+                            const codepoint = std.fmt.parseInt(u21, seq[1..idx], 10) catch 0;
+                            if (codepoint > 0 and codepoint <= 127) {
+                                event.key = .Char;
+                                event.char = @intCast(codepoint);
+                                if (event.char >= 'A' and event.char <= 'Z') {
+                                    event.char = event.char - 'A' + 'a';
+                                    event.shift = true;
+                                }
+                            }
+                        }
+                    },
                     else => {
                         // If we only have \x1b[, it's ALT+[
                         if (seq_len == 1 and seq[0] == '[') {
@@ -347,6 +360,10 @@ pub fn readKey(reader: anytype) !KeyEvent {
             } else if (seq[0] == 'f') {
                 event.alt = true;
                 event.key = .Right;
+                return event;
+            } else if (seq[0] == 127 or seq[0] == 8) {
+                event.alt = true;
+                event.key = .Backspace;
                 return event;
             }
 

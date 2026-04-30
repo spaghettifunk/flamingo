@@ -210,6 +210,20 @@ test "readKey: Option+Right (ESC f) — macOS word-jump" {
     try std.testing.expect(ev.alt);
 }
 
+test "readKey: Option+Delete as ESC DEL maps to Alt+Backspace" {
+    const ev = try readKeyFrom(&[_]u8{ 0x1b, 127 });
+    try std.testing.expectEqual(Key.Backspace, ev.key);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: Ctrl+Shift+Z CSI-u sequence" {
+    const ev = try readKeyFrom("\x1b[90;6u");
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'z'), ev.char);
+    try std.testing.expect(ev.ctrl);
+    try std.testing.expect(ev.shift);
+}
+
 test "readKey: Ctrl+E" {
     const ev = try readKeyFrom(&[_]u8{5});
     try std.testing.expectEqual(Key.Char, ev.key);

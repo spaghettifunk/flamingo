@@ -13,11 +13,7 @@ var global_io: ?std.Io = null;
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
     global_io = io;
-    var alloc_impl: std.heap.DebugAllocator(.{
-        .safety = true,
-    }) = .init;
-    defer _ = alloc_impl.deinit();
-    const allocator = alloc_impl.allocator();
+    const allocator = std.heap.smp_allocator;
 
     var result = try config.loadFile(io, allocator, "flamingo.toml");
     defer result.deinit();

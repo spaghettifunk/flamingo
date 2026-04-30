@@ -217,6 +217,23 @@ test "Editor: render includes syntax, selection, and search styling" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[48;5;214m\x1b[30m") != null);
 }
 
+test "Editor: tab LSP notification gate only opens once per dirty revision" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    try tab.buf.setFilename("main.zig");
+    tab.lsp_notified_revision = tab.buf.revision;
+
+    try std.testing.expect(!tab.needsLspChangeNotification());
+    try tab.buf.insertChar(0, 5, '!');
+    try std.testing.expect(tab.needsLspChangeNotification());
+
+    tab.markLspChangeNotified();
+    try std.testing.expect(!tab.needsLspChangeNotification());
+}
+
 // ── calculateGutterWidth ──────────────────────────────────────────────────────
 
 test "Editor: calculateGutterWidth boundary values" {

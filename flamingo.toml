@@ -28,12 +28,15 @@ normal_mode = "esc"
 
 insert_newline = "enter"
 delete_back = "backspace"
+delete_word_back = "alt+delete"
 indent = "tab"
 
 prompt_submit = "enter"
 prompt_backspace = "backspace"
 
 save = "ctrl+s"
+undo = "ctrl+z"
+redo = "ctrl+y"
 select_all = "ctrl+a"
 copy = "ctrl+c"
 cut = "ctrl+x"

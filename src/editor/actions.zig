@@ -38,6 +38,7 @@ pub fn cut(ed: *editor.Editor) !void {
     } else {
         try copy(ed);
         // Delete current line
+        try tab.buf.recordUndo();
         var removed = tab.buf.lines.orderedRemove(mc.row);
         removed.deinit();
         if (tab.buf.lines.items.len == 0) {
@@ -45,6 +46,7 @@ pub fn cut(ed: *editor.Editor) !void {
         }
         if (mc.row >= tab.buf.lines.items.len) mc.row = tab.buf.lines.items.len - 1;
         mc.col = 0;
+        tab.buf.markChanged();
     }
 }
 
@@ -75,6 +77,43 @@ pub fn paste(ed: *editor.Editor) !void {
     }
 }
 
+pub fn deleteWordBack(ed: *editor.Editor) !void {
+    const tab = ed.currentTab() orelse return;
+    const mc = tab.mainCursor();
+    const end = editor.Pos{ .row = mc.row, .col = mc.col };
+    var start = end;
+
+    try tab.buf.jumpWordLeft(&start.row, &start.col);
+    if (start.row == end.row and start.col == end.col) return;
+
+    try tab.buf.deleteRange(start.row, start.col, end.row, end.col);
+    mc.row = start.row;
+    mc.col = start.col;
+    mc.selection_start = null;
+}
+
+pub fn undo(ed: *editor.Editor) !void {
+    const tab = ed.currentTab() orelse return;
+    if (try tab.buf.undo()) {
+        const mc = tab.mainCursor();
+        if (mc.row >= tab.buf.lines.items.len) mc.row = tab.buf.lines.items.len - 1;
+        mc.col = @min(mc.col, tab.buf.lines.items[mc.row].len());
+        mc.selection_start = null;
+        ed.clampScroll();
+    }
+}
+
+pub fn redo(ed: *editor.Editor) !void {
+    const tab = ed.currentTab() orelse return;
+    if (try tab.buf.redo()) {
+        const mc = tab.mainCursor();
+        if (mc.row >= tab.buf.lines.items.len) mc.row = tab.buf.lines.items.len - 1;
+        mc.col = @min(mc.col, tab.buf.lines.items[mc.row].len());
+        mc.selection_start = null;
+        ed.clampScroll();
+    }
+}
+
 pub fn moveLineUp(ed: *editor.Editor) void {
     const tab = ed.currentTab() orelse return;
     const mc = tab.mainCursor();
@@ -102,15 +141,20 @@ pub fn duplicateLine(ed: *editor.Editor) !void {
     const line_data = try tab.buf.lines.items[mc.row].slice(ed.allocator);
     defer ed.allocator.free(line_data);
 
-    const new_line = try buffer.Line.fromSlice(ed.allocator, line_data);
+    var new_line = try buffer.Line.fromSlice(ed.allocator, line_data);
+    var inserted = false;
+    errdefer if (!inserted) new_line.deinit();
+    try tab.buf.recordUndo();
     try tab.buf.lines.insert(ed.allocator, mc.row + 1, new_line);
-    tab.buf.is_dirty = true;
+    inserted = true;
+    tab.buf.markChanged();
 }
 
 pub fn deleteLine(ed: *editor.Editor) !void {
     const tab = ed.currentTab() orelse return;
     const mc = tab.mainCursor();
 
+    try tab.buf.recordUndo();
     var removed = tab.buf.lines.orderedRemove(mc.row);
     removed.deinit();
 
@@ -120,7 +164,7 @@ pub fn deleteLine(ed: *editor.Editor) !void {
 
     if (mc.row >= tab.buf.lines.items.len) mc.row = tab.buf.lines.items.len - 1;
     mc.col = 0;
-    tab.buf.is_dirty = true;
+    tab.buf.markChanged();
 }
 
 pub fn handleSelection(tab: *editor.Tab, shift: bool) void {
