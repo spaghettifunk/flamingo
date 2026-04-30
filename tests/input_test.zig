@@ -183,6 +183,52 @@ test "Insert: Backspace at col 0 merges with previous line" {
     try expectLine(a, &ed, 0, "firstsecond");
 }
 
+test "Insert: Option+Delete deletes previous word" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello world"});
+    defer ed.deinit();
+
+    ed.mode = .Insert;
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 11;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOption(.Delete)});
+
+    try expectLine(a, &ed, 0, "hello ");
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
+}
+
+test "Insert: Option+Delete deletes previous word when terminal sends Alt+Backspace" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello world"});
+    defer ed.deinit();
+
+    ed.mode = .Insert;
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 11;
+
+    try feed(&ed, &[_]terminal.KeyEvent{.{ .key = .Backspace, .alt = true }});
+
+    try expectLine(a, &ed, 0, "hello ");
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
+}
+
+test "Insert: Ctrl+Z undo and Ctrl+Y redo text edit" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    ed.mode = .Insert;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('x')});
+    try expectLine(a, &ed, 0, "x");
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('z')});
+    try expectLine(a, &ed, 0, "");
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('y')});
+    try expectLine(a, &ed, 0, "x");
+}
+
 // ── Command mode ──────────────────────────────────────────────────────────────
 
 test "Command: :q on clean tab closes it" {
@@ -530,6 +576,7 @@ test "configured toggle_explorer key is used" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
     ed.config.keybindings.toggle_explorer = "ctrl+t";
+    ed.refreshKeybindings();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(!ed.explorer_visible);
@@ -553,6 +600,7 @@ test "configured close_tab key is used" {
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
     ed.config.keybindings.close_tab = "ctrl+u";
+    ed.refreshKeybindings();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
     try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);

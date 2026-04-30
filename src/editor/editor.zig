@@ -37,6 +37,7 @@ pub const Tab = struct {
     syntax_highlighter: syntax.Highlighter,
     main_cursor_idx: usize = 0,
     scroll_row: usize = 0,
+    lsp_notified_revision: ?u64 = null,
 
     pub fn deinit(self: *Tab, allocator: std.mem.Allocator) void {
         self.syntax_highlighter.deinit();
@@ -47,10 +48,133 @@ pub const Tab = struct {
     pub fn mainCursor(self: *Tab) *Cursor {
         return &self.cursors.items[self.main_cursor_idx];
     }
+
+    pub fn needsLspChangeNotification(self: *const Tab) bool {
+        return self.buf.is_dirty and self.buf.filename != null and self.lsp_notified_revision != self.buf.revision;
+    }
+
+    pub fn markLspChangeNotified(self: *Tab) void {
+        self.lsp_notified_revision = self.buf.revision;
+    }
+};
+
+pub const ResolvedKeybindings = struct {
+    new_file: terminal.KeyEvent,
+    open_file: terminal.KeyEvent,
+    open_folder: terminal.KeyEvent,
+    settings: terminal.KeyEvent,
+    quit: terminal.KeyEvent,
+    toggle_explorer: terminal.KeyEvent,
+    switch_focus: terminal.KeyEvent,
+    close_tab: terminal.KeyEvent,
+    next_tab: terminal.KeyEvent,
+    previous_tab: terminal.KeyEvent,
+    dashboard_up: terminal.KeyEvent,
+    dashboard_down: terminal.KeyEvent,
+    dashboard_select: terminal.KeyEvent,
+    explorer_up: terminal.KeyEvent,
+    explorer_down: terminal.KeyEvent,
+    explorer_open: terminal.KeyEvent,
+    insert_mode: terminal.KeyEvent,
+    command_mode: terminal.KeyEvent,
+    search_mode: terminal.KeyEvent,
+    normal_mode: terminal.KeyEvent,
+    insert_newline: terminal.KeyEvent,
+    delete_back: terminal.KeyEvent,
+    delete_word_back: terminal.KeyEvent,
+    indent: terminal.KeyEvent,
+    prompt_submit: terminal.KeyEvent,
+    prompt_backspace: terminal.KeyEvent,
+    save: terminal.KeyEvent,
+    undo: terminal.KeyEvent,
+    redo: terminal.KeyEvent,
+    select_all: terminal.KeyEvent,
+    copy: terminal.KeyEvent,
+    cut: terminal.KeyEvent,
+    paste: terminal.KeyEvent,
+    duplicate_line: terminal.KeyEvent,
+    delete_line: terminal.KeyEvent,
+    add_cursor_above: terminal.KeyEvent,
+    add_cursor_below: terminal.KeyEvent,
+    move_up: terminal.KeyEvent,
+    move_down: terminal.KeyEvent,
+    move_left: terminal.KeyEvent,
+    move_right: terminal.KeyEvent,
+    line_start: terminal.KeyEvent,
+    line_end: terminal.KeyEvent,
+    word_left: terminal.KeyEvent,
+    word_right: terminal.KeyEvent,
+    search_next: terminal.KeyEvent,
+    search_previous: terminal.KeyEvent,
+    completion_auto_trigger: terminal.KeyEvent,
+    completion_trigger: terminal.KeyEvent,
+    completion_next: terminal.KeyEvent,
+    completion_previous: terminal.KeyEvent,
+    completion_accept: terminal.KeyEvent,
+    completion_cancel: terminal.KeyEvent,
+
+    pub fn init(keys: config.KeybindingsConfig) ResolvedKeybindings {
+        return .{
+            .new_file = terminal.parseKeyChord(keys.new_file),
+            .open_file = terminal.parseKeyChord(keys.open_file),
+            .open_folder = terminal.parseKeyChord(keys.open_folder),
+            .settings = terminal.parseKeyChord(keys.settings),
+            .quit = terminal.parseKeyChord(keys.quit),
+            .toggle_explorer = terminal.parseKeyChord(keys.toggle_explorer),
+            .switch_focus = terminal.parseKeyChord(keys.switch_focus),
+            .close_tab = terminal.parseKeyChord(keys.close_tab),
+            .next_tab = terminal.parseKeyChord(keys.next_tab),
+            .previous_tab = terminal.parseKeyChord(keys.previous_tab),
+            .dashboard_up = terminal.parseKeyChord(keys.dashboard_up),
+            .dashboard_down = terminal.parseKeyChord(keys.dashboard_down),
+            .dashboard_select = terminal.parseKeyChord(keys.dashboard_select),
+            .explorer_up = terminal.parseKeyChord(keys.explorer_up),
+            .explorer_down = terminal.parseKeyChord(keys.explorer_down),
+            .explorer_open = terminal.parseKeyChord(keys.explorer_open),
+            .insert_mode = terminal.parseKeyChord(keys.insert_mode),
+            .command_mode = terminal.parseKeyChord(keys.command_mode),
+            .search_mode = terminal.parseKeyChord(keys.search_mode),
+            .normal_mode = terminal.parseKeyChord(keys.normal_mode),
+            .insert_newline = terminal.parseKeyChord(keys.insert_newline),
+            .delete_back = terminal.parseKeyChord(keys.delete_back),
+            .delete_word_back = terminal.parseKeyChord(keys.delete_word_back),
+            .indent = terminal.parseKeyChord(keys.indent),
+            .prompt_submit = terminal.parseKeyChord(keys.prompt_submit),
+            .prompt_backspace = terminal.parseKeyChord(keys.prompt_backspace),
+            .save = terminal.parseKeyChord(keys.save),
+            .undo = terminal.parseKeyChord(keys.undo),
+            .redo = terminal.parseKeyChord(keys.redo),
+            .select_all = terminal.parseKeyChord(keys.select_all),
+            .copy = terminal.parseKeyChord(keys.copy),
+            .cut = terminal.parseKeyChord(keys.cut),
+            .paste = terminal.parseKeyChord(keys.paste),
+            .duplicate_line = terminal.parseKeyChord(keys.duplicate_line),
+            .delete_line = terminal.parseKeyChord(keys.delete_line),
+            .add_cursor_above = terminal.parseKeyChord(keys.add_cursor_above),
+            .add_cursor_below = terminal.parseKeyChord(keys.add_cursor_below),
+            .move_up = terminal.parseKeyChord(keys.move_up),
+            .move_down = terminal.parseKeyChord(keys.move_down),
+            .move_left = terminal.parseKeyChord(keys.move_left),
+            .move_right = terminal.parseKeyChord(keys.move_right),
+            .line_start = terminal.parseKeyChord(keys.line_start),
+            .line_end = terminal.parseKeyChord(keys.line_end),
+            .word_left = terminal.parseKeyChord(keys.word_left),
+            .word_right = terminal.parseKeyChord(keys.word_right),
+            .search_next = terminal.parseKeyChord(keys.search_next),
+            .search_previous = terminal.parseKeyChord(keys.search_previous),
+            .completion_auto_trigger = terminal.parseKeyChord(keys.completion_auto_trigger),
+            .completion_trigger = terminal.parseKeyChord(keys.completion_trigger),
+            .completion_next = terminal.parseKeyChord(keys.completion_next),
+            .completion_previous = terminal.parseKeyChord(keys.completion_previous),
+            .completion_accept = terminal.parseKeyChord(keys.completion_accept),
+            .completion_cancel = terminal.parseKeyChord(keys.completion_cancel),
+        };
+    }
 };
 
 pub const Editor = struct {
     config: config.Config,
+    keys: ResolvedKeybindings,
     allocator: std.mem.Allocator,
     io: std.Io,
     mode: EditorMode = .Dashboard,
@@ -96,6 +220,7 @@ pub const Editor = struct {
             .allocator = allocator,
             .io = io,
             .config = cfg,
+            .keys = ResolvedKeybindings.init(cfg.keybindings),
             .tabs = std.ArrayList(Tab).empty,
             .search_system = search.SearchSystem.init(allocator),
             .event_queue = queue,
@@ -158,6 +283,10 @@ pub const Editor = struct {
         return &self.tabs.items[self.active_tab_index];
     }
 
+    pub fn refreshKeybindings(self: *Editor) void {
+        self.keys = ResolvedKeybindings.init(self.config.keybindings);
+    }
+
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
         if (buf.filename) |new_filename| {
             for (self.tabs.items, 0..) |*tab, i| {
@@ -178,6 +307,7 @@ pub const Editor = struct {
             .buf = buf,
             .cursors = cursors,
             .syntax_highlighter = syntax.Highlighter.init(self.allocator),
+            .lsp_notified_revision = if (buf.filename != null) buf.revision else null,
         });
         self.active_tab_index = self.tabs.items.len - 1;
 
@@ -366,7 +496,7 @@ pub const Editor = struct {
 
             logz.debug().fmt("msg", "key event: key={s}, char={c}, ctrl={}, alt={}", .{ @tagName(event.key), event.char, event.ctrl, event.alt }).log();
 
-            if (event.eql(terminal.parseKeyChord(self.config.keybindings.quit))) {
+            if (event.eql(self.keys.quit)) {
                 self.should_quit = true;
                 continue;
             }
@@ -379,19 +509,21 @@ pub const Editor = struct {
 
             // Notify LSP of change if buffer is dirty
             if (self.currentTab()) |tab| {
-                if (tab.buf.is_dirty and tab.buf.filename != null) {
+                if (tab.needsLspChangeNotification()) {
                     if (self.lsp_mgr) |*mgr| {
                         const content = try tab.buf.toString(self.allocator);
                         defer self.allocator.free(content);
-                        mgr.notifyChange(tab.buf.filename.?, content) catch |err| {
+                        if (mgr.notifyChange(tab.buf.filename.?, content)) {
+                            tab.markLspChangeNotified();
+                        } else |err| {
                             logz.err().fmt("msg", "Failed to notify change: {any}", .{err}).log();
-                        };
+                        }
                     }
                 }
 
                 // Trigger completion
-                const is_completion_auto_trigger = event.eql(terminal.parseKeyChord(self.config.keybindings.completion_auto_trigger));
-                const is_completion_trigger = event.eql(terminal.parseKeyChord(self.config.keybindings.completion_trigger));
+                const is_completion_auto_trigger = event.eql(self.keys.completion_auto_trigger);
+                const is_completion_trigger = event.eql(self.keys.completion_trigger);
 
                 if (is_completion_auto_trigger or is_completion_trigger) {
                     if (tab.buf.filename != null) {
@@ -570,8 +702,7 @@ pub const Editor = struct {
                     // No need to moveCursor; we are exactly at buf_start_col + gutter_width
                     const content_width = buf_width -| gutter_width;
                     const line = t.buf.lines.items[buffer_line_idx];
-                    const line_content = try line.slice(self.allocator);
-                    defer self.allocator.free(line_content);
+                    const line_len = line.len();
 
                     var match_indices: ?[]const usize = null;
                     var is_active_line = false;
@@ -592,7 +723,7 @@ pub const Editor = struct {
                     var char_idx: usize = 0;
                     var m_idx: usize = 0;
                     const line_start_byte = t.syntax_highlighter.lineStartByte(buffer_line_idx);
-                    while (char_idx < line_content.len and char_idx < content_width) : (char_idx += 1) {
+                    while (char_idx < line_len and char_idx < content_width) : (char_idx += 1) {
                         var in_selection = false;
                         for (t.cursors.items) |cursor| {
                             if (cursor.selection_start) |ss| {
@@ -631,7 +762,7 @@ pub const Editor = struct {
                             m_idx += 1;
                         }
 
-                        try writer.writeByte(line_content[char_idx]);
+                        try writer.writeByte(line.byteAt(char_idx).?);
                         try writer.writeAll("\x1b[0m");
                     }
                 }
@@ -854,8 +985,6 @@ pub const Editor = struct {
 
     fn handleCompletionInput(self: *Editor, event: terminal.KeyEvent) !bool {
         if (!self.completion_active or self.completion_items == null) return false;
-        const keys = self.config.keybindings;
-
         const items_val = self.completion_items.?;
         var items: []std.json.Value = &[_]std.json.Value{};
         if (items_val == .array) {
@@ -866,7 +995,7 @@ pub const Editor = struct {
             }
         }
 
-        if (event.eql(terminal.parseKeyChord(keys.completion_previous))) {
+        if (event.eql(self.keys.completion_previous)) {
             if (self.completion_selected > 0) {
                 self.completion_selected -= 1;
             } else if (items.len > 0) {
@@ -875,7 +1004,7 @@ pub const Editor = struct {
             return true;
         }
 
-        if (event.eql(terminal.parseKeyChord(keys.completion_next))) {
+        if (event.eql(self.keys.completion_next)) {
             if (self.completion_selected < items.len - 1) {
                 self.completion_selected += 1;
             } else {
@@ -884,7 +1013,7 @@ pub const Editor = struct {
             return true;
         }
 
-        if (event.eql(terminal.parseKeyChord(keys.completion_accept))) {
+        if (event.eql(self.keys.completion_accept)) {
             if (items.len == 0) {
                 self.completion_active = false;
                 return false;
@@ -908,7 +1037,7 @@ pub const Editor = struct {
             return true;
         }
 
-        if (event.eql(terminal.parseKeyChord(keys.completion_cancel))) {
+        if (event.eql(self.keys.completion_cancel)) {
             self.completion_active = false;
             return true;
         }

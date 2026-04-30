@@ -112,8 +112,20 @@ test "Buffer: insertChar marks buffer dirty" {
     defer b.deinit();
 
     try std.testing.expect(!b.is_dirty);
+    try std.testing.expectEqual(@as(u64, 0), b.revision);
     try b.insertChar(0, 0, 'X');
     try std.testing.expect(b.is_dirty);
+    try std.testing.expectEqual(@as(u64, 1), b.revision);
+}
+
+test "Buffer: out-of-bounds insert does not change revision" {
+    const a = std.testing.allocator;
+    var b = try makeBuffer(a, &[_][]const u8{"hello"});
+    defer b.deinit();
+
+    try b.insertChar(99, 0, 'x');
+    try std.testing.expectEqual(@as(u64, 0), b.revision);
+    try std.testing.expect(!b.is_dirty);
 }
 
 test "Buffer: insertNewline splits line at mid-position" {
@@ -206,6 +218,31 @@ test "Buffer: deleteRange single line" {
     const s = try b.lines.items[0].slice(a);
     defer a.free(s);
     try std.testing.expectEqualStrings("flago", s);
+}
+
+test "Buffer: undo and redo restore text snapshots" {
+    const a = std.testing.allocator;
+    var b = try makeBuffer(a, &[_][]const u8{"abc"});
+    defer b.deinit();
+
+    try b.insertChar(0, 3, 'd');
+    try b.insertNewline(0, 2);
+
+    try std.testing.expect(try b.undo());
+    try std.testing.expectEqual(@as(usize, 1), b.lines.items.len);
+    const undo_one = try b.lines.items[0].slice(a);
+    defer a.free(undo_one);
+    try std.testing.expectEqualStrings("abcd", undo_one);
+
+    try std.testing.expect(try b.undo());
+    const undo_two = try b.lines.items[0].slice(a);
+    defer a.free(undo_two);
+    try std.testing.expectEqualStrings("abc", undo_two);
+
+    try std.testing.expect(try b.redo());
+    const redo_one = try b.lines.items[0].slice(a);
+    defer a.free(redo_one);
+    try std.testing.expectEqualStrings("abcd", redo_one);
 }
 
 test "Buffer: swapLines exchanges content and sets dirty" {

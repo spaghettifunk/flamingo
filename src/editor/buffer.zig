@@ -47,6 +47,12 @@ pub const Line = struct {
         return self.buf.len - self.gapSize();
     }
 
+    pub fn byteAt(self: *const Line, pos: usize) ?u8 {
+        if (pos >= self.len()) return null;
+        if (pos < self.gap_start) return self.buf[pos];
+        return self.buf[self.gap_end + (pos - self.gap_start)];
+    }
+
     fn ensureGap(self: *Line, needed: usize) !void {
         if (self.gapSize() >= needed) return;
 
@@ -134,6 +140,29 @@ pub const Line = struct {
 
         try writer.writeAll(self.buf[self.gap_end .. self.gap_end + right_len]);
     }
+
+    pub fn writeRange(self: *const Line, writer: anytype, start: usize, max_len: usize) !void {
+        const line_len = self.len();
+        if (start >= line_len or max_len == 0) return;
+
+        var remaining = @min(max_len, line_len - start);
+        var pos = start;
+        while (remaining > 0) {
+            if (pos < self.gap_start) {
+                const end = @min(self.gap_start, pos + remaining);
+                try writer.writeAll(self.buf[pos..end]);
+                remaining -= end - pos;
+                pos = end;
+            } else {
+                const physical = self.gap_end + (pos - self.gap_start);
+                const available = self.buf.len - physical;
+                const chunk_len = @min(available, remaining);
+                try writer.writeAll(self.buf[physical .. physical + chunk_len]);
+                remaining -= chunk_len;
+                pos += chunk_len;
+            }
+        }
+    }
 };
 
 pub const Buffer = struct {
@@ -141,6 +170,10 @@ pub const Buffer = struct {
     allocator: std.mem.Allocator,
     filename: ?[]const u8 = null,
     is_dirty: bool = false,
+    revision: u64 = 0,
+    saved_revision: u64 = 0,
+    undo_stack: std.ArrayList([]u8) = .empty,
+    redo_stack: std.ArrayList([]u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {
         var lines = std.ArrayList(Line).empty;
@@ -167,6 +200,11 @@ pub const Buffer = struct {
             self.allocator.free(f);
             self.filename = null;
         }
+
+        self.clearHistoryList(&self.undo_stack);
+        self.undo_stack.deinit(self.allocator);
+        self.clearHistoryList(&self.redo_stack);
+        self.redo_stack.deinit(self.allocator);
     }
 
     pub fn setFilename(self: *Buffer, filename: []const u8) !void {
@@ -176,18 +214,109 @@ pub const Buffer = struct {
         self.filename = try self.allocator.dupe(u8, filename);
     }
 
+    pub fn markChanged(self: *Buffer) void {
+        self.revision +%= 1;
+        self.is_dirty = self.revision != self.saved_revision;
+    }
+
+    fn clearHistoryList(self: *Buffer, list: *std.ArrayList([]u8)) void {
+        for (list.items) |entry| {
+            self.allocator.free(entry);
+        }
+        list.clearRetainingCapacity();
+    }
+
+    fn snapshot(self: *Buffer) ![]u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(self.allocator);
+
+        for (self.lines.items, 0..) |*line, i| {
+            const data = try line.slice(self.allocator);
+            defer self.allocator.free(data);
+
+            if (i > 0) try out.append(self.allocator, '\n');
+            try out.appendSlice(self.allocator, data);
+        }
+
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    fn restoreSnapshot(self: *Buffer, data: []const u8) !void {
+        for (self.lines.items) |*line| {
+            line.deinit();
+        }
+        self.lines.clearRetainingCapacity();
+
+        var it = std.mem.splitScalar(u8, data, '\n');
+        while (it.next()) |line_data| {
+            var line = try Line.fromSlice(self.allocator, line_data);
+            var appended = false;
+            errdefer if (!appended) line.deinit();
+            try self.lines.append(self.allocator, line);
+            appended = true;
+        }
+
+        if (self.lines.items.len == 0) {
+            var line = try Line.init(self.allocator);
+            var appended = false;
+            errdefer if (!appended) line.deinit();
+            try self.lines.append(self.allocator, line);
+            appended = true;
+        }
+    }
+
+    pub fn recordUndo(self: *Buffer) !void {
+        const before = try self.snapshot();
+        errdefer self.allocator.free(before);
+        try self.undo_stack.append(self.allocator, before);
+        self.clearHistoryList(&self.redo_stack);
+    }
+
+    pub fn undo(self: *Buffer) !bool {
+        const previous = self.undo_stack.pop() orelse return false;
+        defer self.allocator.free(previous);
+
+        const current = try self.snapshot();
+        errdefer self.allocator.free(current);
+        try self.redo_stack.append(self.allocator, current);
+
+        try self.restoreSnapshot(previous);
+        self.markChanged();
+        return true;
+    }
+
+    pub fn redo(self: *Buffer) !bool {
+        const next = self.redo_stack.pop() orelse return false;
+        defer self.allocator.free(next);
+
+        const current = try self.snapshot();
+        errdefer self.allocator.free(current);
+        try self.undo_stack.append(self.allocator, current);
+
+        try self.restoreSnapshot(next);
+        self.markChanged();
+        return true;
+    }
+
+    pub fn markSaved(self: *Buffer) void {
+        self.saved_revision = self.revision;
+        self.is_dirty = false;
+    }
+
     pub fn insertChar(self: *Buffer, row: usize, col: usize, c: u8) !void {
         if (row >= self.lines.items.len) return;
 
+        try self.recordUndo();
         var line = &self.lines.items[row];
         try line.insert(col, c);
 
-        self.is_dirty = true;
+        self.markChanged();
     }
 
     pub fn insertNewline(self: *Buffer, row: usize, col: usize) !void {
         if (row >= self.lines.items.len) return;
 
+        try self.recordUndo();
         var line = &self.lines.items[row];
 
         // extract right side
@@ -204,7 +333,7 @@ pub const Buffer = struct {
         line.gap_end = line.buf.len; // drop right side
 
         try self.lines.insert(self.allocator, row + 1, new_line);
-        self.is_dirty = true;
+        self.markChanged();
     }
 
     pub fn deleteCharBack(self: *Buffer, row: usize, col: usize) !bool {
@@ -212,12 +341,13 @@ pub const Buffer = struct {
 
         var line = &self.lines.items[row];
 
+        if (col == 0 and row == 0) return false;
+        try self.recordUndo();
+
         if (line.deleteBack(col)) {
-            self.is_dirty = true;
+            self.markChanged();
             return false;
         }
-
-        if (row == 0) return false;
 
         // merge with previous
         var prev = &self.lines.items[row - 1];
@@ -234,7 +364,7 @@ pub const Buffer = struct {
         var removed = self.lines.orderedRemove(row);
         removed.deinit();
 
-        self.is_dirty = true;
+        self.markChanged();
         return true;
     }
 
@@ -250,7 +380,7 @@ pub const Buffer = struct {
             try file.writeStreamingAll(io, "\n");
         }
 
-        self.is_dirty = false;
+        self.markSaved();
     }
 
     pub fn toString(self: *const Buffer, allocator: std.mem.Allocator) ![]u8 {
@@ -276,6 +406,8 @@ pub const Buffer = struct {
             .allocator = allocator,
             .filename = try allocator.dupe(u8, filename),
             .is_dirty = false,
+            .revision = 0,
+            .saved_revision = 0,
         };
         errdefer buf.deinit();
 
@@ -377,13 +509,17 @@ pub const Buffer = struct {
 
     pub fn deleteRange(self: *Buffer, s_row: usize, s_col: usize, e_row: usize, e_col: usize) !void {
         if (s_row == e_row) {
+            if (s_col == e_col) return;
+            try self.recordUndo();
             var line = &self.lines.items[s_row];
             line.moveGap(e_col);
             const to_del = e_col - s_col;
             line.gap_start -= to_del;
-            self.is_dirty = true;
+            self.markChanged();
             return;
         }
+
+        try self.recordUndo();
 
         // Multiple lines
         const first_line = &self.lines.items[s_row];
@@ -410,15 +546,17 @@ pub const Buffer = struct {
             removed.deinit();
         }
 
-        self.is_dirty = true;
+        self.markChanged();
     }
 
     pub fn swapLines(self: *Buffer, row1: usize, row2: usize) void {
         if (row1 >= self.lines.items.len or row2 >= self.lines.items.len) return;
+        if (row1 == row2) return;
+        self.recordUndo() catch return;
         const tmp = self.lines.items[row1];
         self.lines.items[row1] = self.lines.items[row2];
         self.lines.items[row2] = tmp;
-        self.is_dirty = true;
+        self.markChanged();
     }
 };
 
@@ -463,10 +601,7 @@ test "Buffer line merging" {
         .lines = std.ArrayList(Line).empty,
         .allocator = allocator,
     };
-    defer {
-        for (buf.lines.items) |*l| l.deinit();
-        buf.lines.deinit(allocator);
-    }
+    defer buf.deinit();
 
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "abc"));
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "def"));
@@ -487,10 +622,7 @@ test "Buffer range deletion" {
         .lines = std.ArrayList(Line).empty,
         .allocator = allocator,
     };
-    defer {
-        for (buf.lines.items) |*l| l.deinit();
-        buf.lines.deinit(allocator);
-    }
+    defer buf.deinit();
 
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 1"));
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "line 2"));

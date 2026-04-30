@@ -29,12 +29,15 @@ pub const KeybindingsConfig = struct {
 
     insert_newline: []const u8 = "enter",
     delete_back: []const u8 = "backspace",
+    delete_word_back: []const u8 = "alt+delete",
     indent: []const u8 = "tab",
 
     prompt_submit: []const u8 = "enter",
     prompt_backspace: []const u8 = "backspace",
 
     save: []const u8 = "ctrl+s",
+    undo: []const u8 = "ctrl+z",
+    redo: []const u8 = "ctrl+y",
     select_all: []const u8 = "ctrl+a",
     copy: []const u8 = "ctrl+c",
     cut: []const u8 = "ctrl+x",
