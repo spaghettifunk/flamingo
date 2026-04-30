@@ -12,7 +12,7 @@ pub const DashboardAction = enum {
 
 pub const Dashboard = struct {
     selected_index: usize = 0,
-    const options = [_][]const u8{ "New File [Ctrl+N]", "Open File [Ctrl+O]", "Open Folder [Ctrl+F]", "Settings [Ctrl+P]", "Quit [Ctrl+Q]" };
+    const options = [_][]const u8{ "New File", "Open File", "Open Folder", "Settings", "Quit" };
 
     const logo =
         \\   ___ _               _                 
@@ -23,30 +23,31 @@ pub const Dashboard = struct {
         \\                                 |___/     
     ;
 
-    pub fn handleInput(self: *Dashboard, event: terminal.KeyEvent) DashboardAction {
-        if (event.key == .Up) {
-            if (self.selected_index > 0) {
-                self.selected_index -= 1;
-            } else {
-                self.selected_index = options.len - 1;
-            }
-        } else if (event.key == .Down) {
-            if (self.selected_index < options.len - 1) {
-                self.selected_index += 1;
-            } else {
-                self.selected_index = 0;
-            }
-        } else if (event.key == .Enter) {
-            return switch (self.selected_index) {
-                0 => .NewFile,
-                1 => .OpenFile,
-                2 => .OpenFolder,
-                3 => .Settings,
-                4 => .Quit,
-                else => .None,
-            };
+    pub fn moveUp(self: *Dashboard) void {
+        if (self.selected_index > 0) {
+            self.selected_index -= 1;
+        } else {
+            self.selected_index = options.len - 1;
         }
-        return .None;
+    }
+
+    pub fn moveDown(self: *Dashboard) void {
+        if (self.selected_index < options.len - 1) {
+            self.selected_index += 1;
+        } else {
+            self.selected_index = 0;
+        }
+    }
+
+    pub fn selectedAction(self: *const Dashboard) DashboardAction {
+        return switch (self.selected_index) {
+            0 => .NewFile,
+            1 => .OpenFile,
+            2 => .OpenFolder,
+            3 => .Settings,
+            4 => .Quit,
+            else => .None,
+        };
     }
 
     pub fn render(self: *const Dashboard, writer: anytype, width: usize, height: usize) !void {
@@ -63,7 +64,7 @@ pub const Dashboard = struct {
         }
 
         const start_y = if (height > logo_height + options.len + 4) (height - (logo_height + options.len + 4)) / 2 else 0;
-        
+
         lines = std.mem.splitScalar(u8, logo, '\n');
         var y = start_y;
         while (lines.next()) |line| {
@@ -80,7 +81,7 @@ pub const Dashboard = struct {
         for (options, 0..) |opt, i| {
             const start_x = if (width > opt.len) (width - opt.len) / 2 else 0;
             try terminal.moveCursor(writer, y + 1, start_x + 1);
-            
+
             if (i == self.selected_index) {
                 try writer.writeAll("\x1b[7m"); // Invert
                 try writer.print("> {s} <", .{opt});

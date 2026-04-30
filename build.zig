@@ -22,8 +22,20 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // add tree-sitter as dependency
+    const tree_sitter = b.dependency("tree_sitter", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    // const tree_sitter_zig = b.dependency("tree_sitter_zig", .{
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+
     exe_module.addImport("logz", logz);
     exe_module.addImport("toml", toml);
+    exe_module.addImport("tree-sitter", tree_sitter.module("tree_sitter"));
+    // exe_module.linkLibrary(tree_sitter_zig.artifact("tree-sitter-zig"));
 
     const exe = b.addExecutable(.{
         .name = "flamingo",
@@ -59,4 +71,3 @@ pub fn build(b: *std.Build) void {
 
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
 }
-

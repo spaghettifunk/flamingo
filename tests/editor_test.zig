@@ -17,7 +17,7 @@ const Line = buffer_mod.Line;
 
 test "Editor: init and deinit leave no leaks" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     ed.deinit();
 }
 
@@ -25,7 +25,7 @@ test "Editor: init and deinit leave no leaks" {
 
 test "Editor: addTab increases count and sets active index" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b1 = try Buffer.init(a);
@@ -41,7 +41,7 @@ test "Editor: addTab increases count and sets active index" {
 
 test "Editor: closeTab on only tab switches to Dashboard" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b = try Buffer.init(a);
@@ -57,7 +57,7 @@ test "Editor: closeTab on only tab switches to Dashboard" {
 
 test "Editor: closeTab on multiple tabs adjusts index" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b0 = try Buffer.init(a);
@@ -76,7 +76,7 @@ test "Editor: closeTab on multiple tabs adjusts index" {
 
 test "Editor: nextTab and prevTab wrap around" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     for (0..3) |_| {
@@ -99,7 +99,7 @@ test "Editor: nextTab and prevTab wrap around" {
 
 test "Editor: nextTab / prevTab are no-ops with one tab" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b = try Buffer.init(a);
@@ -115,7 +115,7 @@ test "Editor: nextTab / prevTab are no-ops with one tab" {
 
 test "Editor: closeAllTabs frees everything and sets Dashboard mode" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     for (0..4) |_| {
@@ -131,7 +131,7 @@ test "Editor: closeAllTabs frees everything and sets Dashboard mode" {
 
 test "Editor: currentTab returns null when no tabs" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     try std.testing.expect(ed.currentTab() == null);
@@ -139,7 +139,7 @@ test "Editor: currentTab returns null when no tabs" {
 
 test "Editor: currentTab returns correct tab" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b0 = try Buffer.init(a);
@@ -157,7 +157,8 @@ test "Editor: currentTab returns correct tab" {
 test "Editor: calculateGutterWidth boundary values" {
     const a = std.testing.allocator;
     const cfg = config.Config{};
-    const ed = Editor.init(a, cfg);
+    var ed = try Editor.init(a, std.testing.io, cfg);
+    defer ed.deinit();
     // No tabs to deinit, just the struct.
 
     // min is 2 digits → 1 + 2 + 1 = 4

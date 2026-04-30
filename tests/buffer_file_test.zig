@@ -19,7 +19,7 @@ test "Buffer: round-trip save and load preserves all lines" {
 
     // Build a path inside the tmp dir.
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/test_file.txt", .{dir_path});
     defer a.free(file_path);
 
@@ -35,11 +35,11 @@ test "Buffer: round-trip save and load preserves all lines" {
         try b.lines.append(a, try Line.fromSlice(a, text));
     }
 
-    try b.saveToFile(file_path);
+    try b.saveToFile(std.testing.io, file_path);
     try std.testing.expect(!b.is_dirty);
 
     // Load back.
-    var b2 = try Buffer.loadFromFile(a, file_path);
+    var b2 = try Buffer.loadFromFile(a, std.testing.io, file_path);
     defer b2.deinit();
 
     // loadFromFile splits on '\n', so a trailing newline produces an extra
@@ -64,18 +64,18 @@ test "Buffer: CRLF line endings are stripped on load" {
     defer tmp.cleanup();
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/crlf.txt", .{dir_path});
     defer a.free(file_path);
 
     // Write a file with Windows-style line endings manually.
     {
-        const f = try std.fs.cwd().createFile(file_path, .{});
-        defer f.close();
-        try f.writeAll("first\r\nsecond\r\nthird\r\n");
+        const f = try std.Io.Dir.cwd().createFile(std.testing.io, file_path, .{});
+        defer f.close(std.testing.io);
+        try f.writeStreamingAll(std.testing.io, "first\r\nsecond\r\nthird\r\n");
     }
 
-    var b = try Buffer.loadFromFile(a, file_path);
+    var b = try Buffer.loadFromFile(a, std.testing.io, file_path);
     defer b.deinit();
 
     // Verify no '\r' characters survive.
@@ -102,16 +102,16 @@ test "Buffer: empty file loads as one empty line" {
     defer tmp.cleanup();
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/empty.txt", .{dir_path});
     defer a.free(file_path);
 
     {
-        const f = try std.fs.cwd().createFile(file_path, .{});
-        f.close();
+        const f = try std.Io.Dir.cwd().createFile(std.testing.io, file_path, .{});
+        f.close(std.testing.io);
     }
 
-    var b = try Buffer.loadFromFile(a, file_path);
+    var b = try Buffer.loadFromFile(a, std.testing.io, file_path);
     defer b.deinit();
 
     try std.testing.expect(b.lines.items.len >= 1);
@@ -128,7 +128,7 @@ test "Buffer: saveToFile sets filename and marks not dirty" {
     defer tmp.cleanup();
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/save_test.txt", .{dir_path});
     defer a.free(file_path);
 
@@ -139,6 +139,6 @@ test "Buffer: saveToFile sets filename and marks not dirty" {
     try b.insertChar(0, 1, 'i');
     try std.testing.expect(b.is_dirty);
 
-    try b.saveToFile(file_path);
+    try b.saveToFile(std.testing.io, file_path);
     try std.testing.expect(!b.is_dirty);
 }

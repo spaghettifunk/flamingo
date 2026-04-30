@@ -1,9 +1,9 @@
 const std = @import("std");
 const logz = @import("logz");
 
-pub fn init(allocator: std.mem.Allocator, log_level: u3) !void {
+pub fn init(io: std.Io, allocator: std.mem.Allocator, log_level: u3) !void {
     // initialize a logging pool
-    try logz.setup(allocator, .{
+    try logz.setup(io, allocator, .{
         .level = @enumFromInt(log_level),
         .pool_size = 100,
         .buffer_size = 4096,

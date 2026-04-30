@@ -32,6 +32,7 @@ pub const SearchSystem = struct {
         }
         self.matches.deinit(self.allocator);
         self.matches = .empty;
+        self.active_match_idx = null;
     }
 
     pub fn clear(self: *SearchSystem) void {
@@ -52,6 +53,7 @@ pub const SearchSystem = struct {
             defer self.allocator.free(line_content);
 
             if (try strictMatch(line_content, query, self.allocator)) |indices| {
+                errdefer self.allocator.free(indices);
                 try self.matches.append(self.allocator, .{
                     .row = row_idx,
                     .col = indices[0],
@@ -120,7 +122,7 @@ pub fn strictMatch(line: []const u8, query: []const u8, allocator: std.mem.Alloc
 
 test "strictMatch" {
     const allocator = std.testing.allocator;
-    
+
     const m1 = try strictMatch("flamingo", "fla", allocator);
     try std.testing.expect(m1 != null);
     try std.testing.expectEqualSlices(usize, &[_]usize{ 0, 1, 2 }, m1.?);

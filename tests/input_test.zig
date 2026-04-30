@@ -29,7 +29,7 @@ fn expectLine(a: std.mem.Allocator, ed: *editor_mod.Editor, row: usize, expected
 
 test "Dashboard → Normal via Enter on 'New File'" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.mode);
@@ -161,7 +161,7 @@ test "Insert: Backspace removes previous char" {
 
     ed.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{
-        th.keyChar('a'), th.keyChar('b'), th.keyChar('c'),
+        th.keyChar('a'),           th.keyChar('b'), th.keyChar('c'),
         th.keySpecial(.Backspace),
     });
     try expectLine(a, &ed, 0, "ab");
@@ -231,7 +231,8 @@ test "Command: :q! force-closes dirty tab" {
 
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar(':'),
-        th.keyChar('q'), th.keyChar('!'),
+        th.keyChar('q'),
+        th.keyChar('!'),
         th.keySpecial(.Enter),
     });
 
@@ -246,7 +247,7 @@ test "Command: :w saves file to disk" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/saved.txt", .{dir_path});
     defer a.free(file_path);
 
@@ -263,7 +264,7 @@ test "Command: :w saves file to disk" {
     });
 
     // File should exist on disk.
-    const stat = try std.fs.cwd().statFile(file_path);
+    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, file_path, .{});
     try std.testing.expect(stat.size > 0);
     try std.testing.expect(!ed.currentTab().?.buf.is_dirty);
 }
@@ -275,7 +276,9 @@ test "Command: unknown command shows error, stays Normal" {
 
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar(':'),
-        th.keyChar('z'), th.keyChar('z'), th.keyChar('z'),
+        th.keyChar('z'),
+        th.keyChar('z'),
+        th.keyChar('z'),
         th.keySpecial(.Enter),
     });
 
@@ -296,7 +299,9 @@ test "Search: typing query finds matches" {
 
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('/'),
-        th.keyChar('f'), th.keyChar('l'), th.keyChar('a'),
+        th.keyChar('f'),
+        th.keyChar('l'),
+        th.keyChar('a'),
     });
 
     const ss = ed.search_system.?;
@@ -433,7 +438,7 @@ test "Option+Right: word jump moves cursor right" {
 
 test "Option+[ cycles to next tab" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b0 = try buffer_mod.Buffer.init(a);
@@ -449,7 +454,7 @@ test "Option+[ cycles to next tab" {
 
 test "Option+] cycles to previous tab" {
     const a = std.testing.allocator;
-    var ed = th.makeEmptyEditor(a);
+    var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     const b0 = try buffer_mod.Buffer.init(a);
@@ -501,7 +506,7 @@ test "Shift+Up: extends selection" {
 
 // ── Explorer & tab control ────────────────────────────────────────────────────
 
-test "Ctrl+E toggles explorer_visible" {
+test "configured default Ctrl+B toggles explorer_visible" {
     const a = std.testing.allocator;
     // Explorer.init calls logz.info(), so we must set up the logger first.
     const log = try th.setupLogger(a);
@@ -511,10 +516,26 @@ test "Ctrl+E toggles explorer_visible" {
     defer ed.deinit();
 
     try std.testing.expect(!ed.explorer_visible);
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(ed.explorer_visible);
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(!ed.explorer_visible);
+}
+
+test "configured toggle_explorer key is used" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.toggle_explorer = "ctrl+t";
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
+    try std.testing.expect(!ed.explorer_visible);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try std.testing.expect(ed.explorer_visible);
 }
 
 test "Ctrl+W closes current tab" {
@@ -527,6 +548,19 @@ test "Ctrl+W closes current tab" {
     try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
 }
 
+test "configured close_tab key is used" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    ed.config.keybindings.close_tab = "ctrl+u";
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
+    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('u')});
+    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
+}
+
 test "Ctrl+S saves current file" {
     const a = std.testing.allocator;
     const log = try th.setupLogger(a);
@@ -535,7 +569,7 @@ test "Ctrl+S saves current file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/ctrl_s.txt", .{dir_path});
     defer a.free(file_path);
 

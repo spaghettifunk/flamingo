@@ -26,7 +26,7 @@ const SortContext = struct {
         _ = ctx;
         if (a.is_dir and !b.is_dir) return true;
         if (!a.is_dir and b.is_dir) return false;
-        
+
         var i: usize = 0;
         while (i < a.name.len and i < b.name.len) : (i += 1) {
             const ca = std.ascii.toLower(a.name[i]);
@@ -40,18 +40,21 @@ const SortContext = struct {
 
 pub const Explorer = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     root_path: []const u8,
     nodes: std.ArrayList(FileNode),
     selected_index: usize = 0,
     scroll_offset: usize = 0,
 
-    pub fn init(allocator: std.mem.Allocator, root_path: []const u8) !Explorer {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, root_path: []const u8) !Explorer {
         logz.info().fmt("msg", "initializing explorer at: {s}", .{root_path}).log();
         var self = Explorer{
             .allocator = allocator,
+            .io = io,
             .root_path = try allocator.dupe(u8, root_path),
             .nodes = std.ArrayList(FileNode).empty,
         };
+        errdefer self.deinit();
         try self.loadDirectory(root_path, 0, 0);
         return self;
     }
@@ -70,18 +73,26 @@ pub const Explorer = struct {
     }
 
     fn loadDirectory(self: *Explorer, dir_path: []const u8, depth: usize, insert_idx: usize) !void {
-        logz.debug().fmt("msg", "loading directory: {s} (depth {d})", .{dir_path, depth}).log();
-        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
-            logz.warn().fmt("msg", "failed to open directory {s}: {s}", .{dir_path, @errorName(err)}).log();
+        logz.debug().fmt("msg", "loading directory: {s} (depth {d})", .{ dir_path, depth }).log();
+        var dir = std.Io.Dir.cwd().openDir(self.io, dir_path, .{ .iterate = true }) catch |err| {
+            logz.warn().fmt("msg", "failed to open directory {s}: {s}", .{ dir_path, @errorName(err) }).log();
             return;
         };
-        defer dir.close();
+        defer dir.close(self.io);
 
         var temp_nodes = std.ArrayList(FileNode).empty;
-        defer temp_nodes.deinit(self.allocator);
+        var inserted = false;
+        defer {
+            if (!inserted) {
+                for (temp_nodes.items) |*node| {
+                    node.deinit(self.allocator);
+                }
+            }
+            temp_nodes.deinit(self.allocator);
+        }
 
         var it = dir.iterate();
-        while (try it.next()) |entry| {
+        while (try it.next(self.io)) |entry| {
             if (std.mem.eql(u8, entry.name, ".") or std.mem.eql(u8, entry.name, "..")) continue;
             if (std.mem.eql(u8, entry.name, ".git")) continue;
             if (std.mem.eql(u8, entry.name, ".zig-cache")) continue;
@@ -105,6 +116,7 @@ pub const Explorer = struct {
 
         std.mem.sort(FileNode, temp_nodes.items, {}, SortContext.lessThan);
         try self.nodes.insertSlice(self.allocator, insert_idx, temp_nodes.items);
+        inserted = true;
     }
 
     pub fn toggleExpand(self: *Explorer) !void {
@@ -231,4 +243,3 @@ pub const Explorer = struct {
         }
     }
 };
-

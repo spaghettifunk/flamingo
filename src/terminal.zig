@@ -49,6 +49,16 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
         event.key = .Enter;
     } else if (std.mem.eql(u8, chord, "backspace")) {
         event.key = .Backspace;
+    } else if (std.mem.eql(u8, chord, "delete")) {
+        event.key = .Delete;
+    } else if (std.mem.eql(u8, chord, "home")) {
+        event.key = .Home;
+    } else if (std.mem.eql(u8, chord, "end")) {
+        event.key = .End;
+    } else if (std.mem.eql(u8, chord, "pageup")) {
+        event.key = .PageUp;
+    } else if (std.mem.eql(u8, chord, "pagedown")) {
+        event.key = .PageDown;
     } else {
         // Parse modifiers: ctrl+n, alt+p
         var it = std.mem.splitScalar(u8, chord, '+');
@@ -56,7 +66,7 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
         while (it.next()) |part| {
             if (std.mem.eql(u8, part, "ctrl")) {
                 event.ctrl = true;
-            } else if (std.mem.eql(u8, part, "alt")) {
+            } else if (std.mem.eql(u8, part, "alt") or std.mem.eql(u8, part, "option")) {
                 event.alt = true;
             } else if (std.mem.eql(u8, part, "shift")) {
                 event.shift = true;
@@ -71,6 +81,33 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
             } else if (std.mem.eql(u8, part, "tab")) {
                 event.key = .Char;
                 event.char = '\t';
+            } else if (std.mem.eql(u8, part, "space")) {
+                event.key = .Char;
+                event.char = ' ';
+            } else if (std.mem.eql(u8, part, "up")) {
+                event.key = .Up;
+            } else if (std.mem.eql(u8, part, "down")) {
+                event.key = .Down;
+            } else if (std.mem.eql(u8, part, "left")) {
+                event.key = .Left;
+            } else if (std.mem.eql(u8, part, "right")) {
+                event.key = .Right;
+            } else if (std.mem.eql(u8, part, "esc")) {
+                event.key = .Esc;
+            } else if (std.mem.eql(u8, part, "enter")) {
+                event.key = .Enter;
+            } else if (std.mem.eql(u8, part, "backspace")) {
+                event.key = .Backspace;
+            } else if (std.mem.eql(u8, part, "delete")) {
+                event.key = .Delete;
+            } else if (std.mem.eql(u8, part, "home")) {
+                event.key = .Home;
+            } else if (std.mem.eql(u8, part, "end")) {
+                event.key = .End;
+            } else if (std.mem.eql(u8, part, "pageup")) {
+                event.key = .PageUp;
+            } else if (std.mem.eql(u8, part, "pagedown")) {
+                event.key = .PageDown;
             }
         }
     }
@@ -79,7 +116,21 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
 
 var orig_termios: ?std.posix.termios = null;
 
-pub fn enableRawMode() !void {
+fn DeclType(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr| ptr.child,
+        else => T,
+    };
+}
+
+fn readShort(reader: anytype, buffer: []u8) !usize {
+    if (comptime @hasDecl(DeclType(@TypeOf(reader)), "readSliceShort")) {
+        return reader.readSliceShort(buffer);
+    }
+    return reader.read(buffer);
+}
+
+pub fn enableRawMode(io: std.Io) !void {
     const fd = std.posix.STDIN_FILENO;
     const termios = try std.posix.tcgetattr(fd);
     orig_termios = termios;
@@ -107,9 +158,9 @@ pub fn enableRawMode() !void {
 
     try std.posix.tcsetattr(fd, .FLUSH, raw);
 
-    var stdout = std.fs.File.stdout();
-    try stdout.writeAll("\x1b[?1049h"); // enter alt screen
-    try stdout.writeAll("\x1b[?25l"); // hide cursor
+    const stdout: std.Io.File = .stdout();
+    try stdout.writeStreamingAll(io, "\x1b[?1049h"); // enter alt screen
+    try stdout.writeStreamingAll(io, "\x1b[?25l"); // hide cursor
 }
 
 pub fn disableRawMode() void {
@@ -165,7 +216,7 @@ pub fn showCursor(writer: anytype) !void {
 
 pub fn readKey(reader: anytype) !KeyEvent {
     var buf: [1]u8 = undefined;
-    const n = try reader.read(&buf);
+    const n = try readShort(reader, &buf);
     if (n == 0) return KeyEvent{}; // Timeout or EOF
 
     const c = buf[0];
@@ -176,7 +227,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
         var seq: [16]u8 = undefined;
         var seq_len: usize = 0;
 
-        if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
+        if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) {
             event.key = .Esc;
             return event;
         }
@@ -185,7 +236,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
         var alt_prefix = false;
         if (seq[0] == '\x1b') {
             alt_prefix = true;
-            if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
+            if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) {
                 event.key = .Esc;
                 return event;
             }
@@ -194,7 +245,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
 
         if (seq[0] == '[' or seq[0] == 'O') {
             while (seq_len < seq.len) {
-                if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) break;
+                if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) break;
                 const ch = seq[seq_len];
                 seq_len += 1;
                 if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or ch == '~') {
@@ -306,12 +357,13 @@ pub fn readKey(reader: anytype) !KeyEvent {
         return event;
     }
 
-    // Handle Control characters
-    // Handle Control characters (1-31)
-    if (c >= 1 and c <= 31 and c != 13 and c != 10 and c != 9 and c != 8) {
+    // Handle Control characters (0-31)
+    if (c <= 31 and c != 13 and c != 10 and c != 9 and c != 8) {
         event.ctrl = true;
         event.key = .Char;
-        if (c <= 26) {
+        if (c == 0) {
+            event.char = ' ';
+        } else if (c <= 26) {
             // Map 1-26 to 'a'-'z'
             event.char = c + 'a' - 1;
         } else {
@@ -337,7 +389,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
                 const len: usize = if (c & 0xe0 == 0xc0) 2 else if (c & 0xf0 == 0xe0) 3 else if (c & 0xf8 == 0xf0) 4 else 1;
 
                 for (1..len) |i| {
-                    _ = try reader.read(utf8_buf[i .. i + 1]);
+                    _ = try readShort(reader, utf8_buf[i .. i + 1]);
                 }
 
                 // Common Mac Option shortcuts in UTF-8
@@ -368,15 +420,15 @@ pub fn readKey(reader: anytype) !KeyEvent {
     return event;
 }
 
-pub fn restoreTerminal(writer: std.fs.File) void {
+pub fn restoreTerminal(io: std.Io, writer: std.Io.File) void {
     // Restore termios first
     disableRawMode();
 
     // Best-effort ANSI reset (ignore errors)
-    writer.writeAll("\x1b[?1049l") catch {}; // leave alt screen
-    writer.writeAll("\x1b[?25h") catch {}; // show cursor
-    writer.writeAll("\x1b[0m") catch {}; // reset styles
-    writer.writeAll("\x1b[2J\x1b[H") catch {}; // clear + home
+    writer.writeStreamingAll(io, "\x1b[?1049l") catch {}; // leave alt screen
+    writer.writeStreamingAll(io, "\x1b[?25h") catch {}; // show cursor
+    writer.writeStreamingAll(io, "\x1b[0m") catch {}; // reset styles
+    writer.writeStreamingAll(io, "\x1b[2J\x1b[H") catch {}; // clear + home
 
     // Flush if possible (depends on writer type)
     if (@hasDecl(@TypeOf(writer), "context")) {

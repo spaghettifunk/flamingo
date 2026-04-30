@@ -7,6 +7,8 @@ const dashboard = @import("dashboard.zig");
 const explorer = @import("explorer.zig");
 const input = @import("input.zig");
 const search = @import("search.zig");
+const lsp_manager = @import("../lsp/manager.zig");
+const event_queue = @import("event_queue.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -47,6 +49,7 @@ pub const Tab = struct {
 pub const Editor = struct {
     config: config.Config,
     allocator: std.mem.Allocator,
+    io: std.Io,
     mode: EditorMode = .Dashboard,
     dash: dashboard.Dashboard = .{},
     tabs: std.ArrayList(Tab),
@@ -62,17 +65,43 @@ pub const Editor = struct {
     search_buffer: std.ArrayListUnmanaged(u8) = .empty,
     search_system: ?search.SearchSystem = null,
     clipboard: ?[]u8 = null,
+    event_queue: *event_queue.EventQueue,
+    lsp_mgr: ?lsp_manager.LspManager = null,
+    is_deinitialized: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator, cfg: config.Config) Editor {
+    // Completion state
+    completion_items: ?std.json.Value = null,
+    completion_active: bool = false,
+    completion_selected: usize = 0,
+
+    diagnostics: std.StringHashMap(std.json.Value),
+
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
+        const queue = try allocator.create(event_queue.EventQueue);
+        queue.* = event_queue.EventQueue.init(allocator, io);
+        errdefer {
+            queue.deinit();
+            allocator.destroy(queue);
+        }
+
+        const mgr = try lsp_manager.LspManager.init(allocator, io, queue);
+
         return Editor{
             .allocator = allocator,
+            .io = io,
             .config = cfg,
             .tabs = std.ArrayList(Tab).empty,
             .search_system = search.SearchSystem.init(allocator),
+            .event_queue = queue,
+            .lsp_mgr = mgr,
+            .diagnostics = std.StringHashMap(std.json.Value).init(allocator),
         };
     }
 
     pub fn deinit(self: *Editor) void {
+        if (self.is_deinitialized) return;
+        self.is_deinitialized = true;
+
         for (self.tabs.items) |*tab| {
             tab.deinit(self.allocator);
         }
@@ -95,6 +124,27 @@ pub const Editor = struct {
             self.allocator.free(c);
             self.clipboard = null;
         }
+
+        if (self.lsp_mgr) |*mgr| {
+            if (self.completion_items) |items| {
+                mgr.freeValue(items);
+                self.completion_items = null;
+            }
+
+            var it = self.diagnostics.iterator();
+            while (it.next()) |entry| {
+                mgr.freeValue(entry.value_ptr.*);
+                self.allocator.free(entry.key_ptr.*);
+            }
+            self.diagnostics.deinit();
+            mgr.deinit();
+            self.lsp_mgr = null;
+        } else {
+            self.diagnostics.deinit();
+        }
+        self.event_queue.quit = true;
+        self.event_queue.deinit();
+        self.allocator.destroy(self.event_queue);
     }
 
     pub fn currentTab(self: *Editor) ?*Tab {
@@ -105,11 +155,26 @@ pub const Editor = struct {
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
         var cursors = std.ArrayListUnmanaged(Cursor).empty;
         try cursors.append(self.allocator, .{});
-        try self.tabs.append(self.allocator, .{ 
+        try self.tabs.append(self.allocator, .{
             .buf = buf,
             .cursors = cursors,
         });
         self.active_tab_index = self.tabs.items.len - 1;
+
+        if (self.lsp_mgr) |*mgr| {
+            if (buf.filename) |fname| {
+                mgr.startLspForFile(fname) catch |err| {
+                    logz.err().fmt("msg", "Failed to start LSP: {any}", .{err}).log();
+                };
+
+                const content = try buf.toString(self.allocator);
+                defer self.allocator.free(content);
+
+                mgr.notifyOpen(fname, content) catch |err| {
+                    logz.err().fmt("msg", "Failed to notify open: {any}", .{err}).log();
+                };
+            }
+        }
     }
 
     pub fn closeTab(self: *Editor) void {
@@ -155,17 +220,21 @@ pub const Editor = struct {
     }
 
     pub fn run(self: *Editor) !void {
-        const stdout = std.fs.File.stdout();
-        const stdin = std.fs.File.stdin();
+        const stdout = std.Io.File.stdout();
+        const stdin = std.Io.File.stdin();
+        var stdout_buf: [0]u8 = .{};
+        var stdin_buf: [1]u8 = undefined;
+        var stdout_writer = stdout.writerStreaming(self.io, &stdout_buf);
+        var stdin_reader = stdin.readerStreaming(self.io, &stdin_buf);
 
-        try terminal.enableRawMode();
+        try terminal.enableRawMode(self.io);
         defer terminal.disableRawMode();
 
         const size = try terminal.getSize();
         self.width = size.cols;
         self.height = size.rows;
 
-        try self.runWithIO(stdin, stdout);
+        try self.runWithIO(&stdin_reader.interface, &stdout_writer.interface);
     }
 
     /// Run the editor event loop with explicit reader/writer.
@@ -174,35 +243,132 @@ pub const Editor = struct {
     /// without touching a real TTY.
     pub fn runWithIO(self: *Editor, reader: anytype, raw_writer: anytype) !void {
         var render_buffer = std.ArrayListUnmanaged(u8).empty;
-        defer render_buffer.deinit(self.allocator);
-        const writer = render_buffer.writer(self.allocator);
+        var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &render_buffer);
+        defer aw.deinit();
+        const writer = &aw.writer;
 
         while (!self.should_quit) {
-            render_buffer.clearRetainingCapacity();
+            // Pump events
+            while (self.event_queue.tryPop()) |ev| {
+                switch (ev) {
+                    .lsp_message => |msg| {
+                        defer self.allocator.free(msg.message);
+                        if (self.lsp_mgr) |*mgr| {
+                            const res = mgr.handleMessage(msg.plugin_name, msg.message) catch |err| blk: {
+                                logz.err().fmt("msg", "Error handling LSP msg: {any}", .{err}).log();
+                                break :blk lsp_manager.LspManager.HandleResult.none;
+                            };
+
+                            switch (res) {
+                                .initialized => {
+                                    for (self.tabs.items) |tab| {
+                                        if (tab.buf.filename) |fname| {
+                                            const ext = std.fs.path.extension(fname);
+                                            if (mgr.plugin_mgr.getPluginForExtension(ext)) |p| {
+                                                if (std.mem.eql(u8, p.name, msg.plugin_name)) {
+                                                    const content = try tab.buf.toString(self.allocator);
+                                                    defer self.allocator.free(content);
+                                                    mgr.notifyOpen(fname, content) catch {};
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                .completion => |items| {
+                                    if (self.completion_items) |old| {
+                                        mgr.freeValue(old);
+                                    }
+                                    self.completion_items = items;
+                                    self.completion_active = true;
+                                    self.completion_selected = 0;
+                                },
+                                .diagnostics => |diag_val| {
+                                    var diagnostics_stored = false;
+                                    errdefer if (!diagnostics_stored) mgr.freeValue(diag_val);
+
+                                    const uri = diag_val.object.get("uri").?.string;
+                                    // filename is after file://
+                                    const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
+
+                                    const fname_copy = try self.allocator.dupe(u8, fname);
+                                    var key_owned = true;
+                                    errdefer if (key_owned) self.allocator.free(fname_copy);
+
+                                    const entry = try self.diagnostics.getOrPut(fname_copy);
+                                    if (entry.found_existing) {
+                                        mgr.freeValue(entry.value_ptr.*);
+                                        self.allocator.free(fname_copy);
+                                        key_owned = false;
+                                    } else {
+                                        key_owned = false;
+                                    }
+
+                                    entry.value_ptr.* = diag_val;
+                                    diagnostics_stored = true;
+                                },
+                                .none => {},
+                            }
+                        }
+                    },
+                }
+            }
+
+            aw.clearRetainingCapacity();
             try terminal.hideCursor(writer);
             try self.render(writer);
+            try self.renderCompletionMenu(writer);
             try terminal.showCursor(writer);
-            try raw_writer.writeAll(render_buffer.items);
+            try raw_writer.writeAll(aw.written());
 
             const event = try terminal.readKey(reader);
             if (event.key == .None) continue;
 
             logz.debug().fmt("msg", "key event: key={s}, char={c}, ctrl={}, alt={}", .{ @tagName(event.key), event.char, event.ctrl, event.alt }).log();
 
-            // Global quit sequence matching flamingo.toml config
-            // For now hardcoded to Ctrl+Q
-            if (event.ctrl and event.key == .Char and event.char == 'q') {
+            if (event.eql(terminal.parseKeyChord(self.config.keybindings.quit))) {
                 self.should_quit = true;
                 continue;
             }
 
+            if (self.completion_active) {
+                if (try self.handleCompletionInput(event)) continue;
+            }
+
             try input.handleInput(self, event);
+
+            // Notify LSP of change if buffer is dirty
+            if (self.currentTab()) |tab| {
+                if (tab.buf.is_dirty and tab.buf.filename != null) {
+                    if (self.lsp_mgr) |*mgr| {
+                        const content = try tab.buf.toString(self.allocator);
+                        defer self.allocator.free(content);
+                        mgr.notifyChange(tab.buf.filename.?, content) catch |err| {
+                            logz.err().fmt("msg", "Failed to notify change: {any}", .{err}).log();
+                        };
+                    }
+                }
+
+                // Trigger completion
+                const is_completion_auto_trigger = event.eql(terminal.parseKeyChord(self.config.keybindings.completion_auto_trigger));
+                const is_completion_trigger = event.eql(terminal.parseKeyChord(self.config.keybindings.completion_trigger));
+
+                if (is_completion_auto_trigger or is_completion_trigger) {
+                    if (tab.buf.filename != null) {
+                        if (self.lsp_mgr) |*mgr| {
+                            const mc = tab.mainCursor();
+                            mgr.requestCompletion(tab.buf.filename.?, mc.row, mc.col) catch |err| {
+                                logz.err().fmt("msg", "Failed to request completion: {any}", .{err}).log();
+                            };
+                        }
+                    }
+                }
+            }
         }
 
-        render_buffer.clearRetainingCapacity();
+        aw.clearRetainingCapacity();
         try terminal.clearScreen(writer);
         try terminal.moveCursor(writer, 1, 1);
-        try raw_writer.writeAll(render_buffer.items);
+        try raw_writer.writeAll(aw.written());
     }
 
     /// Adjust scroll_row so cursor_row is always within the visible viewport.
@@ -415,7 +581,7 @@ pub const Editor = struct {
                             }
                             m_idx += 1;
                         }
-                        
+
                         try writer.writeByte(line_content[char_idx]);
                         try writer.writeAll("\x1b[0m");
                     }
@@ -462,15 +628,25 @@ pub const Editor = struct {
         } else {
             const mode_color = if (self.mode == .Normal) "\x1b[48;5;121m\x1b[30m" else "\x1b[48;5;117m\x1b[30m";
             try writer.writeAll(mode_color);
-            
+
             const mode_str = if (self.mode == .Normal) "-- NORMAL --" else "-- INSERT --";
-            
+
             var buf: [128]u8 = undefined;
-            const status_text = if (tab) |t| 
-                try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len })
-            else 
-                try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
-            
+            const status_text = if (tab) |t| blk: {
+                var diag_count: usize = 0;
+                if (t.buf.filename) |fname| {
+                    if (self.diagnostics.get(fname)) |dv| {
+                        diag_count = dv.object.get("diagnostics").?.array.items.len;
+                    }
+                }
+
+                if (diag_count > 0) {
+                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | ERR: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, diag_count });
+                } else {
+                    break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len });
+                }
+            } else try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
+
             try writer.writeAll(status_text);
 
             // Pad status bar
@@ -492,16 +668,16 @@ pub const Editor = struct {
         } else if (tab) |t| {
             // Offset cursor past the line-number gutter
             const content_width = buf_width -| gutter_width;
-            
+
             // Draw all cursors
             for (t.cursors.items, 0..) |cursor, i| {
                 const vis_col = if (cursor.col > content_width) content_width else cursor.col;
                 if (cursor.row >= t.scroll_row and cursor.row < t.scroll_row + visible_rows) {
                     const vis_row = cursor.row - t.scroll_row + 3;
                     try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
-                    
+
                     if (i == t.main_cursor_idx) {
-                        // Main cursor is handled by the terminal's hardware cursor usually, 
+                        // Main cursor is handled by the terminal's hardware cursor usually,
                         // but we need to move it there last.
                     } else {
                         // Secondary cursors - just a block highlight or something
@@ -526,11 +702,188 @@ pub const Editor = struct {
         _ = self;
         return @max(buffer.countDigits(total_lines), 2) + 2;
     }
+
+    fn renderCompletionMenu(self: *Editor, writer: anytype) !void {
+        if (!self.completion_active or self.completion_items == null) return;
+
+        const tab = self.currentTab() orelse return;
+        const mc = tab.mainCursor();
+
+        const explorer_width = if (self.explorer_visible) self.width / 5 else 0;
+        const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
+
+        // Relative row in viewport
+        const rel_row = mc.row - tab.scroll_row;
+        const col = explorer_width + gutter_width + mc.col + 1;
+
+        const items_val = self.completion_items.?;
+        var items: []std.json.Value = &[_]std.json.Value{};
+
+        if (items_val == .array) {
+            items = items_val.array.items;
+        } else if (items_val == .object) {
+            if (items_val.object.get("items")) |v| {
+                if (v == .array) items = v.array.items;
+            }
+        }
+
+        if (items.len == 0) {
+            self.completion_active = false;
+            return;
+        }
+
+        const max_height = 10;
+        const visible_count = @min(items.len, max_height);
+
+        // Flipped menu if near bottom
+        var row = rel_row + 3 + 1;
+        if (row + visible_count >= self.height - 1) {
+            row = (rel_row + 3) -| visible_count;
+        }
+
+        // Handle scrolling in the menu
+        var scroll_top: usize = 0;
+        if (self.completion_selected >= max_height) {
+            scroll_top = self.completion_selected - max_height + 1;
+        }
+
+        // Draw background/border
+        for (0..visible_count) |i| {
+            const item_idx = scroll_top + i;
+            if (item_idx >= items.len) break;
+
+            try terminal.moveCursor(writer, row + i, col);
+
+            if (item_idx == self.completion_selected) {
+                try writer.writeAll("\x1b[48;5;25m\x1b[38;5;255m"); // Blue selection, white text
+            } else {
+                try writer.writeAll("\x1b[48;5;236m\x1b[38;5;250m"); // Dark grey background, light grey text
+            }
+
+            const item = items[item_idx].object;
+            const label = item.get("label").?.string;
+            const kind_val = if (item.get("kind")) |k| @as(u8, @intCast(k.integer)) else @as(u8, 0);
+
+            const kind_str = switch (kind_val) {
+                1 => "Text",
+                2 => "Method",
+                3 => "Fn",
+                4 => "Const",
+                5 => "Field",
+                6 => "Var",
+                7 => "Class",
+                8 => "Intf",
+                9 => "Mod",
+                10 => "Prop",
+                13 => "Enum",
+                14 => "Key",
+                15 => "Snip",
+                21 => "Const",
+                22 => "Struct",
+                else => "",
+            };
+
+            // Pad to fixed width and show kind
+            try writer.print(" {s: <6} │ {s: <30} ", .{ kind_str, label[0..@min(label.len, 30)] });
+
+            // If selected, maybe show detail on the right
+            if (item_idx == self.completion_selected) {
+                if (item.get("detail")) |d| {
+                    if (d == .string) {
+                        const detail = d.string;
+                        const detail_col = col + 42;
+                        try terminal.moveCursor(writer, row + i, detail_col);
+                        try writer.writeAll("\x1b[48;5;238m\x1b[38;5;252m"); // Slightly lighter grey for detail
+                        try writer.print(" {s} ", .{detail[0..@min(detail.len, 40)]});
+                    }
+                }
+            }
+
+            try writer.writeAll("\x1b[0m");
+        }
+    }
+
+    fn handleCompletionInput(self: *Editor, event: terminal.KeyEvent) !bool {
+        if (!self.completion_active or self.completion_items == null) return false;
+        const keys = self.config.keybindings;
+
+        const items_val = self.completion_items.?;
+        var items: []std.json.Value = &[_]std.json.Value{};
+        if (items_val == .array) {
+            items = items_val.array.items;
+        } else if (items_val == .object) {
+            if (items_val.object.get("items")) |v| {
+                if (v == .array) items = v.array.items;
+            }
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_previous))) {
+            if (self.completion_selected > 0) {
+                self.completion_selected -= 1;
+            } else if (items.len > 0) {
+                self.completion_selected = items.len - 1;
+            }
+            return true;
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_next))) {
+            if (self.completion_selected < items.len - 1) {
+                self.completion_selected += 1;
+            } else {
+                self.completion_selected = 0;
+            }
+            return true;
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_accept))) {
+            if (items.len == 0) {
+                self.completion_active = false;
+                return false;
+            }
+            const item = items[self.completion_selected].object;
+            const label = item.get("label").?.string;
+            const insertText = if (item.get("insertText")) |it| it.string else label;
+
+            // Insert the completion
+            if (self.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                // Simple insertion for now.
+                // TODO: handle overwrite and snippets.
+                for (insertText) |c| {
+                    try tab.buf.insertChar(mc.row, mc.col, c);
+                    mc.col += 1;
+                }
+            }
+
+            self.completion_active = false;
+            return true;
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_cancel))) {
+            self.completion_active = false;
+            return true;
+        }
+
+        switch (event.key) {
+            .Char => {
+                if (!std.ascii.isAlphanumeric(event.char)) {
+                    self.completion_active = false;
+                    return false;
+                }
+                return false;
+            },
+            else => {
+                self.completion_active = false;
+                return false;
+            },
+        }
+    }
 };
 
 test "Editor.calculateGutterWidth" {
     const cfg = config.Config{};
-    const ed = Editor.init(std.testing.allocator, cfg);
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
 
     // 1-99 lines => 2 digits min => 1 + 2 + 1 = 4
     try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(5));
@@ -541,8 +894,8 @@ test "Editor.calculateGutterWidth" {
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
 }
 
-pub fn start_editor(allocator: std.mem.Allocator, cfg: config.Config) !void {
-    var editor = Editor.init(allocator, cfg);
+pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
+    var editor = try Editor.init(allocator, io, cfg);
     defer editor.deinit();
     try editor.run();
 }

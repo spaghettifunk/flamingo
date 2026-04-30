@@ -28,7 +28,7 @@ pub fn execute(ed: *editor.Editor) !void {
                 try tab.buf.setFilename(f);
             }
             if (tab.buf.filename) |f| {
-                tab.buf.saveToFile(f) catch {
+                tab.buf.saveToFile(ed.io, f) catch {
                     ed.error_message = "Failed to save file";
                 };
             } else {
@@ -43,7 +43,7 @@ pub fn execute(ed: *editor.Editor) !void {
                 try tab.buf.setFilename(f);
             }
             if (tab.buf.filename) |f| {
-                tab.buf.saveToFile(f) catch {
+                tab.buf.saveToFile(ed.io, f) catch {
                     ed.error_message = "Failed to save file";
                     ed.mode = .Normal;
                     return;

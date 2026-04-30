@@ -8,21 +8,25 @@ const c = @cImport({
     @cInclude("signal.h");
 });
 
-pub fn main() !void {
-    var alloc_impl: std.heap.GeneralPurposeAllocator(.{
+var global_io: ?std.Io = null;
+
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    global_io = io;
+    var alloc_impl: std.heap.DebugAllocator(.{
         .safety = true,
     }) = .init;
     defer _ = alloc_impl.deinit();
     const allocator = alloc_impl.allocator();
 
-    var result = try config.loadFile(allocator, "flamingo.toml");
+    var result = try config.loadFile(io, allocator, "flamingo.toml");
     defer result.deinit();
 
     const cfg = result.value;
     try config.validate(&cfg);
 
     // initiate logger
-    try logger.init(allocator, 0);
+    try logger.init(io, allocator, 0);
     defer logger.shutdown() catch {};
 
     _ = c.signal(c.SIGSEGV, handleSignal);
@@ -30,30 +34,18 @@ pub fn main() !void {
     _ = c.signal(c.SIGINT, handleSignal);
     _ = c.signal(c.SIGTERM, handleSignal);
 
-    const stdout = std.fs.File.stdout();
-    defer terminal.restoreTerminal(stdout);
+    const stdout: std.Io.File = .stdout();
+    defer terminal.restoreTerminal(io, stdout);
 
-    try editor.start_editor(allocator, cfg);
-}
-
-pub fn panicHandler(msg: []const u8, trace: ?*std.builtin.StackTrace) noreturn {
-    const stdout = std.fs.File.stdout();
-    terminal.restoreTerminal(stdout);
-
-    std.debug.print("panic: {s}\n", .{msg});
-
-    if (trace) |t| {
-        std.debug.dumpStackTrace(t.*);
-    }
-
-    std.process.exit(1);
+    try editor.start_editor(io, allocator, cfg);
 }
 
 pub fn handleSignal(sig: c_int) callconv(.c) void {
-    const stdout = std.fs.File.stdout();
-
-    // Best-effort restore only
-    terminal.restoreTerminal(stdout);
+    const stdout: std.Io.File = .stdout();
+    if (global_io) |io| {
+        // Best-effort restore only
+        terminal.restoreTerminal(io, stdout);
+    }
 
     // Avoid std.debug.print here (not signal-safe)
     _ = sig;
