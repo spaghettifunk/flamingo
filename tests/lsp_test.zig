@@ -5,13 +5,13 @@ const event_queue = @import("../src/editor/event_queue.zig");
 test "LspManager: pathToUri constructs correct absolute URIs" {
     const a = std.testing.allocator;
     const queue = try a.create(event_queue.EventQueue);
-    queue.* = event_queue.EventQueue.init(a);
+    queue.* = event_queue.EventQueue.init(a, std.testing.io);
     defer {
         queue.deinit();
         a.destroy(queue);
     }
 
-    var mgr = try lsp_manager.LspManager.init(a, queue);
+    var mgr = try lsp_manager.LspManager.init(a, std.testing.io, queue);
     defer mgr.deinit();
 
     // Test with relative path

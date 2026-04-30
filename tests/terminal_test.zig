@@ -88,11 +88,11 @@ test "KeyEvent.eql: different modifier" {
 }
 
 // ── readKey with mocked reader ─────────────────────────────────────────────────
-// We use std.io.fixedBufferStream to feed raw byte sequences.
+// We use a fixed std.Io.Reader to feed raw byte sequences.
 
 fn readKeyFrom(bytes: []const u8) !KeyEvent {
-    var fbs = std.io.fixedBufferStream(bytes);
-    return terminal.readKey(fbs.reader());
+    var reader = std.Io.Reader.fixed(bytes);
+    return terminal.readKey(&reader);
 }
 
 test "readKey: ASCII printable char 'a'" {

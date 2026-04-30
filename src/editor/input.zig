@@ -19,7 +19,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (is_ctrl_e) {
         if (ed.tree == null) {
-            ed.tree = explorer.Explorer.init(ed.allocator, ".") catch null;
+            ed.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
         }
         ed.explorer_visible = !ed.explorer_visible;
         if (ed.explorer_visible) {
@@ -79,7 +79,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     's' => {
                         if (ed.currentTab()) |tab| {
                             if (tab.buf.filename) |f| {
-                                try tab.buf.saveToFile(f);
+                                try tab.buf.saveToFile(ed.io, f);
                             }
                         }
                         return;
@@ -138,7 +138,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     if (node.is_dir) {
                         ed.tree.?.toggleExpand() catch {};
                     } else {
-                        if (buffer.Buffer.loadFromFile(ed.allocator, node.absolute_path)) |b| {
+                        if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, node.absolute_path)) |b| {
                             try ed.addTab(b);
                             ed.explorer_focused = false;
                             ed.mode = .Normal;
@@ -172,7 +172,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     if (ed.tree) |*t| {
                         t.deinit();
                     }
-                    ed.tree = explorer.Explorer.init(ed.allocator, ".") catch |err| {
+                    ed.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch |err| {
                         logz.err().fmt("msg", "failed to init explorer: {s}", .{@errorName(err)}).log();
                         return;
                     };
@@ -276,7 +276,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
             } else if (event.key == .Enter) {
                 if (ed.command_buffer.items.len > 0) {
-                    if (buffer.Buffer.loadFromFile(ed.allocator, ed.command_buffer.items)) |b| {
+                    if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.command_buffer.items)) |b| {
                         try ed.addTab(b);
                         ed.mode = .Normal;
                     } else |_| {

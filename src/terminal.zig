@@ -79,7 +79,21 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
 
 var orig_termios: ?std.posix.termios = null;
 
-pub fn enableRawMode() !void {
+fn DeclType(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr| ptr.child,
+        else => T,
+    };
+}
+
+fn readShort(reader: anytype, buffer: []u8) !usize {
+    if (comptime @hasDecl(DeclType(@TypeOf(reader)), "readSliceShort")) {
+        return reader.readSliceShort(buffer);
+    }
+    return reader.read(buffer);
+}
+
+pub fn enableRawMode(io: std.Io) !void {
     const fd = std.posix.STDIN_FILENO;
     const termios = try std.posix.tcgetattr(fd);
     orig_termios = termios;
@@ -107,9 +121,9 @@ pub fn enableRawMode() !void {
 
     try std.posix.tcsetattr(fd, .FLUSH, raw);
 
-    var stdout = std.fs.File.stdout();
-    try stdout.writeAll("\x1b[?1049h"); // enter alt screen
-    try stdout.writeAll("\x1b[?25l"); // hide cursor
+    const stdout: std.Io.File = .stdout();
+    try stdout.writeStreamingAll(io, "\x1b[?1049h"); // enter alt screen
+    try stdout.writeStreamingAll(io, "\x1b[?25l"); // hide cursor
 }
 
 pub fn disableRawMode() void {
@@ -165,7 +179,7 @@ pub fn showCursor(writer: anytype) !void {
 
 pub fn readKey(reader: anytype) !KeyEvent {
     var buf: [1]u8 = undefined;
-    const n = try reader.read(&buf);
+    const n = try readShort(reader, &buf);
     if (n == 0) return KeyEvent{}; // Timeout or EOF
 
     const c = buf[0];
@@ -176,7 +190,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
         var seq: [16]u8 = undefined;
         var seq_len: usize = 0;
 
-        if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
+        if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) {
             event.key = .Esc;
             return event;
         }
@@ -185,7 +199,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
         var alt_prefix = false;
         if (seq[0] == '\x1b') {
             alt_prefix = true;
-            if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) {
+            if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) {
                 event.key = .Esc;
                 return event;
             }
@@ -194,7 +208,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
 
         if (seq[0] == '[' or seq[0] == 'O') {
             while (seq_len < seq.len) {
-                if ((try reader.read(seq[seq_len .. seq_len + 1])) == 0) break;
+                if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) break;
                 const ch = seq[seq_len];
                 seq_len += 1;
                 if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or ch == '~') {
@@ -338,7 +352,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
                 const len: usize = if (c & 0xe0 == 0xc0) 2 else if (c & 0xf0 == 0xe0) 3 else if (c & 0xf8 == 0xf0) 4 else 1;
 
                 for (1..len) |i| {
-                    _ = try reader.read(utf8_buf[i .. i + 1]);
+                    _ = try readShort(reader, utf8_buf[i .. i + 1]);
                 }
 
                 // Common Mac Option shortcuts in UTF-8
@@ -369,15 +383,15 @@ pub fn readKey(reader: anytype) !KeyEvent {
     return event;
 }
 
-pub fn restoreTerminal(writer: std.fs.File) void {
+pub fn restoreTerminal(io: std.Io, writer: std.Io.File) void {
     // Restore termios first
     disableRawMode();
 
     // Best-effort ANSI reset (ignore errors)
-    writer.writeAll("\x1b[?1049l") catch {}; // leave alt screen
-    writer.writeAll("\x1b[?25h") catch {}; // show cursor
-    writer.writeAll("\x1b[0m") catch {}; // reset styles
-    writer.writeAll("\x1b[2J\x1b[H") catch {}; // clear + home
+    writer.writeStreamingAll(io, "\x1b[?1049l") catch {}; // leave alt screen
+    writer.writeStreamingAll(io, "\x1b[?25h") catch {}; // show cursor
+    writer.writeStreamingAll(io, "\x1b[0m") catch {}; // reset styles
+    writer.writeStreamingAll(io, "\x1b[2J\x1b[H") catch {}; // clear + home
 
     // Flush if possible (depends on writer type)
     if (@hasDecl(@TypeOf(writer), "context")) {

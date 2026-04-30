@@ -246,7 +246,7 @@ test "Command: :w saves file to disk" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/saved.txt", .{dir_path});
     defer a.free(file_path);
 
@@ -263,7 +263,7 @@ test "Command: :w saves file to disk" {
     });
 
     // File should exist on disk.
-    const stat = try std.fs.cwd().statFile(file_path);
+    const stat = try std.Io.Dir.cwd().statFile(std.testing.io, file_path, .{});
     try std.testing.expect(stat.size > 0);
     try std.testing.expect(!ed.currentTab().?.buf.is_dirty);
 }
@@ -535,7 +535,7 @@ test "Ctrl+S saves current file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = try tmp.dir.realpath(".", &path_buf);
+    const dir_path = path_buf[0..try tmp.dir.realPath(std.testing.io, &path_buf)];
     const file_path = try std.fmt.allocPrint(a, "{s}/ctrl_s.txt", .{dir_path});
     defer a.free(file_path);
 

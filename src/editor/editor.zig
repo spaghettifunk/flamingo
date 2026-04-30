@@ -49,6 +49,7 @@ pub const Tab = struct {
 pub const Editor = struct {
     config: config.Config,
     allocator: std.mem.Allocator,
+    io: std.Io,
     mode: EditorMode = .Dashboard,
     dash: dashboard.Dashboard = .{},
     tabs: std.ArrayList(Tab),
@@ -74,14 +75,15 @@ pub const Editor = struct {
 
     diagnostics: std.StringHashMap(std.json.Value),
 
-    pub fn init(allocator: std.mem.Allocator, cfg: config.Config) !Editor {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
         const queue = try allocator.create(event_queue.EventQueue);
-        queue.* = event_queue.EventQueue.init(allocator);
+        queue.* = event_queue.EventQueue.init(allocator, io);
 
-        const mgr = try lsp_manager.LspManager.init(allocator, queue);
+        const mgr = try lsp_manager.LspManager.init(allocator, io, queue);
 
         return Editor{
             .allocator = allocator,
+            .io = io,
             .config = cfg,
             .tabs = std.ArrayList(Tab).empty,
             .search_system = search.SearchSystem.init(allocator),
@@ -203,17 +205,21 @@ pub const Editor = struct {
     }
 
     pub fn run(self: *Editor) !void {
-        const stdout = std.fs.File.stdout();
-        const stdin = std.fs.File.stdin();
+        const stdout = std.Io.File.stdout();
+        const stdin = std.Io.File.stdin();
+        var stdout_buf: [0]u8 = .{};
+        var stdin_buf: [1]u8 = undefined;
+        var stdout_writer = stdout.writerStreaming(self.io, &stdout_buf);
+        var stdin_reader = stdin.readerStreaming(self.io, &stdin_buf);
 
-        try terminal.enableRawMode();
+        try terminal.enableRawMode(self.io);
         defer terminal.disableRawMode();
 
         const size = try terminal.getSize();
         self.width = size.cols;
         self.height = size.rows;
 
-        try self.runWithIO(stdin, stdout);
+        try self.runWithIO(&stdin_reader.interface, &stdout_writer.interface);
     }
 
     /// Run the editor event loop with explicit reader/writer.
@@ -223,7 +229,8 @@ pub const Editor = struct {
     pub fn runWithIO(self: *Editor, reader: anytype, raw_writer: anytype) !void {
         var render_buffer = std.ArrayListUnmanaged(u8).empty;
         defer render_buffer.deinit(self.allocator);
-        const writer = render_buffer.writer(self.allocator);
+        var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &render_buffer);
+        const writer = &aw.writer;
 
         while (!self.should_quit) {
             // Pump events
@@ -264,11 +271,11 @@ pub const Editor = struct {
                                     const uri = diag_val.object.get("uri").?.string;
                                     // filename is after file://
                                     const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
-                                    
+
                                     if (self.diagnostics.get(fname)) |old| {
                                         mgr.freeValue(old);
                                     }
-                                    
+
                                     const fname_copy = try self.allocator.dupe(u8, fname);
                                     try self.diagnostics.put(fname_copy, diag_val);
                                 },
@@ -279,12 +286,12 @@ pub const Editor = struct {
                 }
             }
 
-            render_buffer.clearRetainingCapacity();
+            aw.clearRetainingCapacity();
             try terminal.hideCursor(writer);
             try self.render(writer);
             try self.renderCompletionMenu(writer);
             try terminal.showCursor(writer);
-            try raw_writer.writeAll(render_buffer.items);
+            try raw_writer.writeAll(aw.written());
 
             const event = try terminal.readKey(reader);
             if (event.key == .None) continue;
@@ -613,8 +620,7 @@ pub const Editor = struct {
                 } else {
                     break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len });
                 }
-            } else
-                try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
+            } else try std.fmt.bufPrint(&buf, " {s} | No file open ", .{mode_str});
 
             try writer.writeAll(status_text);
 
@@ -680,7 +686,7 @@ pub const Editor = struct {
 
         const explorer_width = if (self.explorer_visible) self.width / 5 else 0;
         const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
-        
+
         // Relative row in viewport
         const rel_row = mc.row - tab.scroll_row;
         const col = explorer_width + gutter_width + mc.col + 1;
@@ -703,7 +709,7 @@ pub const Editor = struct {
 
         const max_height = 10;
         const visible_count = @min(items.len, max_height);
-        
+
         // Flipped menu if near bottom
         var row = rel_row + 3 + 1;
         if (row + visible_count >= self.height - 1) {
@@ -722,7 +728,7 @@ pub const Editor = struct {
             if (item_idx >= items.len) break;
 
             try terminal.moveCursor(writer, row + i, col);
-            
+
             if (item_idx == self.completion_selected) {
                 try writer.writeAll("\x1b[48;5;25m\x1b[38;5;255m"); // Blue selection, white text
             } else {
@@ -732,7 +738,7 @@ pub const Editor = struct {
             const item = items[item_idx].object;
             const label = item.get("label").?.string;
             const kind_val = if (item.get("kind")) |k| @as(u8, @intCast(k.integer)) else @as(u8, 0);
-            
+
             const kind_str = switch (kind_val) {
                 1 => "Text",
                 2 => "Method",
@@ -753,8 +759,8 @@ pub const Editor = struct {
             };
 
             // Pad to fixed width and show kind
-            try writer.print(" {s: <6} │ {s: <30} ", .{kind_str, label[0..@min(label.len, 30)]});
-            
+            try writer.print(" {s: <6} │ {s: <30} ", .{ kind_str, label[0..@min(label.len, 30)] });
+
             // If selected, maybe show detail on the right
             if (item_idx == self.completion_selected) {
                 if (item.get("detail")) |d| {
@@ -767,7 +773,7 @@ pub const Editor = struct {
                     }
                 }
             }
-            
+
             try writer.writeAll("\x1b[0m");
         }
     }
@@ -846,7 +852,7 @@ pub const Editor = struct {
 
 test "Editor.calculateGutterWidth" {
     const cfg = config.Config{};
-    var ed = try Editor.init(std.testing.allocator, cfg);
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
     defer ed.deinit();
 
     // 1-99 lines => 2 digits min => 1 + 2 + 1 = 4
@@ -858,8 +864,8 @@ test "Editor.calculateGutterWidth" {
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
 }
 
-pub fn start_editor(allocator: std.mem.Allocator, cfg: config.Config) !void {
-    var editor = try Editor.init(allocator, cfg);
+pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
+    var editor = try Editor.init(allocator, io, cfg);
     defer editor.deinit();
     try editor.run();
 }

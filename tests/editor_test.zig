@@ -157,7 +157,7 @@ test "Editor: currentTab returns correct tab" {
 test "Editor: calculateGutterWidth boundary values" {
     const a = std.testing.allocator;
     const cfg = config.Config{};
-    var ed = try Editor.init(a, cfg);
+    var ed = try Editor.init(a, std.testing.io, cfg);
     defer ed.deinit();
     // No tabs to deinit, just the struct.
 

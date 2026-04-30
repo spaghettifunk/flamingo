@@ -9,23 +9,25 @@ pub const Event = union(enum) {
 
 pub const EventQueue = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
-    cond: std.Thread.Condition,
+    io: std.Io,
+    mutex: std.Io.Mutex,
+    cond: std.Io.Condition,
     items: std.ArrayList(Event),
     quit: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator) EventQueue {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) EventQueue {
         return .{
             .allocator = allocator,
-            .mutex = .{},
-            .cond = .{},
+            .io = io,
+            .mutex = .init,
+            .cond = .init,
             .items = std.ArrayList(Event).empty,
         };
     }
 
     pub fn deinit(self: *EventQueue) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         for (self.items.items) |ev| {
             switch (ev) {
                 .lsp_message => |msg| {
@@ -37,16 +39,16 @@ pub const EventQueue = struct {
     }
 
     pub fn push(self: *EventQueue, event: Event) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
         try self.items.append(self.allocator, event);
-        self.cond.signal();
+        self.cond.signal(self.io);
     }
 
     /// Non-blocking pop. Returns null if empty.
     pub fn tryPop(self: *EventQueue) ?Event {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         if (self.items.items.len == 0) return null;
         return self.items.orderedRemove(0);
     }

@@ -7,16 +7,18 @@ const logz = @import("logz");
 
 pub const LspManager = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     plugin_mgr: plugin.PluginManager,
     clients: std.StringHashMap(*lsp_client.LspClient),
     queue: *event_queue.EventQueue,
 
-    pub fn init(allocator: std.mem.Allocator, queue: *event_queue.EventQueue) !LspManager {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, queue: *event_queue.EventQueue) !LspManager {
         var mgr = plugin.PluginManager.init(allocator);
         try mgr.registerDefaults();
 
         return .{
             .allocator = allocator,
+            .io = io,
             .plugin_mgr = mgr,
             .clients = std.StringHashMap(*lsp_client.LspClient).init(allocator),
             .queue = queue,
@@ -37,7 +39,7 @@ pub const LspManager = struct {
         if (self.plugin_mgr.getPluginForExtension(ext)) |p| {
             if (!self.clients.contains(p.name)) {
                 logz.info().fmt("msg", "Starting LSP for plugin {s}", .{p.name}).log();
-                const client = try lsp_client.LspClient.start(self.allocator, p.name, p.lsp_command, self.queue);
+                const client = try lsp_client.LspClient.start(self.allocator, self.io, p.name, p.lsp_command, self.queue);
                 try self.clients.put(p.name, client);
 
                 try self.sendInitialize(client);
@@ -46,7 +48,7 @@ pub const LspManager = struct {
     }
 
     fn sendInitialize(self: *LspManager, client: *lsp_client.LspClient) !void {
-        const cwd = std.fs.cwd().realpathAlloc(self.allocator, ".") catch |err| {
+        const cwd = std.Io.Dir.cwd().realPathFileAlloc(self.io, ".", self.allocator) catch |err| {
             logz.err().fmt("msg", "Failed to get CWD for LSP rootUri: {any}", .{err}).log();
             return err;
         };
@@ -93,12 +95,12 @@ pub const LspManager = struct {
                 const id = @as(usize, @intCast(id_val.integer));
                 if (client.pending_requests.get(id)) |req_type| {
                     _ = client.pending_requests.remove(id);
-                    
+
                     switch (req_type) {
                         .initialize => {
                             client.state = .ready;
                             logz.info().fmt("msg", "LSP {s} initialized successfully", .{plugin_name}).log();
-                            
+
                             const notif = protocol.InitializedNotification{};
                             try client.send(notif);
                             return .initialized;
@@ -143,16 +145,16 @@ pub const LspManager = struct {
                 return .{ .array = new_arr };
             },
             .object => |obj| {
-                var new_obj = std.json.ObjectMap.init(allocator);
+                var new_obj: std.json.ObjectMap = .{};
                 var it = obj.iterator();
                 while (it.next()) |entry| {
-                    try new_obj.put(try allocator.dupe(u8, entry.key_ptr.*), try cloneValue(allocator, entry.value_ptr.*));
+                    try new_obj.put(allocator, try allocator.dupe(u8, entry.key_ptr.*), try cloneValue(allocator, entry.value_ptr.*));
                 }
                 return .{ .object = new_obj };
             },
         }
     }
-    
+
     pub fn freeValue(self: *LspManager, v: std.json.Value) void {
         switch (v) {
             .number_string => |s| self.allocator.free(s),
@@ -171,7 +173,7 @@ pub const LspManager = struct {
                     self.freeValue(entry.value_ptr.*);
                 }
                 var mutable_obj = obj;
-                mutable_obj.deinit();
+                mutable_obj.deinit(self.allocator);
             },
             else => {},
         }
@@ -181,13 +183,13 @@ pub const LspManager = struct {
         const ext = std.fs.path.extension(filename);
         const p = self.plugin_mgr.getPluginForExtension(ext) orelse return;
         const client = self.clients.get(p.name) orelse return;
-        
+
         try client.opened_files.put(filename, true);
-        
+
         if (client.state == .ready) {
             const uri = try self.pathToUri(self.allocator, filename);
             defer self.allocator.free(uri);
-            
+
             try client.document_versions.put(filename, 1);
 
             const notif = protocol.DidOpenNotification{
@@ -256,17 +258,24 @@ pub const LspManager = struct {
     }
 
     pub fn pathToUri(self: *LspManager, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-        _ = self;
-        var abs_path: []u8 = undefined;
+        var abs_path: []const u8 = undefined;
+        var owned_path: ?[]u8 = null;
+        var owned_path_z: ?[:0]u8 = null;
+        defer {
+            if (owned_path) |p| allocator.free(p);
+            if (owned_path_z) |p| allocator.free(p);
+        }
+
         if (std.fs.path.isAbsolute(path)) {
-            abs_path = try allocator.dupe(u8, path);
+            owned_path = try allocator.dupe(u8, path);
+            abs_path = owned_path.?;
         } else {
-            abs_path = std.fs.cwd().realpathAlloc(allocator, path) catch |err| {
+            owned_path_z = std.Io.Dir.cwd().realPathFileAlloc(self.io, path, allocator) catch |err| {
                 logz.err().fmt("msg", "Failed to get realpath for {s}: {any}", .{ path, err }).log();
                 return try allocator.dupe(u8, path); // fallback to original
             };
+            abs_path = owned_path_z.?;
         }
-        defer allocator.free(abs_path);
 
         return try std.fmt.allocPrint(allocator, "file://{s}", .{abs_path});
     }

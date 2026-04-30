@@ -63,11 +63,11 @@ test "Line: writeTo respects max_len" {
     var line = try Line.fromSlice(a, "hello world");
     defer line.deinit();
 
-    var out = std.ArrayListUnmanaged(u8).empty;
-    defer out.deinit(a);
+    var out: [5]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
 
-    try line.writeTo(out.writer(a), 5);
-    try std.testing.expectEqualStrings("hello", out.items);
+    try line.writeTo(&writer, 5);
+    try std.testing.expectEqualStrings("hello", out[0..writer.end]);
 }
 
 test "Line: len() is zero for empty line" {

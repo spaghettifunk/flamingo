@@ -16,6 +16,7 @@ pub const RequestType = enum {
 
 pub const LspClient = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     plugin_name: []const u8,
     process: std.process.Child,
     reader_thread: std.Thread,
@@ -30,6 +31,7 @@ pub const LspClient = struct {
 
     pub fn start(
         allocator: std.mem.Allocator,
+        io: std.Io,
         plugin_name: []const u8,
         command: []const []const u8,
         queue: *event_queue.EventQueue,
@@ -39,22 +41,24 @@ pub const LspClient = struct {
 
         client.* = .{
             .allocator = allocator,
+            .io = io,
             .plugin_name = try allocator.dupe(u8, plugin_name),
             .queue = queue,
             .quit_flag = std.atomic.Value(bool).init(false),
             .opened_files = std.StringHashMap(bool).init(allocator),
             .document_versions = std.StringHashMap(i32).init(allocator),
             .pending_requests = std.AutoHashMap(usize, RequestType).init(allocator),
-            .process = std.process.Child.init(command, allocator),
+            .process = undefined,
             .reader_thread = undefined,
             .stderr_thread = undefined,
         };
 
-        client.process.stdin_behavior = .Pipe;
-        client.process.stdout_behavior = .Pipe;
-        client.process.stderr_behavior = .Pipe;
-
-        try client.process.spawn();
+        client.process = try std.process.spawn(io, .{
+            .argv = command,
+            .stdin = .pipe,
+            .stdout = .pipe,
+            .stderr = .pipe,
+        });
 
         client.reader_thread = try std.Thread.spawn(.{}, readerLoop, .{client});
         client.stderr_thread = try std.Thread.spawn(.{}, stderrLoop, .{client});
@@ -65,7 +69,7 @@ pub const LspClient = struct {
     pub fn stop(self: *LspClient) void {
         self.quit_flag.store(true, .seq_cst);
 
-        _ = self.process.kill() catch {};
+        self.process.kill(self.io);
 
         self.reader_thread.join();
         self.stderr_thread.join();
@@ -78,9 +82,11 @@ pub const LspClient = struct {
 
     fn readerLoop(self: *LspClient) void {
         const stdout = self.process.stdout orelse return;
+        var reader_buf: [4096]u8 = undefined;
+        var reader = stdout.readerStreaming(self.io, &reader_buf);
 
         while (!self.quit_flag.load(.seq_cst)) {
-            var msg = rpc.readMessage(self.allocator, stdout) catch |err| {
+            var msg = rpc.readMessage(self.allocator, &reader.interface) catch |err| {
                 if (err == error.EndOfStream) break;
                 logz.err().fmt("msg", "rpc read error: {any}", .{err}).log();
                 break;
@@ -104,12 +110,13 @@ pub const LspClient = struct {
         const stdin = self.process.stdin orelse return error.NoStdin;
 
         var writer_buf: [1]u8 = undefined;
-        var w = stdin.writer(&writer_buf).interface;
-        try rpc.writeMessage(&w, json_payload);
+        var w = stdin.writer(self.io, &writer_buf);
+        try rpc.writeMessage(&w.interface, json_payload);
+        try w.interface.flush();
     }
 
     pub fn send(self: *LspClient, payload: anytype) !void {
-        var out = std.io.Writer.Allocating.init(self.allocator);
+        var out = std.Io.Writer.Allocating.init(self.allocator);
         defer out.deinit();
         try std.json.Stringify.value(payload, .{}, &out.writer);
         const json = out.written();
@@ -120,9 +127,11 @@ pub const LspClient = struct {
     fn stderrLoop(self: *LspClient) void {
         const stderr = self.process.stderr orelse return;
         var buf: [1024]u8 = undefined;
+        var reader_buf: [4096]u8 = undefined;
+        var reader = stderr.readerStreaming(self.io, &reader_buf);
 
         while (!self.quit_flag.load(.seq_cst)) {
-            const n = stderr.read(&buf) catch break;
+            const n = reader.interface.readSliceShort(&buf) catch break;
             if (n == 0) break;
             logz.info().fmt("lsp_stderr", "[{s}] {s}", .{ self.plugin_name, buf[0..n] }).log();
         }

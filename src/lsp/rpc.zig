@@ -1,5 +1,19 @@
 const std = @import("std");
 
+fn DeclType(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr| ptr.child,
+        else => T,
+    };
+}
+
+fn readShort(reader: anytype, buffer: []u8) !usize {
+    if (comptime @hasDecl(DeclType(@TypeOf(reader)), "readSliceShort")) {
+        return reader.readSliceShort(buffer);
+    }
+    return reader.read(buffer);
+}
+
 pub const RpcMessage = struct {
     allocator: std.mem.Allocator,
     content: []u8, // JSON content
@@ -20,7 +34,7 @@ pub fn readMessage(allocator: std.mem.Allocator, reader: anytype) !RpcMessage {
         var len: usize = 0;
         while (len < line_buf.len) {
             var b: [1]u8 = undefined;
-            const n = try reader.read(&b);
+            const n = try readShort(reader, &b);
             if (n == 0) return error.EndOfStream;
             
             line_buf[len] = b[0];
@@ -48,7 +62,7 @@ pub fn readMessage(allocator: std.mem.Allocator, reader: anytype) !RpcMessage {
 
     var bytes_read: usize = 0;
     while (bytes_read < content_length) {
-        const n = try reader.read(content[bytes_read..]);
+        const n = try readShort(reader, content[bytes_read..]);
         if (n == 0) return error.UnexpectedEndOfStream;
         bytes_read += n;
     }
@@ -66,14 +80,14 @@ pub fn writeMessage(writer: anytype, json_content: []const u8) !void {
 
 test "rpc write and read" {
     const alloc = std.testing.allocator;
-    var buf = std.ArrayList(u8).empty;
-    defer buf.deinit(alloc);
+    var out = std.Io.Writer.Allocating.init(alloc);
+    defer out.deinit();
 
     const payload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}";
-    try writeMessage(buf.writer(alloc), payload);
+    try writeMessage(&out.writer, payload);
 
-    var fbs = std.io.fixedBufferStream(buf.items);
-    var msg = try readMessage(alloc, fbs.reader());
+    var reader = std.Io.Reader.fixed(out.written());
+    var msg = try readMessage(alloc, &reader);
     defer msg.deinit();
 
     try std.testing.expectEqualStrings(payload, msg.content);

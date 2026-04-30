@@ -30,11 +30,12 @@ pub fn validate(_: *const Config) ConfigError!void {}
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 pub fn loadFile(
+    io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
 ) !toml.Parsed(Config) {
     // Read the whole file into a slice — caller's allocator owns it.
-    const source = try std.fs.cwd().readFileAlloc(allocator, path, 4 * 1024 * 1024);
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, std.Io.Limit.limited(4 * 1024 * 1024));
     defer allocator.free(source);
 
     var parser = toml.Parser(Config).init(allocator);

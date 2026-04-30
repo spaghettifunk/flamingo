@@ -233,16 +233,16 @@ pub const Buffer = struct {
         return true;
     }
 
-    pub fn saveToFile(self: *Buffer, filename: []const u8) !void {
-        const file = try std.fs.cwd().createFile(filename, .{});
-        defer file.close();
+    pub fn saveToFile(self: *Buffer, io: std.Io, filename: []const u8) !void {
+        const file = try std.Io.Dir.cwd().createFile(io, filename, .{});
+        defer file.close(io);
 
         for (self.lines.items) |*line| {
             const data = try line.slice(self.allocator);
             defer self.allocator.free(data);
 
-            try file.writeAll(data);
-            try file.writeAll("\n");
+            try file.writeStreamingAll(io, data);
+            try file.writeStreamingAll(io, "\n");
         }
 
         self.is_dirty = false;
@@ -260,12 +260,10 @@ pub const Buffer = struct {
         return out.toOwnedSlice(allocator);
     }
 
-    pub fn loadFromFile(allocator: std.mem.Allocator, filename: []const u8) !Buffer {
+    pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Buffer {
         logz.debug().fmt("msg", "loading file: {s}", .{filename}).log();
-        const file = try std.fs.cwd().openFile(filename, .{});
-        defer file.close();
 
-        const contents = try file.readToEndAlloc(allocator, 100 * 1024 * 1024); // 100MB limit
+        const contents = try std.Io.Dir.cwd().readFileAlloc(io, filename, allocator, std.Io.Limit.limited(100 * 1024 * 1024)); // 100MB limit
         defer allocator.free(contents);
 
         var buf = Buffer{
