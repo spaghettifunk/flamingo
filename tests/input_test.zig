@@ -561,6 +561,58 @@ test "configured close_tab key is used" {
     try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
 }
 
+test "configured Ctrl+Shift+K delete_line works when terminal reports Ctrl+K" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "keep", "delete", "also keep" });
+    defer ed.deinit();
+
+    ed.currentTab().?.mainCursor().row = 1;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('k')});
+
+    const tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 2), tab.buf.lines.items.len);
+    try expectLine(a, &ed, 0, "keep");
+    try expectLine(a, &ed, 1, "also keep");
+}
+
+test "configured Ctrl+E switches explorer focus" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.switch_focus = "ctrl+e";
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
+    try std.testing.expect(ed.explorer_visible);
+    try std.testing.expect(ed.explorer_focused);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try std.testing.expect(!ed.explorer_focused);
+}
+
+test "plain Tab inserts indentation when explorer is visible" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.switch_focus = "ctrl+e";
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
+    try std.testing.expect(ed.explorer_visible);
+    try std.testing.expect(ed.explorer_focused);
+
+    ed.mode = .Insert;
+    ed.explorer_focused = false;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
+    try expectLine(a, &ed, 0, "    ");
+    try std.testing.expect(!ed.explorer_focused);
+}
+
 test "Ctrl+S saves current file" {
     const a = std.testing.allocator;
     const log = try th.setupLogger(a);

@@ -39,6 +39,44 @@ test "Editor: addTab increases count and sets active index" {
     try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
 }
 
+test "Editor: addTab focuses existing tab for duplicate filename" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    var first = try Buffer.init(a);
+    try first.setFilename("/tmp/flamingo-duplicate.txt");
+    try ed.addTab(first);
+
+    var other = try Buffer.init(a);
+    try other.setFilename("/tmp/flamingo-other.txt");
+    try ed.addTab(other);
+    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+
+    var duplicate = try Buffer.init(a);
+    try duplicate.setFilename("/tmp/flamingo-duplicate.txt");
+    try ed.addTab(duplicate);
+
+    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+}
+
+test "Editor: addTab still allows multiple unsaved tabs" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    const first = try Buffer.init(a);
+    try ed.addTab(first);
+
+    const second = try Buffer.init(a);
+    try ed.addTab(second);
+
+    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+}
+
 test "Editor: closeTab on only tab switches to Dashboard" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
@@ -150,6 +188,33 @@ test "Editor: currentTab returns correct tab" {
     ed.active_tab_index = 0;
     try std.testing.expect(ed.currentTab() != null);
     try std.testing.expectEqual(&ed.tabs.items[0], ed.currentTab().?);
+}
+
+test "Editor: render includes syntax, selection, and search styling" {
+    const a = std.testing.allocator;
+    const logger = try th.setupLogger(a);
+    defer logger.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"const value = \"hi\";"});
+    defer ed.deinit();
+
+    ed.mode = .Normal;
+    try ed.currentTab().?.buf.setFilename("main.zig");
+    ed.currentTab().?.mainCursor().selection_start = .{ .row = 0, .col = 0 };
+    ed.currentTab().?.mainCursor().col = 5;
+    try ed.search_buffer.appendSlice(a, "value");
+    try ed.search_system.?.update(&ed.currentTab().?.buf, ed.search_buffer.items);
+
+    var reader = std.Io.Reader.fixed("\x11");
+    var out = std.Io.Writer.Allocating.init(a);
+    defer out.deinit();
+
+    try ed.runWithIO(&reader, &out.writer);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[38;5;177m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[48;5;239m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[48;5;214m\x1b[30m") != null);
 }
 
 // ── calculateGutterWidth ──────────────────────────────────────────────────────

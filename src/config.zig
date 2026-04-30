@@ -9,7 +9,7 @@ pub const KeybindingsConfig = struct {
     quit: []const u8 = "ctrl+q",
 
     toggle_explorer: []const u8 = "ctrl+b",
-    switch_focus: []const u8 = "ctrl+tab",
+    switch_focus: []const u8 = "ctrl+e",
     close_tab: []const u8 = "ctrl+w",
     next_tab: []const u8 = "alt+[",
     previous_tab: []const u8 = "alt+]",

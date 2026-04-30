@@ -7,6 +7,7 @@ const dashboard = @import("dashboard.zig");
 const explorer = @import("explorer.zig");
 const input = @import("input.zig");
 const search = @import("search.zig");
+const syntax = @import("syntax.zig");
 const lsp_manager = @import("../lsp/manager.zig");
 const event_queue = @import("event_queue.zig");
 
@@ -33,10 +34,12 @@ pub const Cursor = struct {
 pub const Tab = struct {
     buf: buffer.Buffer,
     cursors: std.ArrayListUnmanaged(Cursor),
+    syntax_highlighter: syntax.Highlighter,
     main_cursor_idx: usize = 0,
     scroll_row: usize = 0,
 
     pub fn deinit(self: *Tab, allocator: std.mem.Allocator) void {
+        self.syntax_highlighter.deinit();
         self.buf.deinit();
         self.cursors.deinit(allocator);
     }
@@ -153,11 +156,25 @@ pub const Editor = struct {
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
+        if (buf.filename) |new_filename| {
+            for (self.tabs.items, 0..) |*tab, i| {
+                if (tab.buf.filename) |existing_filename| {
+                    if (std.mem.eql(u8, existing_filename, new_filename)) {
+                        var duplicate = buf;
+                        duplicate.deinit();
+                        self.active_tab_index = i;
+                        return;
+                    }
+                }
+            }
+        }
+
         var cursors = std.ArrayListUnmanaged(Cursor).empty;
         try cursors.append(self.allocator, .{});
         try self.tabs.append(self.allocator, .{
             .buf = buf,
             .cursors = cursors,
+            .syntax_highlighter = syntax.Highlighter.init(self.allocator),
         });
         self.active_tab_index = self.tabs.items.len - 1;
 
@@ -480,6 +497,9 @@ pub const Editor = struct {
 
         // Hybrid (Vim-style) line number gutter: absolute on current line, relative elsewhere.
         const tab = self.currentTab();
+        if (tab) |t| {
+            t.syntax_highlighter.ensureForBuffer(&t.buf) catch {};
+        }
         const gutter_width: usize = if (tab) |t|
             self.calculateGutterWidth(t.buf.lines.items.len)
         else
@@ -547,6 +567,7 @@ pub const Editor = struct {
 
                     var char_idx: usize = 0;
                     var m_idx: usize = 0;
+                    const line_start_byte = t.syntax_highlighter.lineStartByte(buffer_line_idx);
                     while (char_idx < line_content.len and char_idx < content_width) : (char_idx += 1) {
                         var in_selection = false;
                         for (t.cursors.items) |cursor| {
@@ -566,6 +587,10 @@ pub const Editor = struct {
                                     if (char_idx < e_col) in_selection = true;
                                 }
                             }
+                        }
+
+                        if (t.syntax_highlighter.styleAt(line_start_byte + char_idx)) |style| {
+                            try writer.writeAll(style.ansi());
                         }
 
                         if (in_selection) {

@@ -11,7 +11,20 @@ fn binding(chord: []const u8) terminal.KeyEvent {
 }
 
 fn matches(event: terminal.KeyEvent, chord: []const u8) bool {
-    return event.eql(binding(chord));
+    const expected = binding(chord);
+    if (event.eql(expected)) return true;
+
+    // Most terminals encode Ctrl+Shift+letter the same way as Ctrl+letter, so
+    // the shift bit can be lost before it reaches the editor.
+    if (expected.ctrl and expected.shift and expected.key == .Char and
+        expected.char >= 'a' and expected.char <= 'z')
+    {
+        var without_shift = expected;
+        without_shift.shift = false;
+        return event.eql(without_shift);
+    }
+
+    return false;
 }
 
 fn matchesMovement(event: terminal.KeyEvent, chord: []const u8) bool {
