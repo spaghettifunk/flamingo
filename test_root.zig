@@ -16,4 +16,5 @@ test {
     _ = @import("src/editor/buffer.zig");
     _ = @import("src/editor/actions.zig");
     _ = @import("src/editor/search.zig");
+    _ = @import("src/editor/syntax.zig");
 }

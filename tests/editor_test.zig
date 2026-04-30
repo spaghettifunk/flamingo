@@ -190,6 +190,33 @@ test "Editor: currentTab returns correct tab" {
     try std.testing.expectEqual(&ed.tabs.items[0], ed.currentTab().?);
 }
 
+test "Editor: render includes syntax, selection, and search styling" {
+    const a = std.testing.allocator;
+    const logger = try th.setupLogger(a);
+    defer logger.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"const value = \"hi\";"});
+    defer ed.deinit();
+
+    ed.mode = .Normal;
+    try ed.currentTab().?.buf.setFilename("main.zig");
+    ed.currentTab().?.mainCursor().selection_start = .{ .row = 0, .col = 0 };
+    ed.currentTab().?.mainCursor().col = 5;
+    try ed.search_buffer.appendSlice(a, "value");
+    try ed.search_system.?.update(&ed.currentTab().?.buf, ed.search_buffer.items);
+
+    var reader = std.Io.Reader.fixed("\x11");
+    var out = std.Io.Writer.Allocating.init(a);
+    defer out.deinit();
+
+    try ed.runWithIO(&reader, &out.writer);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[38;5;177m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[48;5;239m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[48;5;214m\x1b[30m") != null);
+}
+
 // ── calculateGutterWidth ──────────────────────────────────────────────────────
 
 test "Editor: calculateGutterWidth boundary values" {
