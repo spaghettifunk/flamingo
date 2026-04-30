@@ -52,6 +52,20 @@ pub const LspClient = struct {
             .reader_thread = undefined,
             .stderr_thread = undefined,
         };
+        var process_started = false;
+        var reader_started = false;
+        var stderr_started = false;
+        errdefer {
+            client.quit_flag.store(true, .seq_cst);
+            if (process_started) client.process.kill(io);
+            if (reader_started) client.reader_thread.join();
+            if (stderr_started) client.stderr_thread.join();
+            client.opened_files.deinit();
+            client.document_versions.deinit();
+            client.pending_requests.deinit();
+            allocator.free(client.plugin_name);
+            allocator.destroy(client);
+        }
 
         client.process = try std.process.spawn(io, .{
             .argv = command,
@@ -59,9 +73,12 @@ pub const LspClient = struct {
             .stdout = .pipe,
             .stderr = .pipe,
         });
+        process_started = true;
 
         client.reader_thread = try std.Thread.spawn(.{}, readerLoop, .{client});
+        reader_started = true;
         client.stderr_thread = try std.Thread.spawn(.{}, stderrLoop, .{client});
+        stderr_started = true;
 
         return client;
     }

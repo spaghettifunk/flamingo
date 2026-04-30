@@ -49,6 +49,16 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
         event.key = .Enter;
     } else if (std.mem.eql(u8, chord, "backspace")) {
         event.key = .Backspace;
+    } else if (std.mem.eql(u8, chord, "delete")) {
+        event.key = .Delete;
+    } else if (std.mem.eql(u8, chord, "home")) {
+        event.key = .Home;
+    } else if (std.mem.eql(u8, chord, "end")) {
+        event.key = .End;
+    } else if (std.mem.eql(u8, chord, "pageup")) {
+        event.key = .PageUp;
+    } else if (std.mem.eql(u8, chord, "pagedown")) {
+        event.key = .PageDown;
     } else {
         // Parse modifiers: ctrl+n, alt+p
         var it = std.mem.splitScalar(u8, chord, '+');
@@ -56,7 +66,7 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
         while (it.next()) |part| {
             if (std.mem.eql(u8, part, "ctrl")) {
                 event.ctrl = true;
-            } else if (std.mem.eql(u8, part, "alt")) {
+            } else if (std.mem.eql(u8, part, "alt") or std.mem.eql(u8, part, "option")) {
                 event.alt = true;
             } else if (std.mem.eql(u8, part, "shift")) {
                 event.shift = true;
@@ -71,6 +81,33 @@ pub fn parseKeyChord(chord: []const u8) KeyEvent {
             } else if (std.mem.eql(u8, part, "tab")) {
                 event.key = .Char;
                 event.char = '\t';
+            } else if (std.mem.eql(u8, part, "space")) {
+                event.key = .Char;
+                event.char = ' ';
+            } else if (std.mem.eql(u8, part, "up")) {
+                event.key = .Up;
+            } else if (std.mem.eql(u8, part, "down")) {
+                event.key = .Down;
+            } else if (std.mem.eql(u8, part, "left")) {
+                event.key = .Left;
+            } else if (std.mem.eql(u8, part, "right")) {
+                event.key = .Right;
+            } else if (std.mem.eql(u8, part, "esc")) {
+                event.key = .Esc;
+            } else if (std.mem.eql(u8, part, "enter")) {
+                event.key = .Enter;
+            } else if (std.mem.eql(u8, part, "backspace")) {
+                event.key = .Backspace;
+            } else if (std.mem.eql(u8, part, "delete")) {
+                event.key = .Delete;
+            } else if (std.mem.eql(u8, part, "home")) {
+                event.key = .Home;
+            } else if (std.mem.eql(u8, part, "end")) {
+                event.key = .End;
+            } else if (std.mem.eql(u8, part, "pageup")) {
+                event.key = .PageUp;
+            } else if (std.mem.eql(u8, part, "pagedown")) {
+                event.key = .PageDown;
             }
         }
     }

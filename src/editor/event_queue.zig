@@ -36,6 +36,7 @@ pub const EventQueue = struct {
             }
         }
         self.items.deinit(self.allocator);
+        self.items = std.ArrayList(Event).empty;
     }
 
     pub fn push(self: *EventQueue, event: Event) !void {

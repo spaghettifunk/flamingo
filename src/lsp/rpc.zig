@@ -19,7 +19,10 @@ pub const RpcMessage = struct {
     content: []u8, // JSON content
 
     pub fn deinit(self: *RpcMessage) void {
-        self.allocator.free(self.content);
+        if (self.content.len > 0) {
+            self.allocator.free(self.content);
+            self.content = &[_]u8{};
+        }
     }
 };
 
@@ -36,7 +39,7 @@ pub fn readMessage(allocator: std.mem.Allocator, reader: anytype) !RpcMessage {
             var b: [1]u8 = undefined;
             const n = try readShort(reader, &b);
             if (n == 0) return error.EndOfStream;
-            
+
             line_buf[len] = b[0];
             len += 1;
             if (b[0] == '\n') break;

@@ -3,9 +3,64 @@
 [keybindings]
 new_file = "ctrl+n"
 open_file = "ctrl+o"
+open_folder = "ctrl+f"
 settings = "ctrl+p"
+quit = "ctrl+q"
+
 toggle_explorer = "ctrl+b"
-switch_focus = "ctrl+tab"
+switch_focus = "alt+tab"
+close_tab = "ctrl+w"
+next_tab = "alt+["
+previous_tab = "alt+]"
+
+dashboard_up = "up"
+dashboard_down = "down"
+dashboard_select = "enter"
+
+explorer_up = "up"
+explorer_down = "down"
+explorer_open = "enter"
+
+insert_mode = "i"
+command_mode = ":"
+search_mode = "/"
+normal_mode = "esc"
+
+insert_newline = "enter"
+delete_back = "backspace"
+indent = "tab"
+
+prompt_submit = "enter"
+prompt_backspace = "backspace"
+
+save = "ctrl+s"
+select_all = "ctrl+a"
+copy = "ctrl+c"
+cut = "ctrl+x"
+paste = "ctrl+v"
+duplicate_line = "ctrl+d"
+delete_line = "ctrl+shift+k"
+add_cursor_above = "ctrl+alt+up"
+add_cursor_below = "ctrl+alt+down"
+
+move_up = "up"
+move_down = "down"
+move_left = "left"
+move_right = "right"
+line_start = "alt+down"
+line_end = "alt+up"
+word_left = "alt+left"
+word_right = "alt+right"
+
+search_next = "down"
+search_previous = "up"
+
+completion_auto_trigger = "."
+completion_trigger = "ctrl+space"
+completion_next = "down"
+completion_previous = "up"
+completion_accept = "enter"
+completion_cancel = "esc"
 
 [explorer]
 width_percentage = 20

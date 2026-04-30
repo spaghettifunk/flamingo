@@ -144,7 +144,11 @@ pub const Buffer = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {
         var lines = std.ArrayList(Line).empty;
-        try lines.append(allocator, try Line.init(allocator));
+        errdefer lines.deinit(allocator);
+
+        var line = try Line.init(allocator);
+        errdefer line.deinit();
+        try lines.append(allocator, line);
 
         return .{
             .lines = lines,
@@ -192,7 +196,8 @@ pub const Buffer = struct {
 
         const split = right[col..];
 
-        const new_line = try Line.fromSlice(self.allocator, split);
+        var new_line = try Line.fromSlice(self.allocator, split);
+        errdefer new_line.deinit();
 
         // truncate current line
         line.moveGap(col);
@@ -280,12 +285,19 @@ pub const Buffer = struct {
             if (actual_line.len > 0 and actual_line[actual_line.len - 1] == '\r') {
                 actual_line = actual_line[0 .. actual_line.len - 1];
             }
-            const new_line = try Line.fromSlice(allocator, actual_line);
+            var new_line = try Line.fromSlice(allocator, actual_line);
+            var appended = false;
+            errdefer if (!appended) new_line.deinit();
             try buf.lines.append(allocator, new_line);
+            appended = true;
         }
 
         if (buf.lines.items.len == 0) {
-            try buf.lines.append(allocator, try Line.init(allocator));
+            var line = try Line.init(allocator);
+            var appended = false;
+            errdefer if (!appended) line.deinit();
+            try buf.lines.append(allocator, line);
+            appended = true;
         }
 
         return buf;
@@ -434,7 +446,7 @@ test "Line basic operations" {
     try line.insert(0, 'a');
     try line.insert(1, 'b');
     try line.insert(2, 'c');
-    
+
     const s1 = try line.slice(allocator);
     defer allocator.free(s1);
     try std.testing.expectEqualStrings("abc", s1);
@@ -490,7 +502,7 @@ test "Buffer range deletion" {
     // merged result        = "line 3"
     try buf.deleteRange(0, 5, 2, 5);
     try std.testing.expectEqual(@as(usize, 1), buf.lines.items.len);
-    
+
     const s = try buf.lines.items[0].slice(allocator);
     defer allocator.free(s);
     try std.testing.expectEqualStrings("line 3", s);
@@ -508,16 +520,16 @@ test "Buffer word jumps" {
     }
 
     try buf.lines.append(allocator, try Line.fromSlice(allocator, "hello world flamingo"));
-    
+
     var row: usize = 0;
     var col: usize = 0;
-    
+
     try buf.jumpWordRight(&row, &col);
     try std.testing.expectEqual(@as(usize, 5), col); // after "hello"
-    
+
     try buf.jumpWordRight(&row, &col);
     try std.testing.expectEqual(@as(usize, 11), col); // after " world"
-    
+
     try buf.jumpWordLeft(&row, &col);
     try std.testing.expectEqual(@as(usize, 6), col); // start of "world"
 }

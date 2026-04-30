@@ -45,6 +45,10 @@ test "parseKeyChord: Option (alt) modifier" {
     const opt_f = terminal.parseKeyChord("alt+f");
     try std.testing.expect(opt_f.alt);
     try std.testing.expectEqual(@as(u8, 'f'), opt_f.char);
+
+    const option_left = terminal.parseKeyChord("option+left");
+    try std.testing.expect(option_left.alt);
+    try std.testing.expectEqual(Key.Left, option_left.key);
 }
 
 test "parseKeyChord: shift modifier" {
@@ -65,6 +69,13 @@ test "parseKeyChord: ctrl+tab" {
     try std.testing.expect(ct.ctrl);
     try std.testing.expectEqual(Key.Char, ct.key);
     try std.testing.expectEqual(@as(u8, '\t'), ct.char);
+}
+
+test "parseKeyChord: ctrl+space" {
+    const cs = terminal.parseKeyChord("ctrl+space");
+    try std.testing.expect(cs.ctrl);
+    try std.testing.expectEqual(Key.Char, cs.key);
+    try std.testing.expectEqual(@as(u8, ' '), cs.char);
 }
 
 // ── KeyEvent.eql ─────────────────────────────────────────────────────────────

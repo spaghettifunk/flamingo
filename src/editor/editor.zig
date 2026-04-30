@@ -67,6 +67,7 @@ pub const Editor = struct {
     clipboard: ?[]u8 = null,
     event_queue: *event_queue.EventQueue,
     lsp_mgr: ?lsp_manager.LspManager = null,
+    is_deinitialized: bool = false,
 
     // Completion state
     completion_items: ?std.json.Value = null,
@@ -78,6 +79,10 @@ pub const Editor = struct {
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
         const queue = try allocator.create(event_queue.EventQueue);
         queue.* = event_queue.EventQueue.init(allocator, io);
+        errdefer {
+            queue.deinit();
+            allocator.destroy(queue);
+        }
 
         const mgr = try lsp_manager.LspManager.init(allocator, io, queue);
 
@@ -94,6 +99,9 @@ pub const Editor = struct {
     }
 
     pub fn deinit(self: *Editor) void {
+        if (self.is_deinitialized) return;
+        self.is_deinitialized = true;
+
         for (self.tabs.items) |*tab| {
             tab.deinit(self.allocator);
         }
@@ -118,6 +126,11 @@ pub const Editor = struct {
         }
 
         if (self.lsp_mgr) |*mgr| {
+            if (self.completion_items) |items| {
+                mgr.freeValue(items);
+                self.completion_items = null;
+            }
+
             var it = self.diagnostics.iterator();
             while (it.next()) |entry| {
                 mgr.freeValue(entry.value_ptr.*);
@@ -126,6 +139,8 @@ pub const Editor = struct {
             self.diagnostics.deinit();
             mgr.deinit();
             self.lsp_mgr = null;
+        } else {
+            self.diagnostics.deinit();
         }
         self.event_queue.quit = true;
         self.event_queue.deinit();
@@ -228,8 +243,8 @@ pub const Editor = struct {
     /// without touching a real TTY.
     pub fn runWithIO(self: *Editor, reader: anytype, raw_writer: anytype) !void {
         var render_buffer = std.ArrayListUnmanaged(u8).empty;
-        defer render_buffer.deinit(self.allocator);
         var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &render_buffer);
+        defer aw.deinit();
         const writer = &aw.writer;
 
         while (!self.should_quit) {
@@ -268,16 +283,28 @@ pub const Editor = struct {
                                     self.completion_selected = 0;
                                 },
                                 .diagnostics => |diag_val| {
+                                    var diagnostics_stored = false;
+                                    errdefer if (!diagnostics_stored) mgr.freeValue(diag_val);
+
                                     const uri = diag_val.object.get("uri").?.string;
                                     // filename is after file://
                                     const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
 
-                                    if (self.diagnostics.get(fname)) |old| {
-                                        mgr.freeValue(old);
+                                    const fname_copy = try self.allocator.dupe(u8, fname);
+                                    var key_owned = true;
+                                    errdefer if (key_owned) self.allocator.free(fname_copy);
+
+                                    const entry = try self.diagnostics.getOrPut(fname_copy);
+                                    if (entry.found_existing) {
+                                        mgr.freeValue(entry.value_ptr.*);
+                                        self.allocator.free(fname_copy);
+                                        key_owned = false;
+                                    } else {
+                                        key_owned = false;
                                     }
 
-                                    const fname_copy = try self.allocator.dupe(u8, fname);
-                                    try self.diagnostics.put(fname_copy, diag_val);
+                                    entry.value_ptr.* = diag_val;
+                                    diagnostics_stored = true;
                                 },
                                 .none => {},
                             }
@@ -298,9 +325,7 @@ pub const Editor = struct {
 
             logz.debug().fmt("msg", "key event: key={s}, char={c}, ctrl={}, alt={}", .{ @tagName(event.key), event.char, event.ctrl, event.alt }).log();
 
-            // Global quit sequence matching flamingo.toml config
-            // For now hardcoded to Ctrl+Q
-            if (event.ctrl and event.key == .Char and event.char == 'q') {
+            if (event.eql(terminal.parseKeyChord(self.config.keybindings.quit))) {
                 self.should_quit = true;
                 continue;
             }
@@ -324,10 +349,10 @@ pub const Editor = struct {
                 }
 
                 // Trigger completion
-                const is_dot = (event.key == .Char and event.char == '.');
-                const is_ctrl_space = (event.ctrl and event.key == .Char and event.char == ' ');
+                const is_completion_auto_trigger = event.eql(terminal.parseKeyChord(self.config.keybindings.completion_auto_trigger));
+                const is_completion_trigger = event.eql(terminal.parseKeyChord(self.config.keybindings.completion_trigger));
 
-                if (is_dot or is_ctrl_space) {
+                if (is_completion_auto_trigger or is_completion_trigger) {
                     if (tab.buf.filename != null) {
                         if (self.lsp_mgr) |*mgr| {
                             const mc = tab.mainCursor();
@@ -340,10 +365,10 @@ pub const Editor = struct {
             }
         }
 
-        render_buffer.clearRetainingCapacity();
+        aw.clearRetainingCapacity();
         try terminal.clearScreen(writer);
         try terminal.moveCursor(writer, 1, 1);
-        try raw_writer.writeAll(render_buffer.items);
+        try raw_writer.writeAll(aw.written());
     }
 
     /// Adjust scroll_row so cursor_row is always within the visible viewport.
@@ -780,6 +805,7 @@ pub const Editor = struct {
 
     fn handleCompletionInput(self: *Editor, event: terminal.KeyEvent) !bool {
         if (!self.completion_active or self.completion_items == null) return false;
+        const keys = self.config.keybindings;
 
         const items_val = self.completion_items.?;
         var items: []std.json.Value = &[_]std.json.Value{};
@@ -791,50 +817,54 @@ pub const Editor = struct {
             }
         }
 
+        if (event.eql(terminal.parseKeyChord(keys.completion_previous))) {
+            if (self.completion_selected > 0) {
+                self.completion_selected -= 1;
+            } else if (items.len > 0) {
+                self.completion_selected = items.len - 1;
+            }
+            return true;
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_next))) {
+            if (self.completion_selected < items.len - 1) {
+                self.completion_selected += 1;
+            } else {
+                self.completion_selected = 0;
+            }
+            return true;
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_accept))) {
+            if (items.len == 0) {
+                self.completion_active = false;
+                return false;
+            }
+            const item = items[self.completion_selected].object;
+            const label = item.get("label").?.string;
+            const insertText = if (item.get("insertText")) |it| it.string else label;
+
+            // Insert the completion
+            if (self.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                // Simple insertion for now.
+                // TODO: handle overwrite and snippets.
+                for (insertText) |c| {
+                    try tab.buf.insertChar(mc.row, mc.col, c);
+                    mc.col += 1;
+                }
+            }
+
+            self.completion_active = false;
+            return true;
+        }
+
+        if (event.eql(terminal.parseKeyChord(keys.completion_cancel))) {
+            self.completion_active = false;
+            return true;
+        }
+
         switch (event.key) {
-            .Up => {
-                if (self.completion_selected > 0) {
-                    self.completion_selected -= 1;
-                } else if (items.len > 0) {
-                    self.completion_selected = items.len - 1;
-                }
-                return true;
-            },
-            .Down => {
-                if (self.completion_selected < items.len - 1) {
-                    self.completion_selected += 1;
-                } else {
-                    self.completion_selected = 0;
-                }
-                return true;
-            },
-            .Enter => {
-                if (items.len == 0) {
-                    self.completion_active = false;
-                    return false;
-                }
-                const item = items[self.completion_selected].object;
-                const label = item.get("label").?.string;
-                const insertText = if (item.get("insertText")) |it| it.string else label;
-
-                // Insert the completion
-                if (self.currentTab()) |tab| {
-                    const mc = tab.mainCursor();
-                    // Simple insertion for now.
-                    // TODO: handle overwrite and snippets.
-                    for (insertText) |c| {
-                        try tab.buf.insertChar(mc.row, mc.col, c);
-                        mc.col += 1;
-                    }
-                }
-
-                self.completion_active = false;
-                return true;
-            },
-            .Esc => {
-                self.completion_active = false;
-                return true;
-            },
             .Char => {
                 if (!std.ascii.isAlphanumeric(event.char)) {
                     self.completion_active = false;

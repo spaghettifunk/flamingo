@@ -161,7 +161,7 @@ test "Insert: Backspace removes previous char" {
 
     ed.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{
-        th.keyChar('a'), th.keyChar('b'), th.keyChar('c'),
+        th.keyChar('a'),           th.keyChar('b'), th.keyChar('c'),
         th.keySpecial(.Backspace),
     });
     try expectLine(a, &ed, 0, "ab");
@@ -231,7 +231,8 @@ test "Command: :q! force-closes dirty tab" {
 
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar(':'),
-        th.keyChar('q'), th.keyChar('!'),
+        th.keyChar('q'),
+        th.keyChar('!'),
         th.keySpecial(.Enter),
     });
 
@@ -275,7 +276,9 @@ test "Command: unknown command shows error, stays Normal" {
 
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar(':'),
-        th.keyChar('z'), th.keyChar('z'), th.keyChar('z'),
+        th.keyChar('z'),
+        th.keyChar('z'),
+        th.keyChar('z'),
         th.keySpecial(.Enter),
     });
 
@@ -296,7 +299,9 @@ test "Search: typing query finds matches" {
 
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('/'),
-        th.keyChar('f'), th.keyChar('l'), th.keyChar('a'),
+        th.keyChar('f'),
+        th.keyChar('l'),
+        th.keyChar('a'),
     });
 
     const ss = ed.search_system.?;
@@ -501,7 +506,7 @@ test "Shift+Up: extends selection" {
 
 // ── Explorer & tab control ────────────────────────────────────────────────────
 
-test "Ctrl+E toggles explorer_visible" {
+test "configured default Ctrl+B toggles explorer_visible" {
     const a = std.testing.allocator;
     // Explorer.init calls logz.info(), so we must set up the logger first.
     const log = try th.setupLogger(a);
@@ -511,10 +516,26 @@ test "Ctrl+E toggles explorer_visible" {
     defer ed.deinit();
 
     try std.testing.expect(!ed.explorer_visible);
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(ed.explorer_visible);
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(!ed.explorer_visible);
+}
+
+test "configured toggle_explorer key is used" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.toggle_explorer = "ctrl+t";
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
+    try std.testing.expect(!ed.explorer_visible);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try std.testing.expect(ed.explorer_visible);
 }
 
 test "Ctrl+W closes current tab" {
@@ -524,6 +545,19 @@ test "Ctrl+W closes current tab" {
 
     try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
+    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
+}
+
+test "configured close_tab key is used" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    ed.config.keybindings.close_tab = "ctrl+u";
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
+    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('u')});
     try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
 }
 

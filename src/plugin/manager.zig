@@ -26,6 +26,7 @@ pub const PluginManager = struct {
 
     pub fn deinit(self: *PluginManager) void {
         self.plugins.deinit(self.allocator);
+        self.plugins = std.ArrayList(Plugin).empty;
     }
 
     pub fn registerDefaults(self: *PluginManager) !void {
@@ -36,12 +37,12 @@ pub const PluginManager = struct {
         });
         try self.plugins.append(self.allocator, .{
             .name = "go",
-            .extensions = &[_][]const u8{ ".go" },
+            .extensions = &[_][]const u8{".go"},
             .lsp_command = &[_][]const u8{"gopls"},
         });
         try self.plugins.append(self.allocator, .{
             .name = "json",
-            .extensions = &[_][]const u8{ ".json" },
+            .extensions = &[_][]const u8{".json"},
             .lsp_command = &[_][]const u8{ "vscode-json-languageserver", "--stdio" },
         });
         try self.plugins.append(self.allocator, .{
@@ -51,7 +52,7 @@ pub const PluginManager = struct {
         });
         try self.plugins.append(self.allocator, .{
             .name = "toml",
-            .extensions = &[_][]const u8{ ".toml" },
+            .extensions = &[_][]const u8{".toml"},
             .lsp_command = &[_][]const u8{ "taplo", "lsp", "stdio" },
         });
     }

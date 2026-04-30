@@ -14,6 +14,7 @@ pub const LspManager = struct {
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, queue: *event_queue.EventQueue) !LspManager {
         var mgr = plugin.PluginManager.init(allocator);
+        errdefer mgr.deinit();
         try mgr.registerDefaults();
 
         return .{
@@ -31,6 +32,7 @@ pub const LspManager = struct {
             entry.value_ptr.*.stop();
         }
         self.clients.deinit();
+        self.clients = std.StringHashMap(*lsp_client.LspClient).init(self.allocator);
         self.plugin_mgr.deinit();
     }
 
@@ -139,16 +141,30 @@ pub const LspManager = struct {
             .string => |s| return .{ .string = try allocator.dupe(u8, s) },
             .array => |arr| {
                 var new_arr = try std.json.Array.initCapacity(allocator, arr.items.len);
+                errdefer freeJsonValue(allocator, .{ .array = new_arr });
                 for (arr.items) |item| {
-                    try new_arr.append(try cloneValue(allocator, item));
+                    const cloned = try cloneValue(allocator, item);
+                    var appended = false;
+                    errdefer if (!appended) freeJsonValue(allocator, cloned);
+                    try new_arr.append(cloned);
+                    appended = true;
                 }
                 return .{ .array = new_arr };
             },
             .object => |obj| {
                 var new_obj: std.json.ObjectMap = .{};
+                errdefer freeJsonValue(allocator, .{ .object = new_obj });
                 var it = obj.iterator();
                 while (it.next()) |entry| {
-                    try new_obj.put(allocator, try allocator.dupe(u8, entry.key_ptr.*), try cloneValue(allocator, entry.value_ptr.*));
+                    const key = try allocator.dupe(u8, entry.key_ptr.*);
+                    var inserted = false;
+                    errdefer if (!inserted) allocator.free(key);
+
+                    const cloned = try cloneValue(allocator, entry.value_ptr.*);
+                    errdefer if (!inserted) freeJsonValue(allocator, cloned);
+
+                    try new_obj.put(allocator, key, cloned);
+                    inserted = true;
                 }
                 return .{ .object = new_obj };
             },
@@ -156,12 +172,16 @@ pub const LspManager = struct {
     }
 
     pub fn freeValue(self: *LspManager, v: std.json.Value) void {
+        freeJsonValue(self.allocator, v);
+    }
+
+    fn freeJsonValue(allocator: std.mem.Allocator, v: std.json.Value) void {
         switch (v) {
-            .number_string => |s| self.allocator.free(s),
-            .string => |s| self.allocator.free(s),
+            .number_string => |s| allocator.free(s),
+            .string => |s| allocator.free(s),
             .array => |arr| {
                 for (arr.items) |item| {
-                    self.freeValue(item);
+                    freeJsonValue(allocator, item);
                 }
                 var mutable_arr = arr;
                 mutable_arr.deinit();
@@ -169,11 +189,11 @@ pub const LspManager = struct {
             .object => |obj| {
                 var it = obj.iterator();
                 while (it.next()) |entry| {
-                    self.allocator.free(entry.key_ptr.*);
-                    self.freeValue(entry.value_ptr.*);
+                    allocator.free(entry.key_ptr.*);
+                    freeJsonValue(allocator, entry.value_ptr.*);
                 }
                 var mutable_obj = obj;
-                mutable_obj.deinit(self.allocator);
+                mutable_obj.deinit(allocator);
             },
             else => {},
         }
