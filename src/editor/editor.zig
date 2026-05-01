@@ -13,6 +13,9 @@ const perf = @import("../perf/perf.zig");
 const render_mod = @import("render.zig");
 const lsp_manager = @import("../lsp/manager.zig");
 const event_queue = @import("event_queue.zig");
+const logger = @import("../logger.zig");
+
+const max_fifo_events_per_idle_tick = 8;
 
 pub const EditorMode = enum {
     Dashboard,
@@ -324,7 +327,7 @@ pub const Editor = struct {
         } else {
             self.diagnostics.deinit();
         }
-        self.event_queue.quit = true;
+        self.event_queue.close();
         self.event_queue.deinit();
         self.allocator.destroy(self.event_queue);
     }
@@ -517,82 +520,6 @@ pub const Editor = struct {
             const loop_start = perf.nowNs();
             var metrics = perf.FrameMetrics{};
 
-            // Pump events
-            const events_start = perf.nowNs();
-            while (self.event_queue.tryPop()) |ev| {
-                var event = ev;
-                switch (event) {
-                    .lsp_message => |msg| {
-                        defer self.allocator.free(msg.message);
-                        if (self.lsp_mgr) |*mgr| {
-                            const res = mgr.handleMessage(msg.plugin_name, msg.message) catch |err| blk: {
-                                logz.err().fmt("msg", "Error handling LSP msg: {any}", .{err}).log();
-                                break :blk lsp_manager.LspManager.HandleResult.none;
-                            };
-
-                            switch (res) {
-                                .initialized => {
-                                    for (self.tabs.items) |tab| {
-                                        if (tab.buf.filename) |fname| {
-                                            const ext = std.fs.path.extension(fname);
-                                            if (mgr.plugin_mgr.getPluginForExtension(ext)) |p| {
-                                                if (std.mem.eql(u8, p.name, msg.plugin_name)) {
-                                                    const content = try tab.buf.toString(self.allocator);
-                                                    defer self.allocator.free(content);
-                                                    mgr.notifyOpen(fname, content) catch {};
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                .completion => |items| {
-                                    if (self.completion_items) |old| {
-                                        mgr.freeValue(old);
-                                    }
-                                    self.completion_items = items;
-                                    self.completion_active = true;
-                                    self.completion_selected = 0;
-                                    self.markDirty(.partial);
-                                },
-                                .diagnostics => |diag_val| {
-                                    var diagnostics_stored = false;
-                                    errdefer if (!diagnostics_stored) mgr.freeValue(diag_val);
-
-                                    const uri = diag_val.object.get("uri").?.string;
-                                    // filename is after file://
-                                    const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
-
-                                    const fname_copy = try self.allocator.dupe(u8, fname);
-                                    var key_owned = true;
-                                    errdefer if (key_owned) self.allocator.free(fname_copy);
-
-                                    const entry = try self.diagnostics.getOrPut(fname_copy);
-                                    if (entry.found_existing) {
-                                        mgr.freeValue(entry.value_ptr.*);
-                                        self.allocator.free(fname_copy);
-                                        key_owned = false;
-                                    } else {
-                                        key_owned = false;
-                                    }
-
-                                    entry.value_ptr.* = diag_val;
-                                    diagnostics_stored = true;
-                                    self.markDirty(.partial);
-                                },
-                                .none => {},
-                            }
-                        }
-                    },
-                    .syntax_parse_result => |*result| {
-                        defer result.deinit(self.allocator);
-                        self.handleSyntaxParseResult(result) catch |err| {
-                            logz.err().fmt("msg", "failed to install syntax parse result: {any}", .{err}).log();
-                        };
-                    },
-                }
-            }
-            metrics.add(.event_processing, perf.elapsedNs(events_start));
-
             var handled_input = false;
             var first_fast_cursor_before: ?CursorMoveState = null;
             var fast_cursor_candidate = true;
@@ -626,12 +553,13 @@ pub const Editor = struct {
 
                 if (self.should_quit) break;
                 if (!render_after_event) break;
-                if (first_fast_cursor_before) |before| {
-                    if (!self.canFastRenderCursorMove(before)) break;
-                } else break;
             }
 
             if (!handled_input) {
+                const events_start = perf.nowNs();
+                try self.processBackgroundEvents(max_fifo_events_per_idle_tick);
+                metrics.add(.event_processing, perf.elapsedNs(events_start));
+
                 const update_start = perf.nowNs();
                 try self.flushPendingLspChanges(false);
                 metrics.add(.update_state, perf.elapsedNs(update_start));
@@ -705,6 +633,95 @@ pub const Editor = struct {
         try terminal.clearScreen(writer);
         try terminal.moveCursor(writer, 1, 1);
         try raw_writer.writeAll(aw.written());
+    }
+
+    fn processBackgroundEvents(self: *Editor, max_fifo_events: usize) !void {
+        var fifo_events_processed: usize = 0;
+        while (fifo_events_processed < max_fifo_events) : (fifo_events_processed += 1) {
+            const ev = self.event_queue.tryPop() orelse break;
+            const event = ev;
+            switch (event) {
+                .lsp_message => |msg| {
+                    defer self.allocator.free(msg.plugin_name);
+                    defer self.allocator.free(msg.message);
+                    try self.handleLspEvent(msg.plugin_name, msg.message);
+                },
+                .syntax_parse_result => unreachable,
+            }
+        }
+
+        var syntax_results = std.ArrayList(syntax.ParseResult).empty;
+        defer syntax_results.deinit(self.allocator);
+        self.event_queue.drainSyntaxResults(&syntax_results) catch |err| {
+            logz.err().fmt("msg", "failed to drain syntax parse results: {any}", .{err}).log();
+        };
+        for (syntax_results.items) |*result| {
+            defer result.deinit(self.allocator);
+            self.handleSyntaxParseResult(result) catch |err| {
+                logz.err().fmt("msg", "failed to install syntax parse result: {any}", .{err}).log();
+            };
+        }
+    }
+
+    fn handleLspEvent(self: *Editor, plugin_name: []const u8, message: []const u8) !void {
+        if (self.lsp_mgr) |*mgr| {
+            const res = mgr.handleMessage(plugin_name, message) catch |err| blk: {
+                logz.err().fmt("msg", "Error handling LSP msg: {any}", .{err}).log();
+                break :blk lsp_manager.LspManager.HandleResult.none;
+            };
+
+            switch (res) {
+                .initialized => {
+                    for (self.tabs.items) |tab| {
+                        if (tab.buf.filename) |fname| {
+                            const ext = std.fs.path.extension(fname);
+                            if (mgr.plugin_mgr.getPluginForExtension(ext)) |p| {
+                                if (std.mem.eql(u8, p.name, plugin_name)) {
+                                    const content = try tab.buf.toString(self.allocator);
+                                    defer self.allocator.free(content);
+                                    mgr.notifyOpen(fname, content) catch {};
+                                }
+                            }
+                        }
+                    }
+                },
+                .completion => |items| {
+                    if (self.completion_items) |old| {
+                        mgr.freeValue(old);
+                    }
+                    self.completion_items = items;
+                    self.completion_active = true;
+                    self.completion_selected = 0;
+                    self.markDirty(.partial);
+                },
+                .diagnostics => |diag_val| {
+                    var diagnostics_stored = false;
+                    errdefer if (!diagnostics_stored) mgr.freeValue(diag_val);
+
+                    const uri = diag_val.object.get("uri").?.string;
+                    // filename is after file://
+                    const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
+
+                    const fname_copy = try self.allocator.dupe(u8, fname);
+                    var key_owned = true;
+                    errdefer if (key_owned) self.allocator.free(fname_copy);
+
+                    const entry = try self.diagnostics.getOrPut(fname_copy);
+                    if (entry.found_existing) {
+                        mgr.freeValue(entry.value_ptr.*);
+                        self.allocator.free(fname_copy);
+                        key_owned = false;
+                    } else {
+                        key_owned = false;
+                    }
+
+                    entry.value_ptr.* = diag_val;
+                    diagnostics_stored = true;
+                    self.markDirty(.partial);
+                },
+                .none => {},
+            }
+        }
     }
 
     fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
@@ -1809,6 +1826,37 @@ test "Editor.calculateGutterWidth" {
     // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
+}
+
+test "Editor discards stale syntax parse results" {
+    try logger.init(std.testing.io, std.testing.allocator, true);
+    defer logger.shutdown() catch {};
+
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, .{});
+    defer ed.deinit();
+
+    var buf = try buffer.Buffer.init(std.testing.allocator);
+    errdefer buf.deinit();
+    try buf.setFilename("stale.nope");
+    try ed.addTab(buf);
+
+    const tab = ed.currentTab().?;
+    tab.buf.revision = 2;
+    tab.syntax_requested_revision = 1;
+
+    var result = syntax.ParseResult{
+        .buffer_id = tab.syntax_buffer_id,
+        .revision = 1,
+        .language = .zig,
+        .source = try std.testing.allocator.dupe(u8, "const stale = true;\n"),
+        .tree = null,
+    };
+    defer result.deinit(std.testing.allocator);
+
+    try ed.handleSyntaxParseResult(&result);
+
+    try std.testing.expectEqual(@as(?u64, null), tab.syntax_highlighter.parsed_revision);
+    try std.testing.expectEqual(@as(?u64, 1), tab.syntax_requested_revision);
 }
 
 test "fast cursor move eligibility accepts plain movement inside viewport" {

@@ -108,17 +108,23 @@ pub const LspClient = struct {
                 logz.err().fmt("msg", "rpc read error: {any}", .{err}).log();
                 break;
             };
-
-            self.queue.push(.{
-                .lsp_message = .{
-                    .plugin_name = self.plugin_name,
-                    .message = msg.content,
-                },
-            }) catch {
+            const plugin_name = self.allocator.dupe(u8, self.plugin_name) catch |err| {
+                logz.err().fmt("msg", "failed to copy LSP plugin name: {any}", .{err}).log();
                 msg.deinit();
                 break;
             };
-            // We transfer ownership of msg.content to the queue
+
+            self.queue.push(.{
+                .lsp_message = .{
+                    .plugin_name = plugin_name,
+                    .message = msg.content,
+                },
+            }) catch {
+                self.allocator.free(plugin_name);
+                msg.deinit();
+                break;
+            };
+            // We transfer ownership of plugin_name and msg.content to the queue.
         }
     }
 
