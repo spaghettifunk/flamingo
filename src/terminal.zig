@@ -154,7 +154,7 @@ pub fn enableRawMode(io: std.Io) !void {
     raw.lflag.ISIG = false;
 
     raw.cc[@intFromEnum(std.posix.V.MIN)] = 0;
-    raw.cc[@intFromEnum(std.posix.V.TIME)] = 1; // 100ms timeout
+    raw.cc[@intFromEnum(std.posix.V.TIME)] = 0; // nonblocking reads; the editor loop owns pacing
 
     try std.posix.tcsetattr(fd, .FLUSH, raw);
 

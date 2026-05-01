@@ -71,6 +71,12 @@ pub const HighlightSpan = struct {
     style: Style,
 };
 
+pub const HighlightRun = struct {
+    start_col: usize,
+    end_col: usize,
+    style: Style,
+};
+
 pub fn languageFromFilename(filename: []const u8) ?LanguageId {
     const ext = std.fs.path.extension(filename);
     if (std.mem.eql(u8, ext, ".zig")) return .zig;
@@ -91,13 +97,24 @@ pub const Highlighter = struct {
     parsed_revision: ?u64 = null,
     spans: std.ArrayList(HighlightSpan) = .empty,
     line_starts: std.ArrayList(usize) = .empty,
+    line_runs: std.AutoHashMap(usize, std.ArrayList(HighlightRun)),
+    viewport_revision: ?u64 = null,
+    viewport_first_line: usize = 0,
+    viewport_last_line: usize = 0,
+    full_reparse_count: usize = 0,
+    incremental_reparse_count: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) Highlighter {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .line_runs = std.AutoHashMap(usize, std.ArrayList(HighlightRun)).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Highlighter) void {
         self.resetLanguageState();
+        self.clearLineRuns();
+        self.line_runs.deinit();
         self.spans.deinit(self.allocator);
         self.line_starts.deinit(self.allocator);
         if (self.source.len > 0) {
@@ -107,6 +124,10 @@ pub const Highlighter = struct {
     }
 
     pub fn ensureForBuffer(self: *Highlighter, buf: *const buffer.Buffer) !void {
+        try self.ensureForViewport(buf, 0, buf.lines.items.len, 0);
+    }
+
+    pub fn ensureForViewport(self: *Highlighter, buf: *const buffer.Buffer, first_line: usize, last_line: usize, margin: usize) !void {
         const filename = buf.filename orelse {
             self.resetAll();
             return;
@@ -117,7 +138,16 @@ pub const Highlighter = struct {
             return;
         };
 
-        if (self.language == next_language and self.parsed_revision == buf.revision) {
+        const line_count = buf.lines.items.len;
+        const requested_first = if (first_line > margin) first_line - margin else 0;
+        const requested_last = @min(line_count, last_line + margin);
+
+        if (self.language == next_language and
+            self.parsed_revision == buf.revision and
+            self.viewport_revision == buf.revision and
+            requested_first >= self.viewport_first_line and
+            requested_last <= self.viewport_last_line)
+        {
             return;
         }
 
@@ -129,25 +159,91 @@ pub const Highlighter = struct {
             self.query = createQuery(next_language) catch null;
         }
 
-        const content = try buf.toString(self.allocator);
-        errdefer self.allocator.free(content);
+        if (self.parsed_revision != buf.revision) {
+            const content = try buf.toString(self.allocator);
+            errdefer self.allocator.free(content);
 
-        self.clearParsedState();
-        self.source = content;
-        try self.rebuildLineStarts();
+            const old_source = self.source;
+            var old_tree = self.tree;
+            var used_incremental = false;
 
-        const parser = self.parser orelse return;
-        const tree = parser.parseString(self.source, null) orelse return;
-        self.tree = tree;
-        self.parsed_revision = buf.revision;
+            if (old_tree) |tree| {
+                if (buf.lastEditDelta()) |delta| {
+                    if (delta.revision == buf.revision and self.parsed_revision != null and self.parsed_revision.? +% 1 == buf.revision) {
+                        tree.edit(toInputEdit(delta));
+                        used_incremental = true;
+                    } else {
+                        tree.destroy();
+                        old_tree = null;
+                    }
+                } else {
+                    tree.destroy();
+                    old_tree = null;
+                }
+            }
+
+            self.source = content;
+            try self.rebuildLineStarts();
+
+            const parser = self.parser orelse return;
+            const tree = parser.parseString(self.source, old_tree) orelse {
+                if (old_tree) |old| old.destroy();
+                if (old_source.len > 0) self.allocator.free(old_source);
+                self.tree = null;
+                self.parsed_revision = null;
+                self.clearLineRuns();
+                self.spans.clearRetainingCapacity();
+                return;
+            };
+
+            if (old_tree) |old| old.destroy();
+            if (old_source.len > 0) self.allocator.free(old_source);
+            self.tree = tree;
+            self.parsed_revision = buf.revision;
+            if (used_incremental) {
+                self.incremental_reparse_count += 1;
+            } else {
+                self.full_reparse_count += 1;
+            }
+        }
 
         const query = self.query orelse return;
-        try self.collectSpans(query, tree.rootNode());
+        const tree = self.tree orelse return;
+        const start_byte = self.lineStartByte(requested_first);
+        const end_byte = self.lineEndByte(requested_last);
+
+        self.spans.clearRetainingCapacity();
+        self.clearLineRuns();
+        try self.collectSpans(query, tree.rootNode(), start_byte, end_byte);
+        self.viewport_revision = buf.revision;
+        self.viewport_first_line = requested_first;
+        self.viewport_last_line = requested_last;
     }
 
     pub fn lineStartByte(self: *const Highlighter, row: usize) usize {
         if (row >= self.line_starts.items.len) return 0;
         return self.line_starts.items[row];
+    }
+
+    pub fn lineEndByte(self: *const Highlighter, row: usize) usize {
+        if (row == 0) return 0;
+        if (row < self.line_starts.items.len) {
+            return self.line_starts.items[row] -| 1;
+        }
+        return self.source.len;
+    }
+
+    pub fn styleAtLine(self: *const Highlighter, row: usize, col: usize) ?Style {
+        const runs = self.line_runs.get(row) orelse return null;
+        var best: ?Style = null;
+        for (runs.items) |run| {
+            if (col < run.start_col) continue;
+            if (col >= run.end_col) continue;
+            if (best == null or run.style.priority() > best.?.priority()) {
+                best = run.style;
+            }
+        }
+        return best;
     }
 
     pub fn styleAt(self: *const Highlighter, byte_offset: usize) ?Style {
@@ -170,9 +266,10 @@ pub const Highlighter = struct {
         return false;
     }
 
-    fn collectSpans(self: *Highlighter, query: *ts.Query, root: ts.Node) !void {
+    fn collectSpans(self: *Highlighter, query: *ts.Query, root: ts.Node, start_byte: usize, end_byte: usize) !void {
         var cursor = ts.QueryCursor.create();
         defer cursor.destroy();
+        try cursor.setByteRange(@intCast(start_byte), @intCast(end_byte));
         cursor.exec(query, root);
 
         while (cursor.nextCapture()) |item| {
@@ -185,15 +282,59 @@ pub const Highlighter = struct {
             const start = @as(usize, @intCast(capture.node.startByte()));
             const end = @as(usize, @intCast(capture.node.endByte()));
             if (start >= end) continue;
+            if (end <= start_byte or start >= end_byte) continue;
 
             try self.spans.append(self.allocator, .{
                 .start = start,
                 .end = end,
                 .style = style,
             });
+            try self.appendLineRuns(start, end, style);
         }
 
         std.mem.sort(HighlightSpan, self.spans.items, {}, lessThanSpan);
+    }
+
+    fn appendLineRuns(self: *Highlighter, start_byte: usize, end_byte: usize, style: Style) !void {
+        const start = self.byteToPoint(start_byte);
+        const end = self.byteToPoint(end_byte);
+        var row = start.row;
+        while (row <= end.row and row < self.line_starts.items.len) : (row += 1) {
+            const start_col = if (row == start.row) start.col else 0;
+            const end_col = if (row == end.row) end.col else self.lineLength(row);
+            if (start_col >= end_col) continue;
+
+            const entry = try self.line_runs.getOrPut(row);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = std.ArrayList(HighlightRun).empty;
+            }
+            try entry.value_ptr.append(self.allocator, .{
+                .start_col = start_col,
+                .end_col = end_col,
+                .style = style,
+            });
+        }
+    }
+
+    fn byteToPoint(self: *const Highlighter, byte_offset: usize) buffer.TextPoint {
+        if (self.line_starts.items.len == 0) return .{ .row = 0, .col = byte_offset };
+
+        var row: usize = 0;
+        while (row + 1 < self.line_starts.items.len and self.line_starts.items[row + 1] <= byte_offset) : (row += 1) {}
+        return .{
+            .row = row,
+            .col = byte_offset - self.line_starts.items[row],
+        };
+    }
+
+    fn lineLength(self: *const Highlighter, row: usize) usize {
+        if (row >= self.line_starts.items.len) return 0;
+        const start = self.line_starts.items[row];
+        const end = if (row + 1 < self.line_starts.items.len)
+            self.line_starts.items[row + 1] -| 1
+        else
+            self.source.len;
+        return end -| start;
     }
 
     fn rebuildLineStarts(self: *Highlighter) !void {
@@ -234,9 +375,30 @@ pub const Highlighter = struct {
         }
         self.spans.clearRetainingCapacity();
         self.line_starts.clearRetainingCapacity();
+        self.clearLineRuns();
         self.parsed_revision = null;
+        self.viewport_revision = null;
+    }
+
+    fn clearLineRuns(self: *Highlighter) void {
+        var it = self.line_runs.valueIterator();
+        while (it.next()) |runs| {
+            runs.deinit(self.allocator);
+        }
+        self.line_runs.clearRetainingCapacity();
     }
 };
+
+fn toInputEdit(delta: buffer.TextEditDelta) ts.InputEdit {
+    return .{
+        .start_byte = @intCast(delta.start_byte),
+        .old_end_byte = @intCast(delta.old_end_byte),
+        .new_end_byte = @intCast(delta.new_end_byte),
+        .start_point = .{ .row = @intCast(delta.start_point.row), .column = @intCast(delta.start_point.col) },
+        .old_end_point = .{ .row = @intCast(delta.old_end_point.row), .column = @intCast(delta.old_end_point.col) },
+        .new_end_point = .{ .row = @intCast(delta.new_end_point.row), .column = @intCast(delta.new_end_point.col) },
+    };
+}
 
 fn languagePtr(language: LanguageId) *const ts.Language {
     const ptr = switch (language) {
@@ -367,4 +529,72 @@ test "highlighter skips unchanged buffer revision and reparses changed revision"
     try buf.insertChar(0, 5, ' ');
     try highlighter.ensureForBuffer(&buf);
     try std.testing.expectEqual(buf.revision, highlighter.parsed_revision.?);
+}
+
+test "highlighter caches only requested viewport lines" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("main.zig");
+
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+    try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, "const visible = 1;"));
+    try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, "const hidden = 2;"));
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+    try highlighter.ensureForViewport(&buf, 0, 1, 0);
+
+    try std.testing.expect(highlighter.styleAtLine(0, 0) != null);
+    try std.testing.expect(highlighter.styleAtLine(1, 0) == null);
+}
+
+test "highlighter uses incremental tree-sitter edits for matching buffer delta" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("main.zig");
+    try buf.insertChar(0, 0, 'c');
+    try buf.insertChar(0, 1, 'o');
+    try buf.insertChar(0, 2, 'n');
+    try buf.insertChar(0, 3, 's');
+    try buf.insertChar(0, 4, 't');
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+    try highlighter.ensureForBuffer(&buf);
+    try std.testing.expectEqual(@as(usize, 1), highlighter.full_reparse_count);
+    try std.testing.expectEqual(@as(usize, 0), highlighter.incremental_reparse_count);
+
+    try buf.insertChar(0, 5, ' ');
+    try highlighter.ensureForBuffer(&buf);
+    try std.testing.expectEqual(@as(usize, 1), highlighter.full_reparse_count);
+    try std.testing.expectEqual(@as(usize, 1), highlighter.incremental_reparse_count);
+}
+
+test "highlighter discards stale edit deltas when revisions are skipped" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("main.zig");
+    try buf.insertChar(0, 0, 'c');
+    try buf.insertChar(0, 1, 'o');
+    try buf.insertChar(0, 2, 'n');
+    try buf.insertChar(0, 3, 's');
+    try buf.insertChar(0, 4, 't');
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+    try highlighter.ensureForBuffer(&buf);
+
+    try buf.insertChar(0, 5, ' ');
+    try buf.insertChar(0, 6, 'x');
+    try highlighter.ensureForBuffer(&buf);
+
+    try std.testing.expectEqual(@as(usize, 2), highlighter.full_reparse_count);
+    try std.testing.expectEqual(@as(usize, 0), highlighter.incremental_reparse_count);
 }

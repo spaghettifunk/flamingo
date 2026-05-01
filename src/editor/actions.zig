@@ -55,6 +55,9 @@ pub fn paste(ed: *editor.Editor) !void {
     const content = ed.clipboard orelse return;
     const mc = tab.mainCursor();
 
+    tab.buf.beginUndoGroup();
+    defer tab.buf.endUndoGroup();
+
     // If selection exists, delete it first
     if (mc.selection_start) |ss| {
         const start = if (ss.row < mc.row or (ss.row == mc.row and ss.col < mc.col)) ss else editor.Pos{ .row = mc.row, .col = mc.col };

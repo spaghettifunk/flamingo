@@ -17,4 +17,6 @@ test {
     _ = @import("src/editor/actions.zig");
     _ = @import("src/editor/search.zig");
     _ = @import("src/editor/syntax.zig");
+    _ = @import("src/perf/perf.zig");
+    _ = @import("src/editor/render.zig");
 }

@@ -326,6 +326,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 if (ed.currentTab()) |tab| {
                     const mc = tab.mainCursor();
                     if (matches(event, keys.indent)) {
+                        tab.buf.beginUndoGroup();
+                        defer tab.buf.endUndoGroup();
                         for (0..4) |_| {
                             try tab.buf.insertChar(mc.row, mc.col, ' ');
                             mc.col += 1;
@@ -439,6 +441,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
     const keys = ed.keys;
+    const top_reserved = 2;
+    const bot_reserved = 1;
+    const page_rows = if (ed.height > top_reserved + bot_reserved) ed.height - (top_reserved + bot_reserved) else 1;
 
     // Multi-cursor support: apply movement to all cursors
     var handled = false;
@@ -471,6 +476,16 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
             handled = true;
         } else if (matchesMovement(event, keys.move_down)) {
             if (cursor.row < tab.buf.lines.items.len - 1) cursor.row += 1;
+            const new_line_len = tab.buf.lines.items[cursor.row].len();
+            if (cursor.col > new_line_len) cursor.col = new_line_len;
+            handled = true;
+        } else if (event.key == .PageUp and !event.ctrl and !event.alt) {
+            cursor.row = cursor.row -| page_rows;
+            const new_line_len = tab.buf.lines.items[cursor.row].len();
+            if (cursor.col > new_line_len) cursor.col = new_line_len;
+            handled = true;
+        } else if (event.key == .PageDown and !event.ctrl and !event.alt) {
+            cursor.row = @min(tab.buf.lines.items.len - 1, cursor.row + page_rows);
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             if (cursor.col > new_line_len) cursor.col = new_line_len;
             handled = true;
