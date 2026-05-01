@@ -224,6 +224,20 @@ test "deleteLine: last line leaves buffer with at least one line" {
     try std.testing.expect(ed.currentTab().?.buf.lines.items.len >= 1);
 }
 
+test "deleteLine: final row removes the line instead of merging it" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "first", "second" });
+    defer ed.deinit();
+
+    ed.currentTab().?.mainCursor().row = 1;
+    try actions.deleteLine(&ed);
+
+    const tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 1), tab.buf.lines.items.len);
+    try expectLine(a, &ed, 0, "first");
+    try std.testing.expect(tab.buf.lastEditDelta() != null);
+}
+
 // ── multi-cursor ──────────────────────────────────────────────────────────────
 
 test "addCursorAbove: adds cursor on row above" {

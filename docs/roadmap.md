@@ -12,7 +12,7 @@ A set of todos without order or priority. Simply grouped by category
 
 ## Performance TODO
 
-- [ ] implement tree-sitter incremental edits
+- [x] implement tree-sitter incremental edits
 - [ ] introduce async/background parsing yet for syntax highlight
 - [ ] implement piece-table like vim to improve editing performance
 - [ ] find a way to bring FPS to at least 100

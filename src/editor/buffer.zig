@@ -180,6 +180,8 @@ pub const TextEditDelta = struct {
     new_end_byte: usize,
 };
 
+const max_edit_delta_history = 64;
+
 pub const Buffer = struct {
     lines: std.ArrayList(Line),
     allocator: std.mem.Allocator,
@@ -192,6 +194,8 @@ pub const Buffer = struct {
     undo_group_depth: usize = 0,
     undo_group_recorded: bool = false,
     last_edit_delta: ?TextEditDelta = null,
+    edit_delta_history: [max_edit_delta_history]TextEditDelta = undefined,
+    edit_delta_count: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {
         var lines = std.ArrayList(Line).empty;
@@ -236,6 +240,7 @@ pub const Buffer = struct {
         self.revision +%= 1;
         self.is_dirty = self.revision != self.saved_revision;
         self.last_edit_delta = null;
+        self.edit_delta_count = 0;
     }
 
     fn markChangedWithDelta(self: *Buffer, delta: TextEditDelta) void {
@@ -244,10 +249,49 @@ pub const Buffer = struct {
         var stored = delta;
         stored.revision = self.revision;
         self.last_edit_delta = stored;
+        self.appendEditDelta(stored);
     }
 
     pub fn lastEditDelta(self: *const Buffer) ?TextEditDelta {
         return self.last_edit_delta;
+    }
+
+    pub fn editDeltasSince(self: *const Buffer, revision: u64) ?[]const TextEditDelta {
+        if (revision == self.revision) return self.edit_delta_history[0..0];
+        if (self.edit_delta_count == 0) return null;
+
+        const first_revision = revision +% 1;
+        var start_index: ?usize = null;
+        for (self.edit_delta_history[0..self.edit_delta_count], 0..) |delta, i| {
+            if (delta.revision == first_revision) {
+                start_index = i;
+                break;
+            }
+        }
+
+        const start = start_index orelse return null;
+        var expected = first_revision;
+        for (self.edit_delta_history[start..self.edit_delta_count]) |delta| {
+            if (delta.revision != expected) return null;
+            expected +%= 1;
+        }
+
+        if (expected -% 1 != self.revision) return null;
+        return self.edit_delta_history[start..self.edit_delta_count];
+    }
+
+    fn appendEditDelta(self: *Buffer, delta: TextEditDelta) void {
+        if (self.edit_delta_count == max_edit_delta_history) {
+            std.mem.copyForwards(
+                TextEditDelta,
+                self.edit_delta_history[0 .. max_edit_delta_history - 1],
+                self.edit_delta_history[1..max_edit_delta_history],
+            );
+            self.edit_delta_count -= 1;
+        }
+
+        self.edit_delta_history[self.edit_delta_count] = delta;
+        self.edit_delta_count += 1;
     }
 
     pub fn byteOffset(self: *const Buffer, row: usize, col: usize) usize {
@@ -803,6 +847,40 @@ test "Buffer edit deltas track newline and multi-line delete" {
     try std.testing.expectEqual(@as(usize, 1), range_delta.start_byte);
     try std.testing.expectEqual(@as(usize, 2), range_delta.old_end_byte);
     try std.testing.expectEqual(@as(usize, 1), range_delta.new_end_byte);
+}
+
+test "Buffer edit delta history tracks contiguous edits" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    const base_revision = buf.revision;
+    try buf.insertChar(0, 0, 'a');
+    try buf.insertChar(0, 1, 'b');
+    try buf.insertChar(0, 2, 'c');
+
+    const deltas = buf.editDeltasSince(base_revision).?;
+    try std.testing.expectEqual(@as(usize, 3), deltas.len);
+    try std.testing.expectEqual(@as(usize, 1), deltas[0].revision);
+    try std.testing.expectEqual(@as(usize, 3), deltas[2].revision);
+    try std.testing.expectEqual(@as(usize, 2), deltas[2].start_byte);
+    try std.testing.expectEqual(@as(usize, 3), deltas[2].new_end_byte);
+}
+
+test "Buffer edit deltas use UTF-8 byte columns" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    try buf.insertChar(0, 0, 0xc3);
+    try buf.insertChar(0, 1, 0xa9);
+    try buf.insertChar(0, 2, 'x');
+
+    const delta = buf.lastEditDelta().?;
+    try std.testing.expectEqual(@as(usize, 2), delta.start_byte);
+    try std.testing.expectEqual(@as(usize, 2), delta.start_point.col);
+    try std.testing.expectEqual(@as(usize, 3), delta.new_end_byte);
+    try std.testing.expectEqual(@as(usize, 3), delta.new_end_point.col);
 }
 
 test "Buffer undo group records one snapshot" {

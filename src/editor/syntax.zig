@@ -168,10 +168,12 @@ pub const Highlighter = struct {
             var used_incremental = false;
 
             if (old_tree) |tree| {
-                if (buf.lastEditDelta()) |delta| {
-                    if (delta.revision == buf.revision and self.parsed_revision != null and self.parsed_revision.? +% 1 == buf.revision) {
-                        tree.edit(toInputEdit(delta));
-                        used_incremental = true;
+                if (self.parsed_revision) |parsed_revision| {
+                    if (buf.editDeltasSince(parsed_revision)) |deltas| {
+                        for (deltas) |delta| {
+                            tree.edit(toInputEdit(delta));
+                        }
+                        used_incremental = deltas.len > 0;
                     } else {
                         tree.destroy();
                         old_tree = null;
@@ -575,7 +577,7 @@ test "highlighter uses incremental tree-sitter edits for matching buffer delta" 
     try std.testing.expectEqual(@as(usize, 1), highlighter.incremental_reparse_count);
 }
 
-test "highlighter discards stale edit deltas when revisions are skipped" {
+test "highlighter applies multiple contiguous tree-sitter edits" {
     const allocator = std.testing.allocator;
 
     var buf = try buffer.Buffer.init(allocator);
@@ -595,6 +597,53 @@ test "highlighter discards stale edit deltas when revisions are skipped" {
     try buf.insertChar(0, 6, 'x');
     try highlighter.ensureForBuffer(&buf);
 
+    try std.testing.expectEqual(@as(usize, 1), highlighter.full_reparse_count);
+    try std.testing.expectEqual(@as(usize, 1), highlighter.incremental_reparse_count);
+}
+
+test "highlighter discards stale edit deltas when history is cleared" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("main.zig");
+    try buf.insertChar(0, 0, 'c');
+    try buf.insertChar(0, 1, 'o');
+    try buf.insertChar(0, 2, 'n');
+    try buf.insertChar(0, 3, 's');
+    try buf.insertChar(0, 4, 't');
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+    try highlighter.ensureForBuffer(&buf);
+
+    try buf.insertChar(0, 5, ' ');
+    buf.markChanged();
+    try highlighter.ensureForBuffer(&buf);
+
     try std.testing.expectEqual(@as(usize, 2), highlighter.full_reparse_count);
     try std.testing.expectEqual(@as(usize, 0), highlighter.incremental_reparse_count);
+}
+
+test "highlighter keeps highlights aligned after edit before token" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("main.zig");
+    const source = "const value = 1;";
+    for (source, 0..) |c, i| {
+        try buf.insertChar(0, i, c);
+    }
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+    try highlighter.ensureForBuffer(&buf);
+    try std.testing.expectEqual(Style.keyword, highlighter.styleAtLine(0, 0).?);
+
+    try buf.insertNewline(0, 0);
+    try highlighter.ensureForBuffer(&buf);
+
+    try std.testing.expect(highlighter.styleAtLine(0, 0) == null);
+    try std.testing.expectEqual(Style.keyword, highlighter.styleAtLine(1, 0).?);
 }
