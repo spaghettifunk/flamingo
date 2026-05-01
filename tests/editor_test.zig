@@ -195,7 +195,10 @@ test "Editor: render includes syntax, selection, and search styling" {
     const logger = try th.setupLogger(a);
     defer logger.deinit();
 
-    var ed = try th.makeEditor(a, &[_][]const u8{"const value = \"hi\";"});
+    var ed = try th.makeEditor(a, &[_][]const u8{
+        "const value = \"hi\";",
+        "const other = 1;",
+    });
     defer ed.deinit();
 
     ed.mode = .Normal;

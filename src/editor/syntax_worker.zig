@@ -43,6 +43,9 @@ pub const SyntaxParseWorker = struct {
     }
 
     pub fn stop(self: *SyntaxParseWorker) void {
+        // Stop producers before the editor closes the shared EventQueue. Any
+        // in-flight source snapshot remains owned here until discarded or
+        // transferred through a successful queue push.
         self.mutex.lockUncancelable(self.io);
         self.quit = true;
         if (self.pending) |*request| {

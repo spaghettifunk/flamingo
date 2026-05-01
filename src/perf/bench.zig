@@ -70,7 +70,7 @@ pub fn main(init: std.process.Init) !void {
         ed.mode = .Normal;
         ed.explorer_visible = false;
         ed.explorer_focused = false;
-        ed.completion_active = false;
+        ed.lsp_ui.completion_active = false;
         ed.search_buffer.clearRetainingCapacity();
 
         for (0..frames) |i| {
@@ -99,12 +99,13 @@ pub fn main(init: std.process.Init) !void {
 
     if (cursor_avg_bytes >= 300) return error.FastCursorMoveBytesTargetMissed;
 
-    std.debug.print("flamingo perf benchmark: lines={d} frames={d} p50_ns={d} p95_ns={d} avg_bytes={d} cursor_p50_ns={d} cursor_p95_ns={d} cursor_avg_bytes={d}\n", .{
+    std.debug.print("flamingo perf benchmark: lines={d} full_frames={d} render_path=virtual p50_ns={d} p95_ns={d} avg_bytes={d} cursor_frames={d} cursor_path=fast p50_ns={d} p95_ns={d} avg_bytes={d}\n", .{
         line_count,
         frames,
         p50,
         p95,
         avg_bytes,
+        frames,
         cursor_p50,
         cursor_p95,
         cursor_avg_bytes,

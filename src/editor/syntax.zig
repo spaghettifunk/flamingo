@@ -77,6 +77,28 @@ pub const HighlightRun = struct {
     style: Style,
 };
 
+pub const HighlightRunCursor = struct {
+    runs: []const HighlightRun,
+    index: usize = 0,
+
+    pub fn styleAt(self: *HighlightRunCursor, col: usize) ?Style {
+        while (self.index < self.runs.len and self.runs[self.index].end_col <= col) {
+            self.index += 1;
+        }
+
+        var best: ?Style = null;
+        var i = self.index;
+        while (i < self.runs.len) : (i += 1) {
+            const run = self.runs[i];
+            if (run.start_col > col) break;
+            if (col < run.end_col and (best == null or run.style.priority() > best.?.priority())) {
+                best = run.style;
+            }
+        }
+        return best;
+    }
+};
+
 pub const ParseResult = struct {
     buffer_id: u64,
     revision: u64,
@@ -248,7 +270,7 @@ pub const Highlighter = struct {
         try self.ensureLanguageState(next_language, true);
 
         if (self.parsed_revision != buf.revision) {
-            const content = try buf.toString(self.allocator);
+            const content = try buf.toOwnedTextSnapshot(self.allocator);
             errdefer self.allocator.free(content);
 
             const old_source = self.source;
@@ -336,6 +358,11 @@ pub const Highlighter = struct {
         return best;
     }
 
+    pub fn highlightRunCursor(self: *const Highlighter, row: usize) HighlightRunCursor {
+        const runs = self.line_runs.get(row) orelse return .{ .runs = &.{} };
+        return .{ .runs = runs.items };
+    }
+
     pub fn styleAt(self: *const Highlighter, byte_offset: usize) ?Style {
         var best: ?Style = null;
         for (self.spans.items) |span| {
@@ -383,6 +410,10 @@ pub const Highlighter = struct {
         }
 
         std.mem.sort(HighlightSpan, self.spans.items, {}, lessThanSpan);
+        var runs_it = self.line_runs.valueIterator();
+        while (runs_it.next()) |runs| {
+            std.mem.sort(HighlightRun, runs.items, {}, lessThanRun);
+        }
     }
 
     fn appendLineRuns(self: *Highlighter, start_byte: usize, end_byte: usize, style: Style) !void {
@@ -561,6 +592,13 @@ fn lessThanSpan(_: void, lhs: HighlightSpan, rhs: HighlightSpan) bool {
         return lhs.style.priority() > rhs.style.priority();
     }
     return lhs.start < rhs.start;
+}
+
+fn lessThanRun(_: void, lhs: HighlightRun, rhs: HighlightRun) bool {
+    if (lhs.start_col == rhs.start_col) {
+        return lhs.style.priority() > rhs.style.priority();
+    }
+    return lhs.start_col < rhs.start_col;
 }
 
 test "languageFromFilename maps supported extensions" {

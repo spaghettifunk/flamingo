@@ -93,6 +93,19 @@ pub const SearchSystem = struct {
         const idx = self.active_match_idx orelse return null;
         return self.matches.items[idx];
     }
+
+    pub fn matchForRow(self: *const SearchSystem, row: usize) ?Match {
+        for (self.matches.items) |m| {
+            if (m.row == row) return m;
+            if (m.row > row) break;
+        }
+        return null;
+    }
+
+    pub fn activeMatchRow(self: *const SearchSystem) ?usize {
+        const active = self.getActiveMatch() orelse return null;
+        return active.row;
+    }
 };
 
 pub fn strictMatch(line: []const u8, query: []const u8, allocator: std.mem.Allocator) !?[]const usize {

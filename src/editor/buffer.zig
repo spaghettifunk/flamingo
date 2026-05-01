@@ -532,7 +532,7 @@ pub const Buffer = struct {
         self.markSaved();
     }
 
-    pub fn toString(self: *const Buffer, allocator: std.mem.Allocator) ![]u8 {
+    pub fn toOwnedTextSnapshot(self: *const Buffer, allocator: std.mem.Allocator) ![]u8 {
         var out = std.ArrayList(u8).empty;
         errdefer out.deinit(allocator);
         for (self.lines.items) |*line| {
@@ -542,6 +542,10 @@ pub const Buffer = struct {
             try out.append(allocator, '\n');
         }
         return out.toOwnedSlice(allocator);
+    }
+
+    pub fn toString(self: *const Buffer, allocator: std.mem.Allocator) ![]u8 {
+        return self.toOwnedTextSnapshot(allocator);
     }
 
     pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, filename: []const u8) !Buffer {
@@ -925,4 +929,22 @@ test "Buffer word jumps" {
 
     try buf.jumpWordLeft(&row, &col);
     try std.testing.expectEqual(@as(usize, 6), col); // start of "world"
+}
+
+test "Buffer text snapshot preserves trailing newline contract" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    const empty = try buf.toOwnedTextSnapshot(allocator);
+    defer allocator.free(empty);
+    try std.testing.expectEqualStrings("\n", empty);
+
+    try buf.insertChar(0, 0, 'a');
+    try buf.insertNewline(0, 1);
+    try buf.insertChar(1, 0, 'b');
+
+    const snapshot = try buf.toOwnedTextSnapshot(allocator);
+    defer allocator.free(snapshot);
+    try std.testing.expectEqualStrings("a\nb\n", snapshot);
 }

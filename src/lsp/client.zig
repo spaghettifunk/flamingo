@@ -84,6 +84,8 @@ pub const LspClient = struct {
     }
 
     pub fn stop(self: *LspClient) void {
+        // Reader/stderr threads are the LSP producers for the editor queue, so
+        // they must be joined before EventQueue.deinit can free pending events.
         self.quit_flag.store(true, .seq_cst);
 
         self.process.kill(self.io);
