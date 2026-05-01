@@ -8,6 +8,7 @@ const explorer = @import("explorer.zig");
 const input = @import("input.zig");
 const search = @import("search.zig");
 const syntax = @import("syntax.zig");
+const syntax_worker = @import("syntax_worker.zig");
 const perf = @import("../perf/perf.zig");
 const render_mod = @import("render.zig");
 const lsp_manager = @import("../lsp/manager.zig");
@@ -55,6 +56,8 @@ pub const Tab = struct {
     buf: buffer.Buffer,
     cursors: std.ArrayListUnmanaged(Cursor),
     syntax_highlighter: syntax.Highlighter,
+    syntax_buffer_id: u64,
+    syntax_requested_revision: ?u64 = null,
     main_cursor_idx: usize = 0,
     scroll_row: usize = 0,
     lsp_notified_revision: ?u64 = null,
@@ -215,6 +218,7 @@ pub const Editor = struct {
     search_system: ?search.SearchSystem = null,
     clipboard: ?[]u8 = null,
     event_queue: *event_queue.EventQueue,
+    syntax_parse_worker: *syntax_worker.SyntaxParseWorker,
     lsp_mgr: ?lsp_manager.LspManager = null,
     is_deinitialized: bool = false,
     fps_sample_start_ns: ?i96 = null,
@@ -226,6 +230,7 @@ pub const Editor = struct {
     legacy_frame: std.ArrayListUnmanaged(u8) = .empty,
     screen: render_mod.VirtualScreen,
     screen_renderer: render_mod.VirtualScreenRenderer,
+    next_syntax_buffer_id: u64 = 1,
 
     // Completion state
     completion_items: ?std.json.Value = null,
@@ -243,6 +248,13 @@ pub const Editor = struct {
         }
 
         const mgr = try lsp_manager.LspManager.init(allocator, io, queue);
+        errdefer {
+            var owned_mgr = mgr;
+            owned_mgr.deinit();
+        }
+
+        const parser_worker = try syntax_worker.SyntaxParseWorker.start(allocator, io, queue);
+        errdefer parser_worker.stop();
 
         return Editor{
             .allocator = allocator,
@@ -252,6 +264,7 @@ pub const Editor = struct {
             .tabs = std.ArrayList(Tab).empty,
             .search_system = search.SearchSystem.init(allocator),
             .event_queue = queue,
+            .syntax_parse_worker = parser_worker,
             .lsp_mgr = mgr,
             .diagnostics = std.StringHashMap(std.json.Value).init(allocator),
             .perf_sampler = perf.PerfSampler.initFromEnv(),
@@ -263,6 +276,8 @@ pub const Editor = struct {
     pub fn deinit(self: *Editor) void {
         if (self.is_deinitialized) return;
         self.is_deinitialized = true;
+
+        self.syntax_parse_worker.stop();
 
         for (self.tabs.items) |*tab| {
             tab.deinit(self.allocator);
@@ -338,10 +353,13 @@ pub const Editor = struct {
 
         var cursors = std.ArrayListUnmanaged(Cursor).empty;
         try cursors.append(self.allocator, .{});
+        const syntax_buffer_id = self.next_syntax_buffer_id;
+        self.next_syntax_buffer_id +%= 1;
         try self.tabs.append(self.allocator, .{
             .buf = buf,
             .cursors = cursors,
             .syntax_highlighter = syntax.Highlighter.init(self.allocator),
+            .syntax_buffer_id = syntax_buffer_id,
             .lsp_notified_revision = if (buf.filename != null) buf.revision else null,
         });
         self.active_tab_index = self.tabs.items.len - 1;
@@ -501,7 +519,8 @@ pub const Editor = struct {
             // Pump events
             const events_start = perf.nowNs();
             while (self.event_queue.tryPop()) |ev| {
-                switch (ev) {
+                var event = ev;
+                switch (event) {
                     .lsp_message => |msg| {
                         defer self.allocator.free(msg.message);
                         if (self.lsp_mgr) |*mgr| {
@@ -562,6 +581,12 @@ pub const Editor = struct {
                                 .none => {},
                             }
                         }
+                    },
+                    .syntax_parse_result => |*result| {
+                        defer result.deinit(self.allocator);
+                        self.handleSyntaxParseResult(result) catch |err| {
+                            logz.err().fmt("msg", "failed to install syntax parse result: {any}", .{err}).log();
+                        };
                     },
                 }
             }
@@ -641,6 +666,12 @@ pub const Editor = struct {
                 metrics.bytes_emitted = bytes;
                 self.render_dirty = false;
                 self.force_full_render = false;
+            }
+
+            if (!handled_input) {
+                const syntax_request_start = perf.nowNs();
+                try self.queueSyntaxParseForCurrentTab();
+                metrics.add(.update_state, perf.elapsedNs(syntax_request_start));
             }
 
             metrics.add(.total_loop, perf.elapsedNs(loop_start));
@@ -879,6 +910,70 @@ pub const Editor = struct {
         }
     }
 
+    fn handleSyntaxParseResult(self: *Editor, result: *syntax.ParseResult) !void {
+        const tab = self.findTabBySyntaxBufferId(result.buffer_id) orelse {
+            logz.debug().fmt("msg", "dropping syntax result for closed buffer {d}", .{result.buffer_id}).log();
+            return;
+        };
+
+        if (result.revision != tab.buf.revision) {
+            logz.debug().fmt(
+                "msg",
+                "dropping stale syntax result for buffer {d}: result revision {d}, current revision {d}",
+                .{ result.buffer_id, result.revision, tab.buf.revision },
+            ).log();
+            return;
+        }
+
+        const current_language = if (tab.buf.filename) |filename|
+            syntax.languageFromFilename(filename)
+        else
+            null;
+        if (current_language == null or current_language.? != result.language) {
+            tab.syntax_requested_revision = null;
+            logz.debug().fmt("msg", "dropping syntax result for changed language on buffer {d}", .{result.buffer_id}).log();
+            return;
+        }
+
+        try tab.syntax_highlighter.installParseResult(result);
+        tab.syntax_requested_revision = result.revision;
+        self.markDirty(.partial);
+    }
+
+    fn findTabBySyntaxBufferId(self: *Editor, buffer_id: u64) ?*Tab {
+        for (self.tabs.items) |*tab| {
+            if (tab.syntax_buffer_id == buffer_id) return tab;
+        }
+        return null;
+    }
+
+    fn prepareSyntaxForViewport(self: *Editor, tab: *Tab, first_line: usize, last_line: usize, margin: usize) !void {
+        _ = self;
+        _ = try tab.syntax_highlighter.prepareForAsyncBuffer(&tab.buf) orelse {
+            tab.syntax_requested_revision = null;
+            return;
+        };
+
+        try tab.syntax_highlighter.ensureViewportFromCommitted(first_line, last_line, margin);
+    }
+
+    fn queueSyntaxParseForCurrentTab(self: *Editor) !void {
+        const tab = self.currentTab() orelse return;
+        const language = try tab.syntax_highlighter.prepareForAsyncBuffer(&tab.buf) orelse {
+            tab.syntax_requested_revision = null;
+            return;
+        };
+
+        if (tab.syntax_highlighter.parsed_revision != tab.buf.revision and
+            tab.syntax_requested_revision != tab.buf.revision)
+        {
+            const source = try tab.buf.toString(self.allocator);
+            const revision = tab.buf.revision;
+            tab.syntax_requested_revision = revision;
+            self.syntax_parse_worker.requestParse(tab.syntax_buffer_id, revision, language, source);
+        }
+    }
+
     fn notePendingLspChange(self: *Editor) void {
         const tab = self.currentTab() orelse return;
         if (!tab.needsLspChangeNotification()) return;
@@ -1028,7 +1123,7 @@ pub const Editor = struct {
         const bot_reserved = 1; // status bar
         const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 0;
         if (tab) |t| {
-            t.syntax_highlighter.ensureForViewport(&t.buf, t.scroll_row, t.scroll_row + visible_rows, 20) catch {};
+            self.prepareSyntaxForViewport(t, t.scroll_row, t.scroll_row + visible_rows, 20) catch {};
         }
         for (1..visible_rows + 1) |screen_row| {
             // 1. Move to the correct column for the right-hand panel (start at row 3)
@@ -1276,7 +1371,7 @@ pub const Editor = struct {
         const visible_rows = if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
         if (tab) |t| {
             const highlight_start = perf.nowNs();
-            t.syntax_highlighter.ensureForViewport(&t.buf, t.scroll_row, t.scroll_row + visible_rows, 20) catch {};
+            self.prepareSyntaxForViewport(t, t.scroll_row, t.scroll_row + visible_rows, 20) catch {};
             metrics.add(.highlight_viewport, perf.elapsedNs(highlight_start));
 
             for (0..visible_rows) |screen_row| {

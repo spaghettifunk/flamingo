@@ -27,10 +27,13 @@ pub fn main(init: std.process.Init) !void {
 
     var cursors = std.ArrayListUnmanaged(editor.Cursor).empty;
     try cursors.append(allocator, .{});
+    const syntax_buffer_id = ed.next_syntax_buffer_id;
+    ed.next_syntax_buffer_id +%= 1;
     try ed.tabs.append(allocator, .{
         .buf = buf,
         .cursors = cursors,
         .syntax_highlighter = syntax.Highlighter.init(allocator),
+        .syntax_buffer_id = syntax_buffer_id,
         .lsp_notified_revision = buf.revision,
     });
     ed.active_tab_index = 0;

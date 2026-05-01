@@ -200,6 +200,7 @@ test "Editor: render includes syntax, selection, and search styling" {
 
     ed.mode = .Normal;
     try ed.currentTab().?.buf.setFilename("main.zig");
+    try ed.currentTab().?.syntax_highlighter.ensureForBuffer(&ed.currentTab().?.buf);
     ed.currentTab().?.mainCursor().selection_start = .{ .row = 0, .col = 0 };
     ed.currentTab().?.mainCursor().col = 5;
     try ed.search_buffer.appendSlice(a, "value");

@@ -77,6 +77,25 @@ pub const HighlightRun = struct {
     style: Style,
 };
 
+pub const ParseResult = struct {
+    buffer_id: u64,
+    revision: u64,
+    language: LanguageId,
+    source: []u8,
+    tree: ?*ts.Tree,
+
+    pub fn deinit(self: *ParseResult, allocator: std.mem.Allocator) void {
+        if (self.tree) |tree| {
+            tree.destroy();
+            self.tree = null;
+        }
+        if (self.source.len > 0) {
+            allocator.free(self.source);
+            self.source = &.{};
+        }
+    }
+};
+
 pub fn languageFromFilename(filename: []const u8) ?LanguageId {
     const ext = std.fs.path.extension(filename);
     if (std.mem.eql(u8, ext, ".zig")) return .zig;
@@ -127,6 +146,81 @@ pub const Highlighter = struct {
         try self.ensureForViewport(buf, 0, buf.lines.items.len, 0);
     }
 
+    pub fn prepareForAsyncBuffer(self: *Highlighter, buf: *const buffer.Buffer) !?LanguageId {
+        const filename = buf.filename orelse {
+            self.resetAll();
+            return null;
+        };
+
+        const next_language = languageFromFilename(filename) orelse {
+            self.resetAll();
+            return null;
+        };
+
+        try self.ensureLanguageState(next_language, false);
+        return next_language;
+    }
+
+    pub fn installParseResult(self: *Highlighter, result: *ParseResult) !void {
+        if (result.tree == null) {
+            return;
+        }
+
+        try self.ensureLanguageState(result.language, false);
+
+        const old_source = self.source;
+        const old_tree = self.tree;
+
+        self.source = result.source;
+        result.source = &.{};
+        self.tree = result.tree;
+        result.tree = null;
+        self.parsed_revision = result.revision;
+        self.viewport_revision = null;
+        self.viewport_first_line = 0;
+        self.viewport_last_line = 0;
+        self.spans.clearRetainingCapacity();
+        self.clearLineRuns();
+        self.full_reparse_count += 1;
+
+        errdefer {
+            if (old_tree) |tree| tree.destroy();
+            if (old_source.len > 0) self.allocator.free(old_source);
+        }
+        try self.rebuildLineStarts();
+
+        if (old_tree) |tree| tree.destroy();
+        if (old_source.len > 0) self.allocator.free(old_source);
+    }
+
+    pub fn ensureViewportFromCommitted(self: *Highlighter, first_line: usize, last_line: usize, margin: usize) !void {
+        const parsed_revision = self.parsed_revision orelse return;
+        const query = self.query orelse return;
+        const tree = self.tree orelse return;
+        if (self.line_starts.items.len == 0) return;
+
+        const line_count = self.line_starts.items.len;
+        const requested_first = if (first_line > margin) first_line - margin else 0;
+        const requested_last = @min(line_count, last_line + margin);
+
+        if (self.viewport_revision == parsed_revision and
+            requested_first >= self.viewport_first_line and
+            requested_last <= self.viewport_last_line)
+        {
+            return;
+        }
+
+        const start_byte = self.lineStartByte(requested_first);
+        const end_byte = self.lineEndByte(requested_last);
+
+        self.spans.clearRetainingCapacity();
+        self.clearLineRuns();
+        try self.collectSpans(query, tree.rootNode(), start_byte, end_byte);
+        self.viewport_revision = parsed_revision;
+        self.viewport_first_line = requested_first;
+        self.viewport_last_line = requested_last;
+    }
+
     pub fn ensureForViewport(self: *Highlighter, buf: *const buffer.Buffer, first_line: usize, last_line: usize, margin: usize) !void {
         const filename = buf.filename orelse {
             self.resetAll();
@@ -151,13 +245,7 @@ pub const Highlighter = struct {
             return;
         }
 
-        if (self.language != next_language) {
-            self.resetLanguageState();
-            self.language = next_language;
-            self.parser = ts.Parser.create();
-            try self.parser.?.setLanguage(languagePtr(next_language));
-            self.query = createQuery(next_language) catch null;
-        }
+        try self.ensureLanguageState(next_language, true);
 
         if (self.parsed_revision != buf.revision) {
             const content = try buf.toString(self.allocator);
@@ -366,6 +454,22 @@ pub const Highlighter = struct {
         }
     }
 
+    fn ensureLanguageState(self: *Highlighter, next_language: LanguageId, need_parser: bool) !void {
+        if (self.language != next_language) {
+            self.resetLanguageState();
+            self.language = next_language;
+        }
+
+        if (need_parser and self.parser == null) {
+            self.parser = ts.Parser.create();
+            try self.parser.?.setLanguage(languagePtr(next_language));
+        }
+
+        if (self.query == null) {
+            self.query = createQuery(next_language) catch null;
+        }
+    }
+
     fn clearParsedState(self: *Highlighter) void {
         if (self.tree) |tree| {
             tree.destroy();
@@ -402,7 +506,7 @@ fn toInputEdit(delta: buffer.TextEditDelta) ts.InputEdit {
     };
 }
 
-fn languagePtr(language: LanguageId) *const ts.Language {
+pub fn languagePtr(language: LanguageId) *const ts.Language {
     const ptr = switch (language) {
         .zig => tree_sitter_zig(),
         .go => tree_sitter_go(),
