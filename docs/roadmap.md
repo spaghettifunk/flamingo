@@ -13,7 +13,7 @@ A set of todos without order or priority. Simply grouped by category
 ## Performance TODO
 
 - [x] implement tree-sitter incremental edits
-- [ ] introduce async/background parsing yet for syntax highlight
+- [x] introduce async/background parsing yet for syntax highlight
 - [ ] implement piece-table like vim to improve editing performance
 - [ ] find a way to bring FPS to at least 100
 - [ ] increase scrolling speed
@@ -27,7 +27,7 @@ A set of todos without order or priority. Simply grouped by category
 
 ## Editing TODO
 
-- [ ] jump to line (based on the gutter value) (potentially with `:n` where `n` is the gutter value - not sure though)
+- [ ] jump to line (potentially with `:n` where `n` is the gutter value - not sure though)
 - [ ] jump to top/bottom of file
 - [ ] implement file rename in explorer (and status bar with `:renameFile <path/to/file> <path/to/new_file_name`)
 - [ ] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>`)
