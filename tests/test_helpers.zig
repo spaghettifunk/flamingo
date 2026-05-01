@@ -56,7 +56,7 @@ pub fn makeEditor(allocator: std.mem.Allocator, lines: []const []const u8) !edit
     }
 
     try ed.addTab(buf);
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     // Provide sensible terminal dimensions for scroll / gutter tests.
     ed.width = 80;

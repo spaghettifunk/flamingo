@@ -40,36 +40,36 @@ fn matchesMovement(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
 }
 
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
-    if (ed.error_message != null) {
-        ed.error_message = null;
+    if (ed.state.error_message != null) {
+        ed.state.error_message = null;
     }
 
     const keys = ed.keys;
 
     if (matches(event, keys.toggle_explorer)) {
-        if (ed.tree == null) {
-            ed.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
+        if (ed.state.tree == null) {
+            ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
         }
-        ed.explorer_visible = !ed.explorer_visible;
-        if (ed.explorer_visible) {
-            ed.explorer_focused = true;
+        ed.state.explorer_visible = !ed.state.explorer_visible;
+        if (ed.state.explorer_visible) {
+            ed.state.explorer_focused = true;
         } else {
-            ed.explorer_focused = false;
+            ed.state.explorer_focused = false;
         }
         ed.markDirty(.full);
         return;
     }
 
     if (matches(event, keys.close_tab)) {
-        if (ed.mode != .Dashboard) {
+        if (ed.state.mode != .Dashboard) {
             ed.closeTab();
         }
         return;
     }
 
     if (matches(event, keys.switch_focus)) {
-        if (ed.explorer_visible) {
-            ed.explorer_focused = !ed.explorer_focused;
+        if (ed.state.explorer_visible) {
+            ed.state.explorer_focused = !ed.state.explorer_focused;
         }
         return;
     }
@@ -85,7 +85,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     // --- Global Actions (Normal & Insert) ---
-    if (ed.mode == .Normal or ed.mode == .Insert) {
+    if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
         if (matches(event, keys.select_all)) {
             actions.selectAll(ed);
             return;
@@ -140,75 +140,75 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         }
         if (matches(event, keys.normal_mode)) {
             actions.clearSelections(ed);
-            if (ed.mode == .Insert) ed.mode = .Normal;
+            if (ed.state.mode == .Insert) ed.state.mode = .Normal;
             return;
         }
     }
 
-    if (ed.explorer_focused and ed.explorer_visible and ed.tree != null) {
-        if (ed.mode == .Normal or ed.mode == .Insert) {
-            if (ed.tree.?.search_active) {
+    if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null) {
+        if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
+            if (ed.state.tree.?.search_active) {
                 if (matches(event, keys.normal_mode)) {
-                    ed.tree.?.cancelSearch();
+                    ed.state.tree.?.cancelSearch();
                     return;
                 } else if (matches(event, keys.prompt_backspace)) {
-                    try ed.tree.?.backspaceSearch();
+                    try ed.state.tree.?.backspaceSearch();
                     return;
                 } else if (matches(event, keys.explorer_up)) {
-                    ed.tree.?.moveUp();
+                    ed.state.tree.?.moveUp();
                     return;
                 } else if (matches(event, keys.explorer_down)) {
-                    ed.tree.?.moveDown();
+                    ed.state.tree.?.moveDown();
                     return;
                 } else if (matches(event, keys.explorer_open)) {
-                    if (ed.tree.?.selectedSearchResult()) |result| {
+                    if (ed.state.tree.?.selectedSearchResult()) |result| {
                         const path = try ed.allocator.dupe(u8, result.absolute_path);
                         defer ed.allocator.free(path);
                         const is_dir = result.is_dir;
 
-                        try ed.tree.?.finishSearch();
+                        try ed.state.tree.?.finishSearch();
                         if (is_dir) {
-                            ed.tree.?.toggleExpand() catch {};
+                            ed.state.tree.?.toggleExpand() catch {};
                         } else {
                             if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, path)) |b| {
                                 try ed.addTab(b);
-                                ed.explorer_focused = false;
-                                ed.mode = .Normal;
+                                ed.state.explorer_focused = false;
+                                ed.state.mode = .Normal;
                             } else |err| {
                                 logz.err().fmt("msg", "failed to open file {s}: {s}", .{ path, @errorName(err) }).log();
-                                ed.error_message = "Could not open file";
+                                ed.state.error_message = "Could not open file";
                             }
                         }
                     } else {
-                        ed.tree.?.finishSearch() catch {};
+                        ed.state.tree.?.finishSearch() catch {};
                     }
                     return;
                 } else if (event.key == .Char and !event.ctrl and !event.alt) {
-                    try ed.tree.?.appendSearchChar(event.char);
+                    try ed.state.tree.?.appendSearchChar(event.char);
                     return;
                 }
             } else if (matches(event, keys.search_mode)) {
-                try ed.tree.?.startSearch();
+                try ed.state.tree.?.startSearch();
                 return;
             } else if (matches(event, keys.explorer_up)) {
-                ed.tree.?.moveUp();
+                ed.state.tree.?.moveUp();
                 return;
             } else if (matches(event, keys.explorer_down)) {
-                ed.tree.?.moveDown();
+                ed.state.tree.?.moveDown();
                 return;
             } else if (matches(event, keys.explorer_open)) {
-                if (ed.tree.?.nodes.items.len > 0) {
-                    const node = ed.tree.?.nodes.items[ed.tree.?.selected_index];
+                if (ed.state.tree.?.nodes.items.len > 0) {
+                    const node = ed.state.tree.?.nodes.items[ed.state.tree.?.selected_index];
                     if (node.is_dir) {
-                        ed.tree.?.toggleExpand() catch {};
+                        ed.state.tree.?.toggleExpand() catch {};
                     } else {
                         if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, node.absolute_path)) |b| {
                             try ed.addTab(b);
-                            ed.explorer_focused = false;
-                            ed.mode = .Normal;
+                            ed.state.explorer_focused = false;
+                            ed.state.mode = .Normal;
                         } else |err| {
                             logz.err().fmt("msg", "failed to open file {s}: {s}", .{ node.absolute_path, @errorName(err) }).log();
-                            ed.error_message = "Could not open file";
+                            ed.state.error_message = "Could not open file";
                         }
                     }
                 }
@@ -217,7 +217,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         }
     }
 
-    switch (ed.mode) {
+    switch (ed.state.mode) {
         .Dashboard => {
             const action =
                 if (matches(event, keys.new_file))
@@ -231,38 +231,38 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 else if (matches(event, keys.quit))
                     .Quit
                 else if (matches(event, keys.dashboard_up)) blk: {
-                    ed.dash.moveUp();
+                    ed.state.dash.moveUp();
                     break :blk .None;
                 } else if (matches(event, keys.dashboard_down)) blk: {
-                    ed.dash.moveDown();
+                    ed.state.dash.moveDown();
                     break :blk .None;
                 } else if (matches(event, keys.dashboard_select))
-                    ed.dash.selectedAction()
+                    ed.state.dash.selectedAction()
                 else
                     .None;
 
             switch (action) {
                 .NewFile => {
-                    ed.mode = .Normal;
+                    ed.state.mode = .Normal;
                     try ed.addTab(try buffer.Buffer.init(ed.allocator));
                 },
                 .OpenFile => {
-                    ed.mode = .OpenFilePrompt;
-                    ed.command_buffer.clearRetainingCapacity();
+                    ed.state.mode = .OpenFilePrompt;
+                    ed.state.command_buffer.clearRetainingCapacity();
                 },
                 .OpenFolder => {
                     logz.info().string("msg", "action: OpenFolder").log();
                     ed.closeAllTabs();
-                    ed.mode = .Normal;
-                    if (ed.tree) |*t| {
+                    ed.state.mode = .Normal;
+                    if (ed.state.tree) |*t| {
                         t.deinit();
                     }
-                    ed.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch |err| {
+                    ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch |err| {
                         logz.err().fmt("msg", "failed to init explorer: {s}", .{@errorName(err)}).log();
                         return;
                     };
-                    ed.explorer_visible = ed.tree != null;
-                    ed.explorer_focused = ed.tree != null;
+                    ed.state.explorer_visible = ed.state.tree != null;
+                    ed.state.explorer_focused = ed.state.tree != null;
                 },
                 .Quit => ed.should_quit = true,
                 else => {},
@@ -272,14 +272,14 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             if (try handleMovement(ed, event)) {
                 // Handled
             } else if (matches(event, keys.insert_mode)) {
-                ed.mode = .Insert;
+                ed.state.mode = .Insert;
             } else if (matches(event, keys.command_mode)) {
-                ed.mode = .Command;
-                ed.command_buffer.clearRetainingCapacity();
+                ed.state.mode = .Command;
+                ed.state.command_buffer.clearRetainingCapacity();
             } else if (matches(event, keys.search_mode)) {
-                ed.mode = .Search;
-                ed.search_buffer.clearRetainingCapacity();
-                if (ed.search_system) |*s| s.clear();
+                ed.state.mode = .Search;
+                ed.state.search_buffer.clearRetainingCapacity();
+                if (ed.state.search_system) |*s| s.clear();
             }
 
             // Keep cursor within line bounds
@@ -299,7 +299,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             if (try handleMovement(ed, event)) {
                 // Handled
             } else if (matches(event, keys.normal_mode)) {
-                ed.mode = .Normal;
+                ed.state.mode = .Normal;
             } else if (matches(event, keys.insert_newline)) {
                 if (ed.currentTab()) |tab| {
                     const mc = tab.mainCursor();
@@ -345,52 +345,52 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .Command => {
             if (matches(event, keys.normal_mode)) {
-                ed.mode = .Normal;
+                ed.state.mode = .Normal;
             } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.command_buffer.items.len > 0) {
-                    ed.command_buffer.shrinkRetainingCapacity(ed.command_buffer.items.len - 1);
+                if (ed.state.command_buffer.items.len > 0) {
+                    ed.state.command_buffer.shrinkRetainingCapacity(ed.state.command_buffer.items.len - 1);
                 }
             } else if (matches(event, keys.prompt_submit)) {
                 const command = @import("command.zig");
                 try command.execute(ed);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
-                try ed.command_buffer.append(ed.allocator, event.char);
+                try ed.state.command_buffer.append(ed.allocator, event.char);
             }
         },
         .OpenFilePrompt => {
             if (matches(event, keys.normal_mode)) {
-                ed.mode = .Dashboard;
+                ed.state.mode = .Dashboard;
             } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.command_buffer.items.len > 0) {
-                    ed.command_buffer.shrinkRetainingCapacity(ed.command_buffer.items.len - 1);
+                if (ed.state.command_buffer.items.len > 0) {
+                    ed.state.command_buffer.shrinkRetainingCapacity(ed.state.command_buffer.items.len - 1);
                 }
             } else if (matches(event, keys.prompt_submit)) {
-                if (ed.command_buffer.items.len > 0) {
-                    if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.command_buffer.items)) |b| {
+                if (ed.state.command_buffer.items.len > 0) {
+                    if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.state.command_buffer.items)) |b| {
                         try ed.addTab(b);
-                        ed.mode = .Normal;
+                        ed.state.mode = .Normal;
                     } else |_| {
-                        ed.error_message = "Could not open file";
-                        ed.mode = .Dashboard;
+                        ed.state.error_message = "Could not open file";
+                        ed.state.mode = .Dashboard;
                     }
                 } else {
-                    ed.mode = .Dashboard;
+                    ed.state.mode = .Dashboard;
                 }
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
-                try ed.command_buffer.append(ed.allocator, event.char);
+                try ed.state.command_buffer.append(ed.allocator, event.char);
             }
         },
         .Search => {
             if (matches(event, keys.normal_mode)) {
-                ed.mode = .Normal;
-                if (ed.search_system) |*s| s.clear();
-                ed.search_buffer.clearRetainingCapacity();
+                ed.state.mode = .Normal;
+                if (ed.state.search_system) |*s| s.clear();
+                ed.state.search_buffer.clearRetainingCapacity();
             } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.search_buffer.items.len > 0) {
-                    ed.search_buffer.shrinkRetainingCapacity(ed.search_buffer.items.len - 1);
+                if (ed.state.search_buffer.items.len > 0) {
+                    ed.state.search_buffer.shrinkRetainingCapacity(ed.state.search_buffer.items.len - 1);
                     if (ed.currentTab()) |tab| {
-                        try ed.search_system.?.update(&tab.buf, ed.search_buffer.items);
-                        if (ed.search_system.?.getActiveMatch()) |m| {
+                        try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
+                        if (ed.state.search_system.?.getActiveMatch()) |m| {
                             const mc = tab.mainCursor();
                             mc.row = m.row;
                             mc.col = m.col;
@@ -400,11 +400,11 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     }
                 }
             } else if (matches(event, keys.prompt_submit)) {
-                ed.mode = .Normal;
-                if (ed.search_system) |*s| s.clear();
-                ed.search_buffer.clearRetainingCapacity();
+                ed.state.mode = .Normal;
+                if (ed.state.search_system) |*s| s.clear();
+                ed.state.search_buffer.clearRetainingCapacity();
             } else if (matches(event, keys.search_next)) {
-                if (ed.search_system) |*s| {
+                if (ed.state.search_system) |*s| {
                     s.nextMatch();
                     if (s.getActiveMatch()) |m| {
                         if (ed.currentTab()) |tab| {
@@ -417,7 +417,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     }
                 }
             } else if (matches(event, keys.search_previous)) {
-                if (ed.search_system) |*s| {
+                if (ed.state.search_system) |*s| {
                     s.prevMatch();
                     if (s.getActiveMatch()) |m| {
                         if (ed.currentTab()) |tab| {
@@ -430,10 +430,10 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     }
                 }
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
-                try ed.search_buffer.append(ed.allocator, event.char);
+                try ed.state.search_buffer.append(ed.allocator, event.char);
                 if (ed.currentTab()) |tab| {
-                    try ed.search_system.?.update(&tab.buf, ed.search_buffer.items);
-                    if (ed.search_system.?.getActiveMatch()) |m| {
+                    try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
+                    if (ed.state.search_system.?.getActiveMatch()) |m| {
                         const mc = tab.mainCursor();
                         mc.row = m.row;
                         mc.col = m.col;

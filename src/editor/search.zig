@@ -1,5 +1,4 @@
 const std = @import("std");
-const editor = @import("editor.zig");
 const buffer = @import("buffer.zig");
 
 pub const Match = struct {

@@ -41,7 +41,7 @@ test "Editor: opening file with missing LSP command does not quit" {
     var ed = try editor_mod.Editor.init(a, std.testing.io, .{});
     defer ed.deinit();
 
-    if (ed.lsp_mgr) |*mgr| {
+    if (ed.runtime.lsp_mgr) |*mgr| {
         try mgr.plugin_mgr.plugins.append(a, .{
             .name = "missing-test-lsp",
             .extensions = &[_][]const u8{".missing-lsp-test"},
@@ -54,11 +54,11 @@ test "Editor: opening file with missing LSP command does not quit" {
     try buf.setFilename("example.missing-lsp-test");
 
     try ed.addTab(buf);
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     try std.testing.expect(!ed.should_quit);
-    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
-    if (ed.lsp_mgr) |*mgr| {
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    if (ed.runtime.lsp_mgr) |*mgr| {
         try std.testing.expect(!mgr.clients.contains("missing-test-lsp"));
     }
 }

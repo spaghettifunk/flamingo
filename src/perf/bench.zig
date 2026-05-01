@@ -20,23 +20,23 @@ pub fn main(init: std.process.Init) !void {
     defer ed.deinit();
     ed.width = 120;
     ed.height = 40;
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     var buf = try makeLargeBuffer(allocator);
     errdefer buf.deinit();
 
     var cursors = std.ArrayListUnmanaged(editor.Cursor).empty;
     try cursors.append(allocator, .{});
-    const syntax_buffer_id = ed.next_syntax_buffer_id;
-    ed.next_syntax_buffer_id +%= 1;
-    try ed.tabs.append(allocator, .{
+    const syntax_buffer_id = ed.state.next_syntax_buffer_id;
+    ed.state.next_syntax_buffer_id +%= 1;
+    try ed.state.tabs.append(allocator, .{
         .buf = buf,
         .cursors = cursors,
         .syntax_highlighter = syntax.Highlighter.init(allocator),
         .syntax_buffer_id = syntax_buffer_id,
         .lsp_notified_revision = buf.revision,
     });
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
     buf = undefined;
 
     var out = std.Io.Writer.Allocating.init(allocator);
@@ -67,11 +67,11 @@ pub fn main(init: std.process.Init) !void {
         tab.scroll_row = 0;
         tab.mainCursor().row = 1;
         tab.mainCursor().col = 0;
-        ed.mode = .Normal;
-        ed.explorer_visible = false;
-        ed.explorer_focused = false;
-        ed.lsp_ui.completion_active = false;
-        ed.search_buffer.clearRetainingCapacity();
+        ed.state.mode = .Normal;
+        ed.state.explorer_visible = false;
+        ed.state.explorer_focused = false;
+        ed.state.lsp_ui.completion_active = false;
+        ed.state.search_buffer.clearRetainingCapacity();
 
         for (0..frames) |i| {
             const key = if (i % 2 == 0) ed.keys.move_down else ed.keys.move_up;
