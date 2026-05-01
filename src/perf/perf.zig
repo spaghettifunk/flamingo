@@ -25,11 +25,24 @@ pub const Phase = enum {
 
 pub const PhaseCount = @typeInfo(Phase).@"enum".fields.len;
 
+pub const RenderKind = enum {
+    none,
+    fast_cursor,
+    partial,
+    full,
+};
+
 pub const FrameMetrics = struct {
     phases_ns: [PhaseCount]u64 = [_]u64{0} ** PhaseCount,
     rendered: bool = false,
     fast_cursor_move: bool = false,
+    render_kind: RenderKind = .none,
     bytes_emitted: usize = 0,
+    input_events: usize = 0,
+    cursor_move_events: usize = 0,
+    write_count: usize = 0,
+    input_to_update_ns: u64 = 0,
+    update_to_flush_ns: u64 = 0,
 
     pub fn add(self: *FrameMetrics, phase: Phase, duration_ns: u64) void {
         self.phases_ns[@intFromEnum(phase)] += duration_ns;
@@ -48,6 +61,12 @@ pub const PerfSampler = struct {
     sample_fast_cursor_moves: u64 = 0,
     sample_loop_ticks: u64 = 0,
     sample_bytes: u64 = 0,
+    sample_input_events: u64 = 0,
+    sample_cursor_move_events: u64 = 0,
+    sample_write_count: u64 = 0,
+    sample_render_kinds: [@typeInfo(RenderKind).@"enum".fields.len]u64 = [_]u64{0} ** @typeInfo(RenderKind).@"enum".fields.len,
+    total_input_to_update_ns: u128 = 0,
+    total_update_to_flush_ns: u128 = 0,
     totals_ns: [PhaseCount]u128 = [_]u128{0} ** PhaseCount,
 
     pub fn initFromEnv() PerfSampler {
@@ -75,6 +94,12 @@ pub const PerfSampler = struct {
             self.sample_fast_cursor_moves += 1;
         }
         self.sample_bytes += metrics.bytes_emitted;
+        self.sample_input_events += metrics.input_events;
+        self.sample_cursor_move_events += metrics.cursor_move_events;
+        self.sample_write_count += metrics.write_count;
+        self.sample_render_kinds[@intFromEnum(metrics.render_kind)] += 1;
+        self.total_input_to_update_ns += metrics.input_to_update_ns;
+        self.total_update_to_flush_ns += metrics.update_to_flush_ns;
 
         inline for (@typeInfo(Phase).@"enum".fields) |field| {
             const phase: Phase = @enumFromInt(field.value);
@@ -95,14 +120,27 @@ pub const PerfSampler = struct {
             averages[@intFromEnum(phase)] = @intCast(self.totals_ns[@intFromEnum(phase)] / self.sample_loop_ticks);
         }
 
+        const avg_input_to_update: u64 = @intCast(self.total_input_to_update_ns / self.sample_loop_ticks);
+        const avg_update_to_flush: u64 = @intCast(self.total_update_to_flush_ns / self.sample_loop_ticks);
+
         logz.info()
-            .fmt("msg",
-                "perf loops={d} rendered={d} fast_cursor={d} bytes={d} avg_ns {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d}",
+            .fmt(
+                "msg",
+                "perf loops={d} rendered={d} fast_cursor={d} render_kind none={d} fast={d} partial={d} full={d} input_events={d} cursor_moves={d} writes={d} bytes={d} avg_ns input_to_update={d} update_to_flush={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d}",
                 .{
                     self.sample_loop_ticks,
                     self.sample_rendered_frames,
                     self.sample_fast_cursor_moves,
+                    self.sample_render_kinds[@intFromEnum(RenderKind.none)],
+                    self.sample_render_kinds[@intFromEnum(RenderKind.fast_cursor)],
+                    self.sample_render_kinds[@intFromEnum(RenderKind.partial)],
+                    self.sample_render_kinds[@intFromEnum(RenderKind.full)],
+                    self.sample_input_events,
+                    self.sample_cursor_move_events,
+                    self.sample_write_count,
                     self.sample_bytes,
+                    avg_input_to_update,
+                    avg_update_to_flush,
                     Phase.input_poll.name(),
                     averages[@intFromEnum(Phase.input_poll)],
                     Phase.event_processing.name(),
@@ -125,6 +163,12 @@ pub const PerfSampler = struct {
         self.sample_fast_cursor_moves = 0;
         self.sample_loop_ticks = 0;
         self.sample_bytes = 0;
+        self.sample_input_events = 0;
+        self.sample_cursor_move_events = 0;
+        self.sample_write_count = 0;
+        self.sample_render_kinds = [_]u64{0} ** @typeInfo(RenderKind).@"enum".fields.len;
+        self.total_input_to_update_ns = 0;
+        self.total_update_to_flush_ns = 0;
         self.totals_ns = [_]u128{0} ** PhaseCount;
     }
 };

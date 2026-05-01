@@ -40,6 +40,11 @@ pub const LspManager = struct {
         const ext = std.fs.path.extension(filename);
         if (self.plugin_mgr.getPluginForExtension(ext)) |p| {
             if (!self.clients.contains(p.name)) {
+                if (!try self.commandAvailable(p.lsp_command[0])) {
+                    logz.warn().fmt("msg", "LSP command not found for plugin {s}: {s}", .{ p.name, p.lsp_command[0] }).log();
+                    return;
+                }
+
                 logz.info().fmt("msg", "Starting LSP for plugin {s}", .{p.name}).log();
                 const client = try lsp_client.LspClient.start(self.allocator, self.io, p.name, p.lsp_command, self.queue);
                 try self.clients.put(p.name, client);
@@ -47,6 +52,30 @@ pub const LspManager = struct {
                 try self.sendInitialize(client);
             }
         }
+    }
+
+    fn commandAvailable(self: *LspManager, command: []const u8) !bool {
+        if (command.len == 0) return false;
+        if (std.mem.indexOfScalar(u8, command, '/') != null) {
+            if (std.fs.path.isAbsolute(command)) {
+                std.Io.Dir.accessAbsolute(self.io, command, .{}) catch return false;
+            } else {
+                std.Io.Dir.cwd().access(self.io, command, .{}) catch return false;
+            }
+            return true;
+        }
+
+        const path_z = std.c.getenv("PATH") orelse return false;
+        const path = std.mem.span(path_z);
+        var it = std.mem.splitScalar(u8, path, ':');
+        while (it.next()) |dir| {
+            if (dir.len == 0) continue;
+            const candidate = try std.fs.path.join(self.allocator, &.{ dir, command });
+            defer self.allocator.free(candidate);
+            std.Io.Dir.accessAbsolute(self.io, candidate, .{}) catch continue;
+            return true;
+        }
+        return false;
     }
 
     fn sendInitialize(self: *LspManager, client: *lsp_client.LspClient) !void {

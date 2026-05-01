@@ -32,6 +32,7 @@ pub const Cursor = struct {
     row: usize = 0,
     col: usize = 0,
     selection_start: ?Pos = null,
+    preferred_col: ?usize = null,
 };
 
 const CursorMoveState = struct {
@@ -592,50 +593,43 @@ pub const Editor = struct {
             }
             metrics.add(.event_processing, perf.elapsedNs(events_start));
 
-            const input_start = perf.nowNs();
             var handled_input = false;
+            var first_fast_cursor_before: ?CursorMoveState = null;
+            var fast_cursor_candidate = true;
+            var last_update_end_ns: ?u64 = null;
             var input_count: usize = 0;
             while (input_count < 128) : (input_count += 1) {
+                const read_start = perf.nowNs();
                 const event = try terminal.readKey(reader);
+                metrics.add(.input_poll, perf.elapsedNs(read_start));
                 if (event.key == .None) break;
                 handled_input = true;
+                metrics.input_events += 1;
 
                 const render_after_event = self.shouldRenderAfterInputEvent(event);
-                const cursor_move_before = if (render_after_event) self.captureCursorMoveState() else null;
-                const input_handle_start = perf.nowNs();
-                try self.handleRuntimeKey(event);
-                metrics.add(.update_state, perf.elapsedNs(input_handle_start));
-
                 if (render_after_event) {
-                    if (cursor_move_before) |before| {
-                        if (self.canFastRenderCursorMove(before)) {
-                            aw.clearRetainingCapacity();
-                            const frame_start = perf.nowNs();
-                            try terminal.hideCursor(writer);
-                            try self.renderFastCursorMove(writer, before);
-                            try terminal.showCursor(writer);
-                            metrics.add(.build_frame, perf.elapsedNs(frame_start));
-
-                            const flush_start = perf.nowNs();
-                            const bytes = aw.written().len;
-                            try raw_writer.writeAll(aw.written());
-                            metrics.add(.flush_output, perf.elapsedNs(flush_start));
-                            self.updateFrameCapacityFps(metrics.get(.build_frame) + metrics.get(.flush_output));
-                            metrics.rendered = true;
-                            metrics.fast_cursor_move = true;
-                            metrics.bytes_emitted = bytes;
-                            self.render_dirty = false;
-                            self.force_full_render = true;
-                            self.screen_renderer.invalidate(.full);
-                            break;
-                        }
+                    metrics.cursor_move_events += 1;
+                    if (first_fast_cursor_before == null) {
+                        first_fast_cursor_before = self.captureCursorMoveState();
                     }
+                } else {
+                    fast_cursor_candidate = false;
                 }
 
+                const input_handle_start = perf.nowNs();
+                try self.handleRuntimeKey(event);
+                const update_elapsed = perf.elapsedNs(input_handle_start);
+                const update_end = perf.nowNs();
+                metrics.add(.update_state, update_elapsed);
+                metrics.input_to_update_ns += update_end - read_start;
+                last_update_end_ns = update_end;
+
                 if (self.should_quit) break;
-                if (render_after_event and self.render_dirty) break;
+                if (!render_after_event) break;
+                if (first_fast_cursor_before) |before| {
+                    if (!self.canFastRenderCursorMove(before)) break;
+                } else break;
             }
-            metrics.add(.input_poll, perf.elapsedNs(input_start));
 
             if (!handled_input) {
                 const update_start = perf.nowNs();
@@ -646,26 +640,49 @@ pub const Editor = struct {
             if (self.render_dirty) {
                 aw.clearRetainingCapacity();
 
-                const frame_start = perf.nowNs();
-                try terminal.hideCursor(writer);
-                if (self.canUseVirtualRenderer()) {
-                    try self.renderVirtual(writer, &metrics);
-                } else {
-                    try self.render(writer);
-                    try self.renderCompletionMenu(writer);
+                var rendered_fast_cursor = false;
+                if (fast_cursor_candidate) {
+                    if (first_fast_cursor_before) |before| {
+                        if (self.canFastRenderCursorMove(before)) {
+                            const frame_start = perf.nowNs();
+                            try self.renderFastCursorMove(writer, before);
+                            metrics.add(.build_frame, perf.elapsedNs(frame_start));
+                            metrics.fast_cursor_move = true;
+                            metrics.render_kind = .fast_cursor;
+                            rendered_fast_cursor = true;
+                        }
+                    }
                 }
-                try terminal.showCursor(writer);
-                metrics.add(.build_frame, perf.elapsedNs(frame_start));
+
+                if (!rendered_fast_cursor) {
+                    const frame_start = perf.nowNs();
+                    try terminal.hideCursor(writer);
+                    if (self.canUseVirtualRenderer()) {
+                        try self.renderVirtual(writer, &metrics);
+                    } else {
+                        try self.render(writer);
+                        try self.renderCompletionMenu(writer);
+                    }
+                    try terminal.showCursor(writer);
+                    metrics.add(.build_frame, perf.elapsedNs(frame_start));
+                    metrics.render_kind = if (self.force_full_render) .full else .partial;
+                }
 
                 const flush_start = perf.nowNs();
+                if (last_update_end_ns) |update_end| {
+                    metrics.update_to_flush_ns += flush_start - update_end;
+                }
                 const bytes = aw.written().len;
                 try raw_writer.writeAll(aw.written());
                 metrics.add(.flush_output, perf.elapsedNs(flush_start));
                 self.updateFrameCapacityFps(metrics.get(.build_frame) + metrics.get(.flush_output));
                 metrics.rendered = true;
                 metrics.bytes_emitted = bytes;
+                metrics.write_count = 1;
                 self.render_dirty = false;
-                self.force_full_render = false;
+                if (!rendered_fast_cursor) {
+                    self.force_full_render = false;
+                }
             }
 
             if (!handled_input) {

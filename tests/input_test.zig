@@ -482,6 +482,41 @@ test "Option+Right: word jump moves cursor right" {
     try std.testing.expect(tab.mainCursor().col > 0);
 }
 
+test "Vertical movement preserves preferred column across short lines" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "abcdefghij", "xy", "abcdefghij" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 8;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(?usize, 8), tab.mainCursor().preferred_col);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 8), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(?usize, 8), tab.mainCursor().preferred_col);
+}
+
+test "Horizontal movement resets preferred column" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "abcdefghij", "xy", "abcdefghij" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 8;
+
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keySpecial(.Down), th.keySpecial(.Left) });
+    try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(?usize, null), tab.mainCursor().preferred_col);
+}
+
 test "Option+[ cycles to next tab" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);

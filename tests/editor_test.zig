@@ -218,6 +218,56 @@ test "Editor: render includes syntax, selection, and search styling" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "\x1b[48;5;214m\x1b[30m") != null);
 }
 
+test "Editor: run loop drains repeated cursor movement before rendering" {
+    const a = std.testing.allocator;
+    const logger = try th.setupLogger(a);
+    defer logger.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{
+        "row0",
+        "row1",
+        "row2",
+        "row3",
+        "row4",
+        "row5",
+        "row6",
+    });
+    defer ed.deinit();
+
+    ed.mode = .Normal;
+    ed.render_dirty = false;
+    ed.force_full_render = false;
+
+    var reader = std.Io.Reader.fixed("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x11");
+    var out = std.Io.Writer.Allocating.init(a);
+    defer out.deinit();
+
+    try ed.runWithIO(&reader, &out.writer);
+
+    const tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 5), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
+}
+
+test "Editor: mode-changing input renders before draining queued quit" {
+    const a = std.testing.allocator;
+    const logger = try th.setupLogger(a);
+    defer logger.deinit();
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    var reader = std.Io.Reader.fixed("\x0f\x11");
+    var out = std.Io.Writer.Allocating.init(a);
+    defer out.deinit();
+
+    try ed.runWithIO(&reader, &out.writer);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Open file:") != null);
+    try std.testing.expect(ed.should_quit);
+}
+
 test "Editor: tab LSP notification gate only opens once per dirty revision" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});

@@ -1,5 +1,5 @@
 # flamingo configuration
-debug = false
+debug = true
 
 [keybindings]
 new_file = "ctrl+n"
