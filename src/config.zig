@@ -74,6 +74,7 @@ pub const ExplorerConfig = struct {
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
+    debug: bool = false,
     keybindings: KeybindingsConfig = .{},
     explorer: ExplorerConfig = .{},
 };

@@ -165,6 +165,21 @@ pub const Line = struct {
     }
 };
 
+pub const TextPoint = struct {
+    row: usize,
+    col: usize,
+};
+
+pub const TextEditDelta = struct {
+    revision: u64 = 0,
+    start_point: TextPoint,
+    old_end_point: TextPoint,
+    new_end_point: TextPoint,
+    start_byte: usize,
+    old_end_byte: usize,
+    new_end_byte: usize,
+};
+
 pub const Buffer = struct {
     lines: std.ArrayList(Line),
     allocator: std.mem.Allocator,
@@ -174,6 +189,9 @@ pub const Buffer = struct {
     saved_revision: u64 = 0,
     undo_stack: std.ArrayList([]u8) = .empty,
     redo_stack: std.ArrayList([]u8) = .empty,
+    undo_group_depth: usize = 0,
+    undo_group_recorded: bool = false,
+    last_edit_delta: ?TextEditDelta = null,
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {
         var lines = std.ArrayList(Line).empty;
@@ -217,6 +235,47 @@ pub const Buffer = struct {
     pub fn markChanged(self: *Buffer) void {
         self.revision +%= 1;
         self.is_dirty = self.revision != self.saved_revision;
+        self.last_edit_delta = null;
+    }
+
+    fn markChangedWithDelta(self: *Buffer, delta: TextEditDelta) void {
+        self.revision +%= 1;
+        self.is_dirty = self.revision != self.saved_revision;
+        var stored = delta;
+        stored.revision = self.revision;
+        self.last_edit_delta = stored;
+    }
+
+    pub fn lastEditDelta(self: *const Buffer) ?TextEditDelta {
+        return self.last_edit_delta;
+    }
+
+    pub fn byteOffset(self: *const Buffer, row: usize, col: usize) usize {
+        var offset: usize = 0;
+        var r: usize = 0;
+        while (r < row and r < self.lines.items.len) : (r += 1) {
+            offset += self.lines.items[r].len() + 1;
+        }
+
+        if (row < self.lines.items.len) {
+            offset += @min(col, self.lines.items[row].len());
+        }
+        return offset;
+    }
+
+    pub fn beginUndoGroup(self: *Buffer) void {
+        if (self.undo_group_depth == 0) {
+            self.undo_group_recorded = false;
+        }
+        self.undo_group_depth += 1;
+    }
+
+    pub fn endUndoGroup(self: *Buffer) void {
+        if (self.undo_group_depth == 0) return;
+        self.undo_group_depth -= 1;
+        if (self.undo_group_depth == 0) {
+            self.undo_group_recorded = false;
+        }
     }
 
     fn clearHistoryList(self: *Buffer, list: *std.ArrayList([]u8)) void {
@@ -266,10 +325,18 @@ pub const Buffer = struct {
     }
 
     pub fn recordUndo(self: *Buffer) !void {
+        if (self.undo_group_depth > 0 and self.undo_group_recorded) {
+            return;
+        }
+
         const before = try self.snapshot();
         errdefer self.allocator.free(before);
         try self.undo_stack.append(self.allocator, before);
         self.clearHistoryList(&self.redo_stack);
+
+        if (self.undo_group_depth > 0) {
+            self.undo_group_recorded = true;
+        }
     }
 
     pub fn undo(self: *Buffer) !bool {
@@ -307,10 +374,20 @@ pub const Buffer = struct {
         if (row >= self.lines.items.len) return;
 
         try self.recordUndo();
+        const bounded_col = @min(col, self.lines.items[row].len());
+        const start_byte = self.byteOffset(row, bounded_col);
+        const delta = TextEditDelta{
+            .start_point = .{ .row = row, .col = bounded_col },
+            .old_end_point = .{ .row = row, .col = bounded_col },
+            .new_end_point = .{ .row = row, .col = bounded_col + 1 },
+            .start_byte = start_byte,
+            .old_end_byte = start_byte,
+            .new_end_byte = start_byte + 1,
+        };
         var line = &self.lines.items[row];
-        try line.insert(col, c);
+        try line.insert(bounded_col, c);
 
-        self.markChanged();
+        self.markChangedWithDelta(delta);
     }
 
     pub fn insertNewline(self: *Buffer, row: usize, col: usize) !void {
@@ -318,22 +395,32 @@ pub const Buffer = struct {
 
         try self.recordUndo();
         var line = &self.lines.items[row];
+        const bounded_col = @min(col, line.len());
+        const start_byte = self.byteOffset(row, bounded_col);
+        const delta = TextEditDelta{
+            .start_point = .{ .row = row, .col = bounded_col },
+            .old_end_point = .{ .row = row, .col = bounded_col },
+            .new_end_point = .{ .row = row + 1, .col = 0 },
+            .start_byte = start_byte,
+            .old_end_byte = start_byte,
+            .new_end_byte = start_byte + 1,
+        };
 
         // extract right side
         var right = try line.slice(self.allocator);
         defer self.allocator.free(right);
 
-        const split = right[col..];
+        const split = right[bounded_col..];
 
         var new_line = try Line.fromSlice(self.allocator, split);
         errdefer new_line.deinit();
 
         // truncate current line
-        line.moveGap(col);
+        line.moveGap(bounded_col);
         line.gap_end = line.buf.len; // drop right side
 
         try self.lines.insert(self.allocator, row + 1, new_line);
-        self.markChanged();
+        self.markChangedWithDelta(delta);
     }
 
     pub fn deleteCharBack(self: *Buffer, row: usize, col: usize) !bool {
@@ -345,12 +432,23 @@ pub const Buffer = struct {
         try self.recordUndo();
 
         if (line.deleteBack(col)) {
-            self.markChanged();
+            const start_col = col - 1;
+            const start_byte = self.byteOffset(row, start_col);
+            self.markChangedWithDelta(.{
+                .start_point = .{ .row = row, .col = start_col },
+                .old_end_point = .{ .row = row, .col = col },
+                .new_end_point = .{ .row = row, .col = start_col },
+                .start_byte = start_byte,
+                .old_end_byte = start_byte + 1,
+                .new_end_byte = start_byte,
+            });
             return false;
         }
 
         // merge with previous
         var prev = &self.lines.items[row - 1];
+        const prev_len = prev.len();
+        const start_byte = self.byteOffset(row - 1, prev_len);
 
         const current_data = try line.slice(self.allocator);
         defer self.allocator.free(current_data);
@@ -364,7 +462,14 @@ pub const Buffer = struct {
         var removed = self.lines.orderedRemove(row);
         removed.deinit();
 
-        self.markChanged();
+        self.markChangedWithDelta(.{
+            .start_point = .{ .row = row - 1, .col = prev_len },
+            .old_end_point = .{ .row = row, .col = 0 },
+            .new_end_point = .{ .row = row - 1, .col = prev_len },
+            .start_byte = start_byte,
+            .old_end_byte = start_byte + 1,
+            .new_end_byte = start_byte,
+        });
         return true;
     }
 
@@ -511,15 +616,26 @@ pub const Buffer = struct {
         if (s_row == e_row) {
             if (s_col == e_col) return;
             try self.recordUndo();
+            const start_byte = self.byteOffset(s_row, s_col);
+            const old_end_byte = self.byteOffset(e_row, e_col);
             var line = &self.lines.items[s_row];
             line.moveGap(e_col);
             const to_del = e_col - s_col;
             line.gap_start -= to_del;
-            self.markChanged();
+            self.markChangedWithDelta(.{
+                .start_point = .{ .row = s_row, .col = s_col },
+                .old_end_point = .{ .row = e_row, .col = e_col },
+                .new_end_point = .{ .row = s_row, .col = s_col },
+                .start_byte = start_byte,
+                .old_end_byte = old_end_byte,
+                .new_end_byte = start_byte,
+            });
             return;
         }
 
         try self.recordUndo();
+        const start_byte = self.byteOffset(s_row, s_col);
+        const old_end_byte = self.byteOffset(e_row, e_col);
 
         // Multiple lines
         const first_line = &self.lines.items[s_row];
@@ -546,7 +662,14 @@ pub const Buffer = struct {
             removed.deinit();
         }
 
-        self.markChanged();
+        self.markChangedWithDelta(.{
+            .start_point = .{ .row = s_row, .col = s_col },
+            .old_end_point = .{ .row = e_row, .col = e_col },
+            .new_end_point = .{ .row = s_row, .col = s_col },
+            .start_byte = start_byte,
+            .old_end_byte = old_end_byte,
+            .new_end_byte = start_byte,
+        });
     }
 
     pub fn swapLines(self: *Buffer, row1: usize, row2: usize) void {
@@ -638,6 +761,66 @@ test "Buffer range deletion" {
     const s = try buf.lines.items[0].slice(allocator);
     defer allocator.free(s);
     try std.testing.expectEqualStrings("line 3", s);
+}
+
+test "Buffer edit deltas track single-line insert and delete" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    try buf.insertChar(0, 0, 'a');
+    const insert_delta = buf.lastEditDelta().?;
+    try std.testing.expectEqual(@as(usize, 0), insert_delta.start_byte);
+    try std.testing.expectEqual(@as(usize, 0), insert_delta.old_end_byte);
+    try std.testing.expectEqual(@as(usize, 1), insert_delta.new_end_byte);
+    try std.testing.expectEqual(@as(usize, 0), insert_delta.start_point.row);
+    try std.testing.expectEqual(@as(usize, 1), insert_delta.new_end_point.col);
+
+    _ = try buf.deleteCharBack(0, 1);
+    const delete_delta = buf.lastEditDelta().?;
+    try std.testing.expectEqual(@as(usize, 0), delete_delta.start_byte);
+    try std.testing.expectEqual(@as(usize, 1), delete_delta.old_end_byte);
+    try std.testing.expectEqual(@as(usize, 0), delete_delta.new_end_byte);
+}
+
+test "Buffer edit deltas track newline and multi-line delete" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    try buf.insertChar(0, 0, 'a');
+    try buf.insertNewline(0, 1);
+    const newline_delta = buf.lastEditDelta().?;
+    try std.testing.expectEqual(@as(usize, 1), newline_delta.start_byte);
+    try std.testing.expectEqual(@as(usize, 1), newline_delta.old_end_byte);
+    try std.testing.expectEqual(@as(usize, 2), newline_delta.new_end_byte);
+    try std.testing.expectEqual(@as(usize, 1), newline_delta.new_end_point.row);
+    try std.testing.expectEqual(@as(usize, 0), newline_delta.new_end_point.col);
+
+    try buf.insertChar(1, 0, 'b');
+    try buf.deleteRange(0, 1, 1, 0);
+    const range_delta = buf.lastEditDelta().?;
+    try std.testing.expectEqual(@as(usize, 1), range_delta.start_byte);
+    try std.testing.expectEqual(@as(usize, 2), range_delta.old_end_byte);
+    try std.testing.expectEqual(@as(usize, 1), range_delta.new_end_byte);
+}
+
+test "Buffer undo group records one snapshot" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    buf.beginUndoGroup();
+    try buf.insertChar(0, 0, 'a');
+    try buf.insertChar(0, 1, 'b');
+    try buf.insertChar(0, 2, 'c');
+    buf.endUndoGroup();
+
+    try std.testing.expectEqual(@as(usize, 1), buf.undo_stack.items.len);
+    try std.testing.expect(try buf.undo());
+    const s = try buf.lines.items[0].slice(allocator);
+    defer allocator.free(s);
+    try std.testing.expectEqualStrings("", s);
 }
 
 test "Buffer word jumps" {

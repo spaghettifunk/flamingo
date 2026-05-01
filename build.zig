@@ -80,6 +80,34 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-json");
 
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
+
+    const tree_sitter_perf = b.dependency("tree_sitter", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    const perf_module = b.createModule(.{
+        .root_source_file = b.path("src/perf_bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+    });
+    perf_module.addImport("logz", logz);
+    perf_module.addImport("toml", toml);
+    perf_module.addImport("tree-sitter", tree_sitter_perf.module("tree_sitter"));
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-zig");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-go");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-toml");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-yaml");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-json");
+
+    const perf_exe = b.addExecutable(.{
+        .name = "flamingo-perf",
+        .root_module = perf_module,
+    });
+    const perf_step = b.step("perf", "Run editor rendering performance benchmark");
+    const perf_run = b.addRunArtifact(perf_exe);
+    perf_step.dependOn(&perf_run.step);
 }
 
 fn addTreeSitterGrammar(b: *std.Build, module: *std.Build.Module, comptime name: []const u8) void {

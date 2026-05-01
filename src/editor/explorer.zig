@@ -340,6 +340,16 @@ pub const Explorer = struct {
     }
 
     pub fn renderAt(self: *Explorer, writer: anytype, width: usize, height: usize, start_row: usize, is_focused: bool) !void {
+        if (width == 0 or height == 0) return;
+
+        var clear_row = start_row;
+        const clear_end = start_row + height - 1;
+        while (clear_row < clear_end) : (clear_row += 1) {
+            try terminal.moveCursor(writer, clear_row, 1);
+            try writer.writeAll("\x1b[0m");
+            for (0..width) |_| try writer.writeAll(" ");
+        }
+
         try terminal.moveCursor(writer, start_row, 1);
         if (is_focused) {
             try writer.writeAll("\x1b[48;5;204m\x1b[38;5;16m\x1b[1m");

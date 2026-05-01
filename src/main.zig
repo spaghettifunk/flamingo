@@ -22,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     try config.validate(&cfg);
 
     // initiate logger
-    try logger.init(io, allocator, 0);
+    try logger.init(io, allocator, cfg.debug);
     defer logger.shutdown() catch {};
 
     _ = c.signal(c.SIGSEGV, handleSignal);
