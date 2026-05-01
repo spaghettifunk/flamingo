@@ -1289,7 +1289,16 @@ pub const Editor = struct {
 
         self.renderVirtualStatus(tab);
         _ = try self.screen_renderer.emit(writer, &self.screen);
+        try self.renderVirtualTabSeparator(writer);
         try self.moveVirtualCursor(writer, tab, gutter_width, visible_rows);
+    }
+
+    fn renderVirtualTabSeparator(self: *Editor, writer: anytype) !void {
+        if (self.height < 2 or self.width == 0) return;
+        try terminal.moveCursor(writer, 2, 1);
+        try writer.writeAll("\x1b[2;37m");
+        for (0..self.width) |_| try writer.writeAll("─");
+        try writer.writeAll("\x1b[0m");
     }
 
     fn renderVirtualTabs(self: *Editor) void {
