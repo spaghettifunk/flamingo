@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const allocator = std.heap.smp_allocator;
 
-    try logger.init(io, allocator, 0);
+    try logger.init(io, allocator, false);
     defer logger.shutdown() catch {};
 
     var ed = try editor.Editor.init(allocator, io, .{});
@@ -57,18 +57,54 @@ pub fn main(init: std.process.Init) !void {
         total_bytes += out.written().len;
     }
 
+    var cursor_timings: [frames]u64 = undefined;
+    var cursor_total_bytes: usize = 0;
+    {
+        const tab = ed.currentTab().?;
+        tab.scroll_row = 0;
+        tab.mainCursor().row = 1;
+        tab.mainCursor().col = 0;
+        ed.mode = .Normal;
+        ed.explorer_visible = false;
+        ed.explorer_focused = false;
+        ed.completion_active = false;
+        ed.search_buffer.clearRetainingCapacity();
+
+        for (0..frames) |i| {
+            const key = if (i % 2 == 0) ed.keys.move_down else ed.keys.move_up;
+            out.clearRetainingCapacity();
+            const start = perf.nowNs();
+            if (!try ed.renderBenchmarkCursorMove(&out.writer, key)) {
+                return error.FastCursorMoveBenchmarkIneligible;
+            }
+            cursor_timings[i] = perf.elapsedNs(start);
+            cursor_total_bytes += out.written().len;
+        }
+    }
+
     var sorted = timings;
     std.mem.sort(u64, &sorted, {}, lessThanU64);
     const p50 = sorted[frames / 2];
     const p95 = sorted[(frames * 95) / 100];
     const avg_bytes = total_bytes / frames;
 
-    std.debug.print("flamingo perf benchmark: lines={d} frames={d} p50_ns={d} p95_ns={d} avg_bytes={d}\n", .{
+    var cursor_sorted = cursor_timings;
+    std.mem.sort(u64, &cursor_sorted, {}, lessThanU64);
+    const cursor_p50 = cursor_sorted[frames / 2];
+    const cursor_p95 = cursor_sorted[(frames * 95) / 100];
+    const cursor_avg_bytes = cursor_total_bytes / frames;
+
+    if (cursor_avg_bytes >= 300) return error.FastCursorMoveBytesTargetMissed;
+
+    std.debug.print("flamingo perf benchmark: lines={d} frames={d} p50_ns={d} p95_ns={d} avg_bytes={d} cursor_p50_ns={d} cursor_p95_ns={d} cursor_avg_bytes={d}\n", .{
         line_count,
         frames,
         p50,
         p95,
         avg_bytes,
+        cursor_p50,
+        cursor_p95,
+        cursor_avg_bytes,
     });
 }
 

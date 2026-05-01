@@ -24,7 +24,7 @@ pub const LoggerHandle = struct {
 };
 
 pub fn setupLogger(allocator: std.mem.Allocator) !LoggerHandle {
-    try logger.init(std.testing.io, allocator, 0);
+    try logger.init(std.testing.io, allocator, true);
     return LoggerHandle{};
 }
 

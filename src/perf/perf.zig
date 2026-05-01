@@ -28,6 +28,7 @@ pub const PhaseCount = @typeInfo(Phase).@"enum".fields.len;
 pub const FrameMetrics = struct {
     phases_ns: [PhaseCount]u64 = [_]u64{0} ** PhaseCount,
     rendered: bool = false,
+    fast_cursor_move: bool = false,
     bytes_emitted: usize = 0,
 
     pub fn add(self: *FrameMetrics, phase: Phase, duration_ns: u64) void {
@@ -44,6 +45,7 @@ pub const PerfSampler = struct {
     loop_ticks: u64 = 0,
     rendered_frames: u64 = 0,
     sample_rendered_frames: u64 = 0,
+    sample_fast_cursor_moves: u64 = 0,
     sample_loop_ticks: u64 = 0,
     sample_bytes: u64 = 0,
     totals_ns: [PhaseCount]u128 = [_]u128{0} ** PhaseCount,
@@ -69,6 +71,9 @@ pub const PerfSampler = struct {
             self.rendered_frames += 1;
             self.sample_rendered_frames += 1;
         }
+        if (metrics.fast_cursor_move) {
+            self.sample_fast_cursor_moves += 1;
+        }
         self.sample_bytes += metrics.bytes_emitted;
 
         inline for (@typeInfo(Phase).@"enum".fields) |field| {
@@ -92,10 +97,11 @@ pub const PerfSampler = struct {
 
         logz.info()
             .fmt("msg",
-                "perf loops={d} rendered={d} bytes={d} avg_ns {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d}",
+                "perf loops={d} rendered={d} fast_cursor={d} bytes={d} avg_ns {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d}",
                 .{
                     self.sample_loop_ticks,
                     self.sample_rendered_frames,
+                    self.sample_fast_cursor_moves,
                     self.sample_bytes,
                     Phase.input_poll.name(),
                     averages[@intFromEnum(Phase.input_poll)],
@@ -116,6 +122,7 @@ pub const PerfSampler = struct {
             .log();
 
         self.sample_rendered_frames = 0;
+        self.sample_fast_cursor_moves = 0;
         self.sample_loop_ticks = 0;
         self.sample_bytes = 0;
         self.totals_ns = [_]u128{0} ** PhaseCount;

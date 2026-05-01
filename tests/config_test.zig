@@ -8,6 +8,7 @@ const toml = @import("toml");
 
 test "Config: zero-value has correct defaults" {
     const cfg = config.Config{};
+    try std.testing.expect(!cfg.debug);
     try std.testing.expectEqualStrings("ctrl+n", cfg.keybindings.new_file);
     try std.testing.expectEqualStrings("ctrl+o", cfg.keybindings.open_file);
     try std.testing.expectEqualStrings("ctrl+f", cfg.keybindings.open_folder);
@@ -31,8 +32,20 @@ test "Config: parse empty TOML gives defaults" {
     defer result.deinit();
 
     const cfg = result.value;
+    try std.testing.expect(!cfg.debug);
     try std.testing.expectEqualStrings("ctrl+n", cfg.keybindings.new_file);
     try std.testing.expectEqual(@as(u8, 20), cfg.explorer.width_percentage);
+}
+
+test "Config: parse debug flag" {
+    const allocator = std.testing.allocator;
+    var parser = toml.Parser(config.Config).init(allocator);
+    defer parser.deinit();
+
+    var result = try parser.parseString("debug = true");
+    defer result.deinit();
+
+    try std.testing.expect(result.value.debug);
 }
 
 test "Config: parse keybinding override" {

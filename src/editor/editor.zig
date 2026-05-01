@@ -33,6 +33,24 @@ pub const Cursor = struct {
     selection_start: ?Pos = null,
 };
 
+const CursorMoveState = struct {
+    row: usize,
+    col: usize,
+    scroll_row: usize,
+    mode: EditorMode,
+    cursor_count: usize,
+    had_selection: bool,
+    active_tab_index: usize,
+    tab_count: usize,
+    buffer_ptr: *const buffer.Buffer,
+    width: usize,
+    height: usize,
+    buf_start_col: usize,
+    buf_width: usize,
+    visible_rows: usize,
+    gutter_width: usize,
+};
+
 pub const Tab = struct {
     buf: buffer.Buffer,
     cursors: std.ArrayListUnmanaged(Cursor),
@@ -411,6 +429,17 @@ pub const Editor = struct {
         try terminal.showCursor(writer);
     }
 
+    pub fn renderBenchmarkCursorMove(self: *Editor, writer: anytype, event: terminal.KeyEvent) !bool {
+        const before = self.captureCursorMoveState() orelse return false;
+        try self.handleRuntimeKey(event);
+        if (!self.canFastRenderCursorMove(before)) return false;
+        try self.renderFastCursorMove(writer, before);
+        self.render_dirty = false;
+        self.force_full_render = true;
+        self.screen_renderer.invalidate(.full);
+        return true;
+    }
+
     pub fn run(self: *Editor) !void {
         const stdout = std.Io.File.stdout();
         const stdin = std.Io.File.stdin();
@@ -546,10 +575,40 @@ pub const Editor = struct {
                 if (event.key == .None) break;
                 handled_input = true;
 
+                const render_after_event = self.shouldRenderAfterInputEvent(event);
+                const cursor_move_before = if (render_after_event) self.captureCursorMoveState() else null;
                 const input_handle_start = perf.nowNs();
                 try self.handleRuntimeKey(event);
                 metrics.add(.update_state, perf.elapsedNs(input_handle_start));
+
+                if (render_after_event) {
+                    if (cursor_move_before) |before| {
+                        if (self.canFastRenderCursorMove(before)) {
+                            aw.clearRetainingCapacity();
+                            const frame_start = perf.nowNs();
+                            try terminal.hideCursor(writer);
+                            try self.renderFastCursorMove(writer, before);
+                            try terminal.showCursor(writer);
+                            metrics.add(.build_frame, perf.elapsedNs(frame_start));
+
+                            const flush_start = perf.nowNs();
+                            const bytes = aw.written().len;
+                            try raw_writer.writeAll(aw.written());
+                            metrics.add(.flush_output, perf.elapsedNs(flush_start));
+                            self.updateFrameCapacityFps(metrics.get(.build_frame) + metrics.get(.flush_output));
+                            metrics.rendered = true;
+                            metrics.fast_cursor_move = true;
+                            metrics.bytes_emitted = bytes;
+                            self.render_dirty = false;
+                            self.force_full_render = true;
+                            self.screen_renderer.invalidate(.full);
+                            break;
+                        }
+                    }
+                }
+
                 if (self.should_quit) break;
+                if (render_after_event and self.render_dirty) break;
             }
             metrics.add(.input_poll, perf.elapsedNs(input_start));
 
@@ -598,6 +657,185 @@ pub const Editor = struct {
         try terminal.clearScreen(writer);
         try terminal.moveCursor(writer, 1, 1);
         try raw_writer.writeAll(aw.written());
+    }
+
+    fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
+        if (event.key == .PageUp or event.key == .PageDown) return true;
+
+        return movementEventMatches(event, self.keys.move_up) or
+            movementEventMatches(event, self.keys.move_down) or
+            movementEventMatches(event, self.keys.move_left) or
+            movementEventMatches(event, self.keys.move_right) or
+            movementEventMatches(event, self.keys.line_start) or
+            movementEventMatches(event, self.keys.line_end) or
+            movementEventMatches(event, self.keys.word_left) or
+            movementEventMatches(event, self.keys.word_right) or
+            movementEventMatches(event, self.keys.explorer_up) or
+            movementEventMatches(event, self.keys.explorer_down);
+    }
+
+    fn movementEventMatches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
+        if (event.eql(expected)) return true;
+
+        var without_shift = event;
+        without_shift.shift = false;
+        return event.shift and without_shift.eql(expected);
+    }
+
+    fn captureCursorMoveState(self: *Editor) ?CursorMoveState {
+        const tab = self.currentTab() orelse return null;
+        if (tab.cursors.items.len == 0) return null;
+        const mc = tab.mainCursor();
+        const top_reserved = 2;
+        const bot_reserved = 1;
+        const visible_rows = if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
+        const viewport = self.bufferViewportGeometry();
+        return .{
+            .row = mc.row,
+            .col = mc.col,
+            .scroll_row = tab.scroll_row,
+            .mode = self.mode,
+            .cursor_count = tab.cursors.items.len,
+            .had_selection = mc.selection_start != null,
+            .active_tab_index = self.active_tab_index,
+            .tab_count = self.tabs.items.len,
+            .buffer_ptr = &tab.buf,
+            .width = self.width,
+            .height = self.height,
+            .buf_start_col = viewport.start_col,
+            .buf_width = viewport.width,
+            .visible_rows = visible_rows,
+            .gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len),
+        };
+    }
+
+    fn bufferViewportGeometry(self: *const Editor) struct { start_col: usize, width: usize } {
+        var buf_start_col: usize = 1;
+        var buf_width: usize = self.width;
+
+        if (self.explorer_visible and self.tree != null) {
+            const exp_width = (self.width * @as(usize, self.config.explorer.width_percentage)) / 100;
+            if (exp_width > 0) {
+                buf_start_col = exp_width + 2;
+                buf_width = self.width -| (exp_width + 1);
+            }
+        }
+
+        return .{ .start_col = buf_start_col, .width = buf_width };
+    }
+
+    fn canFastRenderCursorMove(self: *Editor, before: CursorMoveState) bool {
+        if (before.mode != .Normal and before.mode != .Insert) return false;
+        if (self.mode != .Normal and self.mode != .Insert) return false;
+        if (before.cursor_count != 1) return false;
+        if (before.had_selection) return false;
+        if (self.tabs.items.len != before.tab_count) return false;
+        if (self.active_tab_index != before.active_tab_index) return false;
+        if (self.width != before.width or self.height != before.height) return false;
+        if (self.explorer_focused) return false;
+        if (self.tree) |tree| {
+            if (tree.search_active) return false;
+        }
+        if (self.completion_active) return false;
+        if (self.search_buffer.items.len > 0) return false;
+
+        const tab = self.currentTab() orelse return false;
+        if (&tab.buf != before.buffer_ptr) return false;
+        if (tab.scroll_row != before.scroll_row) return false;
+        if (tab.cursors.items.len != 1) return false;
+        if (tab.main_cursor_idx != 0) return false;
+
+        const mc = tab.mainCursor();
+        const viewport = self.bufferViewportGeometry();
+        if (viewport.start_col != before.buf_start_col or viewport.width != before.buf_width) return false;
+        if (mc.selection_start != null) return false;
+        if (mc.row == before.row and mc.col == before.col) return false;
+        if (before.row < tab.scroll_row or before.row >= tab.scroll_row + before.visible_rows) return false;
+        if (mc.row < tab.scroll_row or mc.row >= tab.scroll_row + before.visible_rows) return false;
+
+        return true;
+    }
+
+    fn renderFastCursorMove(self: *Editor, writer: anytype, before: CursorMoveState) !void {
+        const tab = self.currentTab() orelse return;
+        const mc = tab.mainCursor();
+
+        if (before.row == mc.row) {
+            try self.renderLineNumberGutterAt(writer, tab, mc.row, true, before);
+        } else {
+            try self.renderLineNumberGutterAt(writer, tab, before.row, false, before);
+            try self.renderLineNumberGutterAt(writer, tab, mc.row, true, before);
+        }
+
+        try self.renderStatusLineLegacyStyle(writer, tab);
+
+        const content_width = before.buf_width -| before.gutter_width;
+        const vis_col = if (mc.col > content_width) content_width else mc.col;
+        const vis_row = mc.row - tab.scroll_row + 3;
+        try terminal.moveCursor(writer, vis_row, before.buf_start_col + before.gutter_width + vis_col);
+    }
+
+    fn renderLineNumberGutterAt(self: *Editor, writer: anytype, tab: *Tab, line_idx: usize, is_current: bool, state: CursorMoveState) !void {
+        _ = self;
+        if (state.visible_rows == 0) return;
+        if (line_idx < tab.scroll_row or line_idx >= tab.scroll_row + state.visible_rows) return;
+
+        const screen_row = line_idx - tab.scroll_row + 3;
+        try terminal.moveCursor(writer, screen_row, state.buf_start_col);
+        if (is_current) {
+            try writer.writeAll("\x1b[33;1m");
+        } else {
+            try writer.writeAll("\x1b[2;37m");
+        }
+
+        const line_num = line_idx + 1;
+        const num_digits = @max(buffer.countDigits(tab.buf.lines.items.len), 2);
+        try writer.writeByte(' ');
+        const num_used = buffer.countDigits(line_num);
+        const pad = num_digits - num_used;
+        for (0..pad) |_| try writer.writeByte(' ');
+        try writer.print("{d} ", .{line_num});
+        try writer.writeAll("\x1b[0m");
+    }
+
+    fn renderStatusLineLegacyStyle(self: *Editor, writer: anytype, tab: ?*Tab) !void {
+        if (self.height == 0) return;
+        try terminal.moveCursor(writer, self.height, 1);
+        try terminal.clearLine(writer);
+
+        if (self.error_message) |err_msg| {
+            try writer.writeAll("\x1b[31;1m");
+            try writer.print("{s}", .{err_msg});
+            try writer.writeAll("\x1b[0m");
+            return;
+        }
+
+        const mode_color = if (self.mode == .Normal) "\x1b[48;5;121m\x1b[30m" else "\x1b[48;5;117m\x1b[30m";
+        try writer.writeAll(mode_color);
+
+        const mode_str = if (self.mode == .Normal) "-- NORMAL --" else "-- INSERT --";
+        var buf: [160]u8 = undefined;
+        const status_text = if (tab) |t| blk: {
+            var diag_count: usize = 0;
+            if (t.buf.filename) |fname| {
+                if (self.diagnostics.get(fname)) |dv| {
+                    diag_count = dv.object.get("diagnostics").?.array.items.len;
+                }
+            }
+
+            if (diag_count > 0) {
+                break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | ERR: {d} | FPS: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, diag_count, self.fps });
+            }
+            break :blk try std.fmt.bufPrint(&buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | FPS: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, self.fps });
+        } else try std.fmt.bufPrint(&buf, " {s} | No file open | FPS: {d} ", .{ mode_str, self.fps });
+
+        try writer.writeAll(status_text);
+        if (self.width > status_text.len) {
+            for (0..self.width - status_text.len) |_| {
+                try writer.writeAll(" ");
+            }
+        }
+        try writer.writeAll("\x1b[0m");
     }
 
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
@@ -686,8 +924,9 @@ pub const Editor = struct {
     }
 
     fn renderTabs(self: *Editor, writer: anytype, start_col: usize, width: usize) !void {
-        try terminal.moveCursor(writer, 1, start_col);
+        try terminal.moveCursor(writer, 1, 1);
         try terminal.eraseToLineEnd(writer);
+        try terminal.moveCursor(writer, 1, start_col);
 
         if (self.tabs.items.len == 0) return;
 
@@ -778,7 +1017,7 @@ pub const Editor = struct {
 
         try self.renderTabs(writer, buf_start_col, buf_width);
 
-        // Hybrid (Vim-style) line number gutter: absolute on current line, relative elsewhere.
+        // Line number gutter.
         const tab = self.currentTab();
         const gutter_width: usize = if (tab) |t|
             self.calculateGutterWidth(t.buf.lines.items.len)
@@ -801,19 +1040,14 @@ pub const Editor = struct {
                     // --- Gutter ---
                     const mc = t.mainCursor();
                     const is_current = (buffer_line_idx == mc.row);
-                    const line_num: usize = if (is_current)
-                        buffer_line_idx + 1 // absolute 1-based
-                    else if (buffer_line_idx > mc.row)
-                        buffer_line_idx - mc.row
-                    else
-                        mc.row - buffer_line_idx;
+                    const line_num = buffer_line_idx + 1;
 
                     const num_digits = @max(buffer.countDigits(t.buf.lines.items.len), 2);
 
                     if (is_current) {
                         try writer.writeAll("\x1b[33;1m"); // bold yellow — current line
                     } else {
-                        try writer.writeAll("\x1b[2;37m"); // dim grey  — relative distance
+                        try writer.writeAll("\x1b[2;37m"); // dim grey - non-current line
                     }
 
                     // --- Render Gutter ---
@@ -1098,12 +1332,7 @@ pub const Editor = struct {
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, gutter_width: usize) void {
         const mc = tab.mainCursor();
         const is_current = buffer_line_idx == mc.row;
-        const line_num: usize = if (is_current)
-            buffer_line_idx + 1
-        else if (buffer_line_idx > mc.row)
-            buffer_line_idx - mc.row
-        else
-            mc.row - buffer_line_idx;
+        const line_num = buffer_line_idx + 1;
 
         var gutter_buf: [32]u8 = undefined;
         const num_digits = @max(buffer.countDigits(tab.buf.lines.items.len), 2);
@@ -1459,6 +1688,172 @@ test "Editor.calculateGutterWidth" {
     // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
+}
+
+test "fast cursor move eligibility accepts plain movement inside viewport" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    const keys = [_]terminal.KeyEvent{
+        ed.keys.move_down,
+        ed.keys.move_up,
+        ed.keys.move_right,
+        ed.keys.move_left,
+    };
+
+    for (keys) |key| {
+        const tab = ed.currentTab().?;
+        tab.mainCursor().row = 1;
+        tab.mainCursor().col = 1;
+        tab.scroll_row = 0;
+        ed.mode = .Normal;
+        ed.explorer_visible = false;
+        ed.explorer_focused = false;
+        ed.completion_active = false;
+        ed.search_buffer.clearRetainingCapacity();
+
+        const before = ed.captureCursorMoveState().?;
+        try input.handleInput(&ed, key);
+        try std.testing.expect(ed.canFastRenderCursorMove(before));
+    }
+}
+
+test "fast cursor move eligibility rejects scrolling movement" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.height = 4;
+    const tab = ed.currentTab().?;
+    tab.scroll_row = 0;
+    tab.mainCursor().row = 0;
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_down);
+    try std.testing.expect(!ed.canFastRenderCursorMove(before));
+}
+
+test "fast cursor move eligibility rejects active overlays and complex cursors" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    {
+        const tab = ed.currentTab().?;
+        tab.mainCursor().selection_start = .{ .row = 1, .col = 0 };
+        tab.mainCursor().row = 1;
+        tab.mainCursor().col = 1;
+        const before = ed.captureCursorMoveState().?;
+        try input.handleInput(&ed, ed.keys.move_right);
+        try std.testing.expect(!ed.canFastRenderCursorMove(before));
+        tab.mainCursor().selection_start = null;
+    }
+
+    {
+        const tab = ed.currentTab().?;
+        try tab.cursors.append(ed.allocator, .{ .row = 1, .col = 0 });
+        const before = ed.captureCursorMoveState().?;
+        try input.handleInput(&ed, ed.keys.move_right);
+        try std.testing.expect(!ed.canFastRenderCursorMove(before));
+        _ = tab.cursors.pop();
+    }
+
+    const rejection_cases = [_]struct {
+        mode: EditorMode = .Normal,
+        explorer_visible: bool = false,
+        explorer_focused: bool = false,
+        completion_active: bool = false,
+        search_text: []const u8 = "",
+    }{
+        .{ .explorer_visible = true, .explorer_focused = true },
+        .{ .completion_active = true },
+        .{ .search_text = "needle" },
+        .{ .mode = .Command },
+        .{ .mode = .Search },
+    };
+
+    for (rejection_cases) |case| {
+        const tab = ed.currentTab().?;
+        tab.mainCursor().row = 1;
+        tab.mainCursor().col = 1;
+        tab.scroll_row = 0;
+        ed.mode = case.mode;
+        ed.explorer_visible = case.explorer_visible;
+        ed.explorer_focused = case.explorer_focused;
+        ed.completion_active = case.completion_active;
+        ed.search_buffer.clearRetainingCapacity();
+        try ed.search_buffer.appendSlice(ed.allocator, case.search_text);
+
+        const before = ed.captureCursorMoveState().?;
+        if (case.mode == .Normal) {
+            try input.handleInput(&ed, ed.keys.move_right);
+        }
+        try std.testing.expect(!ed.canFastRenderCursorMove(before));
+    }
+}
+
+test "fast cursor move eligibility allows visible explorer when buffer is focused" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 1;
+    tab.mainCursor().col = 1;
+    tab.scroll_row = 0;
+    ed.explorer_visible = true;
+    ed.explorer_focused = false;
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_right);
+    try std.testing.expect(ed.canFastRenderCursorMove(before));
+}
+
+test "fast cursor move output stays small and updates status only" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    try ed.renderBenchmarkFrame(&out.writer);
+    out.clearRetainingCapacity();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 0;
+    tab.scroll_row = 0;
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_down);
+    try std.testing.expect(ed.canFastRenderCursorMove(before));
+    try ed.renderFastCursorMove(&out.writer, before);
+
+    const rendered = out.written();
+    try std.testing.expect(rendered.len < 300);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Row: 2, Col: 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "alpha") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "beta") == null);
+}
+
+fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
+    for (lines) |line| {
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    try ed.addTab(buf);
+    ed.mode = .Normal;
+    ed.width = 80;
+    ed.height = 24;
+    ed.render_dirty = false;
+    ed.force_full_render = false;
+    return ed;
 }
 
 pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {

@@ -56,6 +56,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         } else {
             ed.explorer_focused = false;
         }
+        ed.markDirty(.full);
         return;
     }
 
