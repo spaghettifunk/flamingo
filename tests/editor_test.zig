@@ -5,7 +5,7 @@
 const std = @import("std");
 const config = @import("../src/config.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const Buffer = buffer_mod.Buffer;
 const terminal = @import("../src/terminal.zig");
 const th = @import("test_helpers.zig");
@@ -30,13 +30,13 @@ test "Editor: addTab increases count and sets active index" {
 
     const b1 = try Buffer.init(a);
     try ed.addTab(b1);
-    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 
     const b2 = try Buffer.init(a);
     try ed.addTab(b2);
-    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 }
 
 test "Editor: addTab focuses existing tab for duplicate filename" {
@@ -51,15 +51,15 @@ test "Editor: addTab focuses existing tab for duplicate filename" {
     var other = try Buffer.init(a);
     try other.setFilename("/tmp/flamingo-other.txt");
     try ed.addTab(other);
-    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 
     var duplicate = try Buffer.init(a);
     try duplicate.setFilename("/tmp/flamingo-duplicate.txt");
     try ed.addTab(duplicate);
 
-    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 }
 
 test "Editor: addTab still allows multiple unsaved tabs" {
@@ -73,8 +73,8 @@ test "Editor: addTab still allows multiple unsaved tabs" {
     const second = try Buffer.init(a);
     try ed.addTab(second);
 
-    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 }
 
 test "Editor: closeTab on only tab switches to Dashboard" {
@@ -84,13 +84,13 @@ test "Editor: closeTab on only tab switches to Dashboard" {
 
     const b = try Buffer.init(a);
     try ed.addTab(b);
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     ed.closeTab();
 
-    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
-    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.mode);
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 }
 
 test "Editor: closeTab on multiple tabs adjusts index" {
@@ -106,10 +106,10 @@ test "Editor: closeTab on multiple tabs adjusts index" {
     try ed.addTab(b2);
 
     // active is tab 2, close it
-    ed.active_tab_index = 2;
+    ed.state.active_tab_index = 2;
     ed.closeTab();
-    try std.testing.expectEqual(@as(usize, 2), ed.tabs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 }
 
 test "Editor: nextTab and prevTab wrap around" {
@@ -122,17 +122,17 @@ test "Editor: nextTab and prevTab wrap around" {
         try ed.addTab(b);
     }
 
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
     ed.nextTab();
-    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 
-    ed.active_tab_index = 2;
+    ed.state.active_tab_index = 2;
     ed.nextTab();
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index); // wrap
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index); // wrap
 
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
     ed.prevTab();
-    try std.testing.expectEqual(@as(usize, 2), ed.active_tab_index); // wrap backwards
+    try std.testing.expectEqual(@as(usize, 2), ed.state.active_tab_index); // wrap backwards
 }
 
 test "Editor: nextTab / prevTab are no-ops with one tab" {
@@ -143,12 +143,12 @@ test "Editor: nextTab / prevTab are no-ops with one tab" {
     const b = try Buffer.init(a);
     try ed.addTab(b);
 
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
     ed.nextTab();
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 
     ed.prevTab();
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 }
 
 test "Editor: closeAllTabs frees everything and sets Dashboard mode" {
@@ -162,9 +162,9 @@ test "Editor: closeAllTabs frees everything and sets Dashboard mode" {
     }
 
     ed.closeAllTabs();
-    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
-    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.mode);
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 }
 
 test "Editor: currentTab returns null when no tabs" {
@@ -185,9 +185,9 @@ test "Editor: currentTab returns correct tab" {
     const b1 = try Buffer.init(a);
     try ed.addTab(b1);
 
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
     try std.testing.expect(ed.currentTab() != null);
-    try std.testing.expectEqual(&ed.tabs.items[0], ed.currentTab().?);
+    try std.testing.expectEqual(&ed.state.tabs.items[0], ed.currentTab().?);
 }
 
 test "Editor: render includes syntax, selection, and search styling" {
@@ -195,16 +195,19 @@ test "Editor: render includes syntax, selection, and search styling" {
     const logger = try th.setupLogger(a);
     defer logger.deinit();
 
-    var ed = try th.makeEditor(a, &[_][]const u8{"const value = \"hi\";"});
+    var ed = try th.makeEditor(a, &[_][]const u8{
+        "const value = \"hi\";",
+        "const other = 1;",
+    });
     defer ed.deinit();
 
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
     try ed.currentTab().?.buf.setFilename("main.zig");
     try ed.currentTab().?.syntax_highlighter.ensureForBuffer(&ed.currentTab().?.buf);
     ed.currentTab().?.mainCursor().selection_start = .{ .row = 0, .col = 0 };
     ed.currentTab().?.mainCursor().col = 5;
-    try ed.search_buffer.appendSlice(a, "value");
-    try ed.search_system.?.update(&ed.currentTab().?.buf, ed.search_buffer.items);
+    try ed.state.search_buffer.appendSlice(a, "value");
+    try ed.state.search_system.?.update(&ed.currentTab().?.buf, ed.state.search_buffer.items);
 
     var reader = std.Io.Reader.fixed("\x11");
     var out = std.Io.Writer.Allocating.init(a);
@@ -234,9 +237,9 @@ test "Editor: run loop drains repeated cursor movement before rendering" {
     });
     defer ed.deinit();
 
-    ed.mode = .Normal;
-    ed.render_dirty = false;
-    ed.force_full_render = false;
+    ed.state.mode = .Normal;
+    ed.state.render_dirty = false;
+    ed.state.force_full_render = false;
 
     var reader = std.Io.Reader.fixed("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x11");
     var out = std.Io.Writer.Allocating.init(a);

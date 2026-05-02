@@ -2,7 +2,7 @@ const std = @import("std");
 const logz = @import("logz");
 const ts = @import("tree-sitter");
 const event_queue = @import("event_queue.zig");
-const syntax = @import("syntax.zig");
+const syntax = @import("../syntax.zig");
 
 const ParseRequest = struct {
     buffer_id: u64,
@@ -43,6 +43,9 @@ pub const SyntaxParseWorker = struct {
     }
 
     pub fn stop(self: *SyntaxParseWorker) void {
+        // Stop producers before the editor closes the shared EventQueue. Any
+        // in-flight source snapshot remains owned here until discarded or
+        // transferred through a successful queue push.
         self.mutex.lockUncancelable(self.io);
         self.quit = true;
         if (self.pending) |*request| {

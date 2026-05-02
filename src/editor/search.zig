@@ -1,6 +1,5 @@
 const std = @import("std");
-const editor = @import("editor.zig");
-const buffer = @import("buffer.zig");
+const buffer = @import("model/buffer.zig");
 
 pub const Match = struct {
     row: usize,
@@ -92,6 +91,19 @@ pub const SearchSystem = struct {
     pub fn getActiveMatch(self: *const SearchSystem) ?Match {
         const idx = self.active_match_idx orelse return null;
         return self.matches.items[idx];
+    }
+
+    pub fn matchForRow(self: *const SearchSystem, row: usize) ?Match {
+        for (self.matches.items) |m| {
+            if (m.row == row) return m;
+            if (m.row > row) break;
+        }
+        return null;
+    }
+
+    pub fn activeMatchRow(self: *const SearchSystem) ?usize {
+        const active = self.getActiveMatch() orelse return null;
+        return active.row;
     }
 };
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const buffer = @import("buffer.zig");
+const buffer = @import("../src/editor/model/buffer.zig");
 const Line = buffer.Line;
 
 test "Line: basic insert and delete" {
@@ -23,7 +23,7 @@ test "Line: basic insert and delete" {
 
 test "Buffer: merge lines on deleteCharBack" {
     const allocator = std.testing.allocator;
-    var buf = Buffer{
+    var buf = buffer.Buffer{
         .lines = std.ArrayList(Line).empty,
         .allocator = allocator,
     };
@@ -41,20 +41,3 @@ test "Buffer: merge lines on deleteCharBack" {
     defer allocator.free(s);
     try std.testing.expectEqualStrings("firstsecond", s);
 }
-
-const Buffer = struct {
-    lines: std.ArrayListUnmanaged(Line),
-    allocator: std.mem.Allocator,
-    is_dirty: bool = false,
-
-    pub fn deinit(self: *Buffer) void {
-        for (self.lines.items) |*l| l.deinit();
-        self.lines.deinit(self.allocator);
-    }
-
-    pub fn deleteCharBack(self: *Buffer, row: usize, col: usize) !bool {
-        // Redefine here for test or import from buffer.zig if accessible
-        // (Actually it's better to make the original file testable)
-        return @import("buffer.zig").Buffer.deleteCharBack(self, row, col);
-    }
-};

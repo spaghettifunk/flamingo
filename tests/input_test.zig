@@ -5,9 +5,9 @@
 //! is how the macOS Option key is represented after terminal decoding.
 
 const std = @import("std");
-const input_mod = @import("../src/editor/input.zig");
+const input_mod = @import("../src/editor/input_router/dispatch.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
 const terminal = @import("../src/terminal.zig");
@@ -32,11 +32,11 @@ test "Dashboard → Normal via Enter on 'New File'" {
     var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
-    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.mode);
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
     // Dashboard: selected_index starts at 0 ("New File"), press Enter to confirm.
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.mode);
-    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
 }
 
 test "Normal → Insert via 'i'" {
@@ -45,7 +45,7 @@ test "Normal → Insert via 'i'" {
     defer ed.deinit();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('i')});
-    try std.testing.expectEqual(editor_mod.EditorMode.Insert, ed.mode);
+    try std.testing.expectEqual(editor_mod.EditorMode.Insert, ed.state.mode);
 }
 
 test "Insert → Normal via Esc" {
@@ -53,9 +53,9 @@ test "Insert → Normal via Esc" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.mode);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
 }
 
 test "Normal → Command via ':'" {
@@ -64,8 +64,8 @@ test "Normal → Command via ':'" {
     defer ed.deinit();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar(':')});
-    try std.testing.expectEqual(editor_mod.EditorMode.Command, ed.mode);
-    try std.testing.expectEqual(@as(usize, 0), ed.command_buffer.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Command, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.command_buffer.items.len);
 }
 
 test "Command → Normal via Esc" {
@@ -73,9 +73,9 @@ test "Command → Normal via Esc" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Command;
+    ed.state.mode = .Command;
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.mode);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
 }
 
 test "Normal → Search via '/'" {
@@ -84,8 +84,8 @@ test "Normal → Search via '/'" {
     defer ed.deinit();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('/')});
-    try std.testing.expectEqual(editor_mod.EditorMode.Search, ed.mode);
-    try std.testing.expectEqual(@as(usize, 0), ed.search_buffer.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Search, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.search_buffer.items.len);
 }
 
 test "Search → Normal via Esc clears search" {
@@ -93,11 +93,11 @@ test "Search → Normal via Esc clears search" {
     var ed = try th.makeEditor(a, &[_][]const u8{"hello world"});
     defer ed.deinit();
 
-    ed.mode = .Search;
-    try ed.search_buffer.append(a, 'h');
+    ed.state.mode = .Search;
+    try ed.state.search_buffer.append(a, 'h');
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.mode);
-    try std.testing.expectEqual(@as(usize, 0), ed.search_buffer.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.search_buffer.items.len);
 }
 
 test "Search → Normal via Enter" {
@@ -105,9 +105,9 @@ test "Search → Normal via Enter" {
     var ed = try th.makeEditor(a, &[_][]const u8{"hello world"});
     defer ed.deinit();
 
-    ed.mode = .Search;
+    ed.state.mode = .Search;
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.mode);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
 }
 
 // ── Typing in Insert mode ─────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ test "Insert: typing ASCII chars updates buffer" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('H'), th.keyChar('i'),
     });
@@ -129,7 +129,7 @@ test "Insert: Tab expands to 4 spaces" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{
         .{ .key = .Char, .char = '\t' },
     });
@@ -141,7 +141,7 @@ test "Insert: Enter splits line" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('a'),
         th.keySpecial(.Enter),
@@ -159,7 +159,7 @@ test "Insert: Backspace removes previous char" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('a'),           th.keyChar('b'), th.keyChar('c'),
         th.keySpecial(.Backspace),
@@ -172,7 +172,7 @@ test "Insert: Backspace at col 0 merges with previous line" {
     var ed = try th.makeEditor(a, &[_][]const u8{ "first", "second" });
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     const tab = ed.currentTab().?;
     tab.mainCursor().row = 1;
     tab.mainCursor().col = 0;
@@ -188,7 +188,7 @@ test "Insert: Option+Delete deletes previous word" {
     var ed = try th.makeEditor(a, &[_][]const u8{"hello world"});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     const tab = ed.currentTab().?;
     tab.mainCursor().col = 11;
 
@@ -203,7 +203,7 @@ test "Insert: Option+Delete deletes previous word when terminal sends Alt+Backsp
     var ed = try th.makeEditor(a, &[_][]const u8{"hello world"});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     const tab = ed.currentTab().?;
     tab.mainCursor().col = 11;
 
@@ -218,7 +218,7 @@ test "Insert: Ctrl+Z undo and Ctrl+Y redo text edit" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.mode = .Insert;
+    ed.state.mode = .Insert;
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('x')});
     try expectLine(a, &ed, 0, "x");
 
@@ -246,8 +246,8 @@ test "Command: :q on clean tab closes it" {
     });
 
     // After :q the tab is closed → Dashboard
-    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.mode);
-    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
 test "Command: :q on dirty buffer shows error" {
@@ -264,8 +264,8 @@ test "Command: :q on dirty buffer shows error" {
     });
 
     // Tab stays open, error is set
-    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
-    try std.testing.expect(ed.error_message != null);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expect(ed.state.error_message != null);
 }
 
 test "Command: :q! force-closes dirty tab" {
@@ -282,7 +282,7 @@ test "Command: :q! force-closes dirty tab" {
         th.keySpecial(.Enter),
     });
 
-    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
 test "Command: :w saves file to disk" {
@@ -328,8 +328,8 @@ test "Command: unknown command shows error, stays Normal" {
         th.keySpecial(.Enter),
     });
 
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.mode);
-    try std.testing.expect(ed.error_message != null);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(ed.state.error_message != null);
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -350,7 +350,7 @@ test "Search: typing query finds matches" {
         th.keyChar('a'),
     });
 
-    const ss = ed.search_system.?;
+    const ss = ed.state.search_system.?;
     try std.testing.expect(ss.matches.items.len >= 2);
 }
 
@@ -364,13 +364,13 @@ test "Search: Down cycles to next match" {
     defer ed.deinit();
 
     // Manually populate search (avoids needing a fully initialised search UI path)
-    ed.mode = .Search;
-    try ed.search_buffer.appendSlice(a, "foo");
-    try ed.search_system.?.update(&ed.currentTab().?.buf, "foo");
+    ed.state.mode = .Search;
+    try ed.state.search_buffer.appendSlice(a, "foo");
+    try ed.state.search_system.?.update(&ed.currentTab().?.buf, "foo");
 
-    const first_idx = ed.search_system.?.active_match_idx;
+    const first_idx = ed.state.search_system.?.active_match_idx;
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
-    const second_idx = ed.search_system.?.active_match_idx;
+    const second_idx = ed.state.search_system.?.active_match_idx;
     try std.testing.expect(first_idx != second_idx);
 }
 
@@ -382,14 +382,14 @@ test "Search: Up cycles to previous match" {
     });
     defer ed.deinit();
 
-    ed.mode = .Search;
-    try ed.search_buffer.appendSlice(a, "foo");
-    try ed.search_system.?.update(&ed.currentTab().?.buf, "foo");
+    ed.state.mode = .Search;
+    try ed.state.search_buffer.appendSlice(a, "foo");
+    try ed.state.search_system.?.update(&ed.currentTab().?.buf, "foo");
     // Start at index 0, go back → should wrap to last
-    ed.search_system.?.active_match_idx = 0;
+    ed.state.search_system.?.active_match_idx = 0;
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
-    const idx = ed.search_system.?.active_match_idx.?;
+    const idx = ed.state.search_system.?.active_match_idx.?;
     try std.testing.expect(idx > 0); // wrapped to last match
 }
 
@@ -401,7 +401,7 @@ test "Search: cursor jumps to active match row" {
     });
     defer ed.deinit();
 
-    ed.mode = .Search;
+    ed.state.mode = .Search;
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('f'), th.keyChar('l'), th.keyChar('a'),
     });
@@ -415,14 +415,14 @@ test "Search: Backspace shrinks query and re-runs search" {
     var ed = try th.makeEditor(a, &[_][]const u8{"flamingo"});
     defer ed.deinit();
 
-    ed.mode = .Search;
+    ed.state.mode = .Search;
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar('z'), th.keyChar('z'), th.keyChar('z'),
     });
-    try std.testing.expectEqual(@as(usize, 0), ed.search_system.?.matches.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.search_system.?.matches.items.len);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
-    try std.testing.expectEqual(@as(usize, 2), ed.search_buffer.items.len);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.search_buffer.items.len);
 }
 
 // ── Navigation with macOS Option key ─────────────────────────────────────────
@@ -526,11 +526,11 @@ test "Option+[ cycles to next tab" {
     try ed.addTab(b0);
     const b1 = try buffer_mod.Buffer.init(a);
     try ed.addTab(b1);
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
 
     // Option+[ is represented as alt=true, key=Char, char='['
     try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('[')});
-    try std.testing.expectEqual(@as(usize, 1), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 }
 
 test "Option+] cycles to previous tab" {
@@ -542,10 +542,10 @@ test "Option+] cycles to previous tab" {
     try ed.addTab(b0);
     const b1 = try buffer_mod.Buffer.init(a);
     try ed.addTab(b1);
-    ed.active_tab_index = 1;
+    ed.state.active_tab_index = 1;
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar(']')});
-    try std.testing.expectEqual(@as(usize, 0), ed.active_tab_index);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 }
 
 test "Ctrl+Option+Up: addCursorAbove" {
@@ -554,7 +554,7 @@ test "Ctrl+Option+Up: addCursorAbove" {
     defer ed.deinit();
 
     // Must be in Normal mode for ctrl+alt shortcuts to be processed.
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
     ed.currentTab().?.mainCursor().row = 2;
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrlOption(.Up)});
     try std.testing.expectEqual(@as(usize, 2), ed.currentTab().?.cursors.items.len);
@@ -566,7 +566,7 @@ test "Ctrl+Option+Down: addCursorBelow" {
     defer ed.deinit();
 
     // Must be in Normal mode for ctrl+alt shortcuts to be processed.
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
     ed.currentTab().?.mainCursor().row = 0;
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrlOption(.Down)});
     try std.testing.expectEqual(@as(usize, 2), ed.currentTab().?.cursors.items.len);
@@ -596,11 +596,11 @@ test "configured default Ctrl+B toggles explorer_visible" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    try std.testing.expect(!ed.explorer_visible);
+    try std.testing.expect(!ed.state.explorer_visible);
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
-    try std.testing.expect(ed.explorer_visible);
+    try std.testing.expect(ed.state.explorer_visible);
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
-    try std.testing.expect(!ed.explorer_visible);
+    try std.testing.expect(!ed.state.explorer_visible);
 }
 
 test "configured toggle_explorer key is used" {
@@ -614,10 +614,10 @@ test "configured toggle_explorer key is used" {
     ed.refreshKeybindings();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
-    try std.testing.expect(!ed.explorer_visible);
+    try std.testing.expect(!ed.state.explorer_visible);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
-    try std.testing.expect(ed.explorer_visible);
+    try std.testing.expect(ed.state.explorer_visible);
 }
 
 test "Ctrl+W closes current tab" {
@@ -625,9 +625,9 @@ test "Ctrl+W closes current tab" {
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
-    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
 test "configured close_tab key is used" {
@@ -638,10 +638,10 @@ test "configured close_tab key is used" {
     ed.refreshKeybindings();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
-    try std.testing.expectEqual(@as(usize, 1), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('u')});
-    try std.testing.expectEqual(@as(usize, 0), ed.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
 test "configured Ctrl+Shift+K delete_line works when terminal reports Ctrl+K" {
@@ -668,11 +668,11 @@ test "configured Ctrl+E switches explorer focus" {
     ed.config.keybindings.switch_focus = "ctrl+e";
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
-    try std.testing.expect(ed.explorer_visible);
-    try std.testing.expect(ed.explorer_focused);
+    try std.testing.expect(ed.state.explorer_visible);
+    try std.testing.expect(ed.state.explorer_focused);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
-    try std.testing.expect(!ed.explorer_focused);
+    try std.testing.expect(!ed.state.explorer_focused);
 }
 
 test "plain Tab inserts indentation when explorer is visible" {
@@ -685,15 +685,15 @@ test "plain Tab inserts indentation when explorer is visible" {
     ed.config.keybindings.switch_focus = "ctrl+e";
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
-    try std.testing.expect(ed.explorer_visible);
-    try std.testing.expect(ed.explorer_focused);
+    try std.testing.expect(ed.state.explorer_visible);
+    try std.testing.expect(ed.state.explorer_focused);
 
-    ed.mode = .Insert;
-    ed.explorer_focused = false;
+    ed.state.mode = .Insert;
+    ed.state.explorer_focused = false;
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
     try expectLine(a, &ed, 0, "    ");
-    try std.testing.expect(!ed.explorer_focused);
+    try std.testing.expect(!ed.state.explorer_focused);
 }
 
 test "Ctrl+S saves current file" {
@@ -713,7 +713,7 @@ test "Ctrl+S saves current file" {
 
     try ed.currentTab().?.buf.setFilename(file_path);
     ed.currentTab().?.buf.is_dirty = true;
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('s')});
 

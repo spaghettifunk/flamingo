@@ -1,7 +1,7 @@
 const std = @import("std");
 const config = @import("../config.zig");
 const editor = @import("../editor/editor.zig");
-const buffer = @import("../editor/buffer.zig");
+const buffer = @import("../editor/model/buffer.zig");
 const syntax = @import("../editor/syntax.zig");
 const perf = @import("perf.zig");
 const logger = @import("../logger.zig");
@@ -20,23 +20,23 @@ pub fn main(init: std.process.Init) !void {
     defer ed.deinit();
     ed.width = 120;
     ed.height = 40;
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     var buf = try makeLargeBuffer(allocator);
     errdefer buf.deinit();
 
     var cursors = std.ArrayListUnmanaged(editor.Cursor).empty;
     try cursors.append(allocator, .{});
-    const syntax_buffer_id = ed.next_syntax_buffer_id;
-    ed.next_syntax_buffer_id +%= 1;
-    try ed.tabs.append(allocator, .{
+    const syntax_buffer_id = ed.state.next_syntax_buffer_id;
+    ed.state.next_syntax_buffer_id +%= 1;
+    try ed.state.tabs.append(allocator, .{
         .buf = buf,
         .cursors = cursors,
         .syntax_highlighter = syntax.Highlighter.init(allocator),
         .syntax_buffer_id = syntax_buffer_id,
         .lsp_notified_revision = buf.revision,
     });
-    ed.active_tab_index = 0;
+    ed.state.active_tab_index = 0;
     buf = undefined;
 
     var out = std.Io.Writer.Allocating.init(allocator);
@@ -67,11 +67,11 @@ pub fn main(init: std.process.Init) !void {
         tab.scroll_row = 0;
         tab.mainCursor().row = 1;
         tab.mainCursor().col = 0;
-        ed.mode = .Normal;
-        ed.explorer_visible = false;
-        ed.explorer_focused = false;
-        ed.completion_active = false;
-        ed.search_buffer.clearRetainingCapacity();
+        ed.state.mode = .Normal;
+        ed.state.explorer_visible = false;
+        ed.state.explorer_focused = false;
+        ed.state.lsp_ui.completion_active = false;
+        ed.state.search_buffer.clearRetainingCapacity();
 
         for (0..frames) |i| {
             const key = if (i % 2 == 0) ed.keys.move_down else ed.keys.move_up;
@@ -99,12 +99,13 @@ pub fn main(init: std.process.Init) !void {
 
     if (cursor_avg_bytes >= 300) return error.FastCursorMoveBytesTargetMissed;
 
-    std.debug.print("flamingo perf benchmark: lines={d} frames={d} p50_ns={d} p95_ns={d} avg_bytes={d} cursor_p50_ns={d} cursor_p95_ns={d} cursor_avg_bytes={d}\n", .{
+    std.debug.print("flamingo perf benchmark: lines={d} full_frames={d} render_path=virtual p50_ns={d} p95_ns={d} avg_bytes={d} cursor_frames={d} cursor_path=fast p50_ns={d} p95_ns={d} avg_bytes={d}\n", .{
         line_count,
         frames,
         p50,
         p95,
         avg_bytes,
+        frames,
         cursor_p50,
         cursor_p95,
         cursor_avg_bytes,

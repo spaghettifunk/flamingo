@@ -8,15 +8,15 @@ pub fn copy(ed: *editor.Editor) !void {
         const start = if (ss.row < mc.row or (ss.row == mc.row and ss.col < mc.col)) ss else editor.Pos{ .row = mc.row, .col = mc.col };
         const end = if (ss.row < mc.row or (ss.row == mc.row and ss.col < mc.col)) editor.Pos{ .row = mc.row, .col = mc.col } else ss;
 
-        if (ed.clipboard) |c| ed.allocator.free(c);
-        ed.clipboard = try tab.buf.getRange(start.row, start.col, end.row, end.col);
+        if (ed.state.clipboard) |c| ed.allocator.free(c);
+        ed.state.clipboard = try tab.buf.getRange(start.row, start.col, end.row, end.col);
     } else {
         // Copy current line
         const line_data = try tab.buf.lines.items[mc.row].slice(ed.allocator);
         defer ed.allocator.free(line_data);
 
-        if (ed.clipboard) |c| ed.allocator.free(c);
-        ed.clipboard = try ed.allocator.dupe(u8, line_data);
+        if (ed.state.clipboard) |c| ed.allocator.free(c);
+        ed.state.clipboard = try ed.allocator.dupe(u8, line_data);
     }
 }
 
@@ -41,7 +41,7 @@ pub fn cut(ed: *editor.Editor) !void {
 
 pub fn paste(ed: *editor.Editor) !void {
     const tab = ed.currentTab() orelse return;
-    const content = ed.clipboard orelse return;
+    const content = ed.state.clipboard orelse return;
     const mc = tab.mainCursor();
 
     tab.buf.beginUndoGroup();

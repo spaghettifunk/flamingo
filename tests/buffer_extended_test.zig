@@ -3,7 +3,7 @@
 //! Complements the inline tests already in buffer.zig with edge-case coverage.
 
 const std = @import("std");
-const buf_mod = @import("../src/editor/buffer.zig");
+const buf_mod = @import("../src/editor/model/buffer.zig");
 const Line = buf_mod.Line;
 const Buffer = buf_mod.Buffer;
 

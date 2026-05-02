@@ -5,7 +5,7 @@
 const std = @import("std");
 const actions = @import("../src/editor/actions.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const th = @import("test_helpers.zig");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -32,8 +32,8 @@ test "copy: no selection copies current line" {
     defer ed.deinit();
 
     try actions.copy(&ed);
-    try std.testing.expect(ed.clipboard != null);
-    try std.testing.expectEqualStrings("flamingo", ed.clipboard.?);
+    try std.testing.expect(ed.state.clipboard != null);
+    try std.testing.expectEqualStrings("flamingo", ed.state.clipboard.?);
 }
 
 test "copy: with selection copies range only" {
@@ -43,8 +43,8 @@ test "copy: with selection copies range only" {
 
     setSelection(&ed, 0, 6, 0, 11); // select "world"
     try actions.copy(&ed);
-    try std.testing.expect(ed.clipboard != null);
-    try std.testing.expectEqualStrings("world", ed.clipboard.?);
+    try std.testing.expect(ed.state.clipboard != null);
+    try std.testing.expectEqualStrings("world", ed.state.clipboard.?);
 }
 
 test "copy: multi-line selection includes newline" {
@@ -54,8 +54,8 @@ test "copy: multi-line selection includes newline" {
 
     setSelection(&ed, 0, 1, 1, 2); // "bc\nde"
     try actions.copy(&ed);
-    try std.testing.expect(ed.clipboard != null);
-    try std.testing.expectEqualStrings("bc\nde", ed.clipboard.?);
+    try std.testing.expect(ed.state.clipboard != null);
+    try std.testing.expectEqualStrings("bc\nde", ed.state.clipboard.?);
 }
 
 // ── cut ───────────────────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ test "cut: no selection removes current line" {
 
     try std.testing.expectEqual(@as(usize, 1), tab.buf.lines.items.len);
     try expectLine(a, &ed, 0, "second");
-    try std.testing.expectEqualStrings("first", ed.clipboard.?);
+    try std.testing.expectEqualStrings("first", ed.state.clipboard.?);
 }
 
 test "cut: on last line buffer stays non-empty" {
@@ -91,7 +91,7 @@ test "cut: with selection removes the selected range" {
     setSelection(&ed, 0, 6, 0, 11); // "world"
     try actions.cut(&ed);
     try expectLine(a, &ed, 0, "hello ");
-    try std.testing.expectEqualStrings("world", ed.clipboard.?);
+    try std.testing.expectEqualStrings("world", ed.state.clipboard.?);
 }
 
 // ── paste ─────────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ test "paste: no selection inserts at cursor" {
     var ed = try th.makeEditor(a, &[_][]const u8{"world"});
     defer ed.deinit();
 
-    ed.clipboard = try a.dupe(u8, "hello ");
+    ed.state.clipboard = try a.dupe(u8, "hello ");
     const tab = ed.currentTab().?;
     tab.mainCursor().col = 0;
 
@@ -115,7 +115,7 @@ test "paste: with selection replaces it" {
     defer ed.deinit();
 
     setSelection(&ed, 0, 4, 0, 7); // "BAR"
-    ed.clipboard = try a.dupe(u8, "qux");
+    ed.state.clipboard = try a.dupe(u8, "qux");
     try actions.paste(&ed);
     try expectLine(a, &ed, 0, "foo qux baz");
 }
@@ -125,7 +125,7 @@ test "paste: multiline content splits into multiple lines" {
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
 
-    ed.clipboard = try a.dupe(u8, "line1\nline2\nline3");
+    ed.state.clipboard = try a.dupe(u8, "line1\nline2\nline3");
     try actions.paste(&ed);
 
     const tab = ed.currentTab().?;

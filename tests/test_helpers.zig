@@ -9,7 +9,7 @@ const logz = @import("logz");
 const logger = @import("../src/logger.zig");
 const config = @import("../src/config.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const terminal = @import("../src/terminal.zig");
 
 // ── Logger helpers ────────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ pub fn makeEditor(allocator: std.mem.Allocator, lines: []const []const u8) !edit
     }
 
     try ed.addTab(buf);
-    ed.mode = .Normal;
+    ed.state.mode = .Normal;
 
     // Provide sensible terminal dimensions for scroll / gutter tests.
     ed.width = 80;
@@ -111,7 +111,7 @@ pub fn keySpecial(k: terminal.Key) terminal.KeyEvent {
 
 /// Convenience: feed a slice of KeyEvents through `input.handleInput`.
 pub fn feedKeys(ed: *editor_mod.Editor, events: []const terminal.KeyEvent) !void {
-    const input_mod = @import("../src/editor/input.zig");
+    const input_mod = @import("../src/editor/input_router/dispatch.zig");
     for (events) |ev| {
         try input_mod.handleInput(ed, ev);
     }

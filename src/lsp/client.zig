@@ -1,7 +1,7 @@
 const std = @import("std");
 const rpc = @import("rpc.zig");
 const logz = @import("logz");
-const event_queue = @import("../editor/event_queue.zig");
+const event_queue = @import("../editor/runtime/event_queue.zig");
 
 pub const ClientState = enum {
     uninitialized,
@@ -84,6 +84,8 @@ pub const LspClient = struct {
     }
 
     pub fn stop(self: *LspClient) void {
+        // Reader/stderr threads are the LSP producers for the editor queue, so
+        // they must be joined before EventQueue.deinit can free pending events.
         self.quit_flag.store(true, .seq_cst);
 
         self.process.kill(self.io);
