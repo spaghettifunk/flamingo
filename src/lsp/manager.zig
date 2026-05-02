@@ -1,7 +1,7 @@
 const std = @import("std");
 const plugin = @import("../plugin/manager.zig");
 const lsp_client = @import("client.zig");
-const event_queue = @import("../editor/event_queue.zig");
+const event_queue = @import("../editor/runtime/event_queue.zig");
 const protocol = @import("protocol.zig");
 const logz = @import("logz");
 

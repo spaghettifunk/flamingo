@@ -1,5 +1,5 @@
 const std = @import("std");
-const syntax = @import("syntax.zig");
+const syntax = @import("../syntax.zig");
 
 pub const QueueError = error{
     QueueClosed,

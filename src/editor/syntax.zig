@@ -1,6 +1,6 @@
 const std = @import("std");
 const ts = @import("tree-sitter");
-const buffer = @import("buffer.zig");
+const buffer = @import("model/buffer.zig");
 
 extern fn tree_sitter_zig() callconv(.c) *const anyopaque;
 extern fn tree_sitter_go() callconv(.c) *const anyopaque;

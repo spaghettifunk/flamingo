@@ -5,7 +5,7 @@
 const std = @import("std");
 const actions = @import("../src/editor/actions.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const th = @import("test_helpers.zig");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

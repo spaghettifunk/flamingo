@@ -4,7 +4,7 @@
 //! that is automatically cleaned up after the test completes.
 
 const std = @import("std");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
 const th = @import("test_helpers.zig");

@@ -1,8 +1,8 @@
 const std = @import("std");
 const lsp_manager = @import("../src/lsp/manager.zig");
-const event_queue = @import("../src/editor/event_queue.zig");
+const event_queue = @import("../src/editor/runtime/event_queue.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const th = @import("test_helpers.zig");
 
 test "LspManager: pathToUri constructs correct absolute URIs" {

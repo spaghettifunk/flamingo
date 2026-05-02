@@ -1,5 +1,5 @@
 const std = @import("std");
-const buffer = @import("buffer.zig");
+const buffer = @import("model/buffer.zig");
 
 pub const Match = struct {
     row: usize,

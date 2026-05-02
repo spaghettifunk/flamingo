@@ -1,12 +1,11 @@
 const std = @import("std");
-const config = @import("../config.zig");
-const dashboard = @import("dashboard.zig");
-const explorer = @import("explorer.zig");
-const search = @import("search.zig");
-const syntax = @import("syntax.zig");
-const lsp_state = @import("lsp_state.zig");
-const buffer = @import("buffer.zig");
-const tab_mod = @import("tab.zig");
+const dashboard = @import("../dashboard.zig");
+const explorer = @import("../explorer.zig");
+const search = @import("../search.zig");
+const syntax = @import("../syntax.zig");
+const lsp_state = @import("lsp_ui.zig");
+const buffer = @import("../model/buffer.zig");
+const tab_mod = @import("../model/tab.zig");
 
 pub const EditorMode = enum {
     Dashboard,

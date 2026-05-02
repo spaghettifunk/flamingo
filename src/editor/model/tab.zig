@@ -1,6 +1,6 @@
 const std = @import("std");
 const buffer = @import("buffer.zig");
-const syntax = @import("syntax.zig");
+const syntax = @import("../syntax.zig");
 
 pub const Pos = struct {
     row: usize,

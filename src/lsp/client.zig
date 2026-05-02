@@ -1,7 +1,7 @@
 const std = @import("std");
 const rpc = @import("rpc.zig");
 const logz = @import("logz");
-const event_queue = @import("../editor/event_queue.zig");
+const event_queue = @import("../editor/runtime/event_queue.zig");
 
 pub const ClientState = enum {
     uninitialized,

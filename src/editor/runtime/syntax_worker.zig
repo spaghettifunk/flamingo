@@ -2,7 +2,7 @@ const std = @import("std");
 const logz = @import("logz");
 const ts = @import("tree-sitter");
 const event_queue = @import("event_queue.zig");
-const syntax = @import("syntax.zig");
+const syntax = @import("../syntax.zig");
 
 const ParseRequest = struct {
     buffer_id: u64,

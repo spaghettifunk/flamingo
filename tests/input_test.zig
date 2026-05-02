@@ -5,9 +5,9 @@
 //! is how the macOS Option key is represented after terminal decoding.
 
 const std = @import("std");
-const input_mod = @import("../src/editor/input.zig");
+const input_mod = @import("../src/editor/input_router/dispatch.zig");
 const editor_mod = @import("../src/editor/editor.zig");
-const buffer_mod = @import("../src/editor/buffer.zig");
+const buffer_mod = @import("../src/editor/model/buffer.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
 const terminal = @import("../src/terminal.zig");

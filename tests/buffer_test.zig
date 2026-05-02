@@ -1,5 +1,5 @@
 const std = @import("std");
-const buffer = @import("../src/editor/buffer.zig");
+const buffer = @import("../src/editor/model/buffer.zig");
 const Line = buffer.Line;
 
 test "Line: basic insert and delete" {

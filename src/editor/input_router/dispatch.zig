@@ -1,10 +1,10 @@
 const std = @import("std");
 const logz = @import("logz");
-const terminal = @import("../terminal.zig");
-const editor = @import("editor.zig");
-const buffer = @import("buffer.zig");
-const explorer = @import("explorer.zig");
-const actions = @import("actions.zig");
+const terminal = @import("../../terminal.zig");
+const editor = @import("../editor.zig");
+const buffer = @import("../model/buffer.zig");
+const explorer = @import("../explorer.zig");
+const actions = @import("../actions.zig");
 
 fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     if (event.eql(expected)) return true;
@@ -351,7 +351,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     ed.state.command_buffer.shrinkRetainingCapacity(ed.state.command_buffer.items.len - 1);
                 }
             } else if (matches(event, keys.prompt_submit)) {
-                const command = @import("command.zig");
+                const command = @import("../command.zig");
                 try command.execute(ed);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.command_buffer.append(ed.allocator, event.char);

@@ -2,18 +2,19 @@ const std = @import("std");
 const logz = @import("logz");
 const config = @import("../config.zig");
 const terminal = @import("../terminal.zig");
-const buffer = @import("buffer.zig");
-const input = @import("input_router.zig");
+const buffer = @import("model/buffer.zig");
+const input = @import("input_router/router.zig");
 const search = @import("search.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
-const render_mod = @import("render.zig");
+const render_mod = @import("renderer/virtual_screen.zig");
 const lsp_manager = @import("../lsp/manager.zig");
 const logger = @import("../logger.zig");
-const tab_mod = @import("tab.zig");
-const state_mod = @import("state.zig");
-const runtime_mod = @import("runtime.zig");
-const renderer_mod = @import("renderer.zig");
+const tab_mod = @import("model/tab.zig");
+const state_mod = @import("state/state.zig");
+const runtime_mod = @import("runtime/runtime.zig");
+const renderer_mod = @import("renderer/renderer.zig");
+const keybindings = @import("input_router/keybindings.zig");
 
 const max_fifo_events_per_idle_tick = 8;
 
@@ -21,6 +22,7 @@ pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
 pub const Cursor = tab_mod.Cursor;
 pub const Tab = tab_mod.Tab;
+pub const ResolvedKeybindings = keybindings.ResolvedKeybindings;
 
 const CursorMoveState = struct {
     row: usize,
@@ -83,120 +85,6 @@ const LineRenderState = struct {
 const TextSnapshot = struct {
     revision: u64,
     text: []u8,
-};
-
-pub const ResolvedKeybindings = struct {
-    new_file: terminal.KeyEvent,
-    open_file: terminal.KeyEvent,
-    open_folder: terminal.KeyEvent,
-    settings: terminal.KeyEvent,
-    quit: terminal.KeyEvent,
-    toggle_explorer: terminal.KeyEvent,
-    switch_focus: terminal.KeyEvent,
-    close_tab: terminal.KeyEvent,
-    next_tab: terminal.KeyEvent,
-    previous_tab: terminal.KeyEvent,
-    dashboard_up: terminal.KeyEvent,
-    dashboard_down: terminal.KeyEvent,
-    dashboard_select: terminal.KeyEvent,
-    explorer_up: terminal.KeyEvent,
-    explorer_down: terminal.KeyEvent,
-    explorer_open: terminal.KeyEvent,
-    insert_mode: terminal.KeyEvent,
-    command_mode: terminal.KeyEvent,
-    search_mode: terminal.KeyEvent,
-    normal_mode: terminal.KeyEvent,
-    insert_newline: terminal.KeyEvent,
-    delete_back: terminal.KeyEvent,
-    delete_word_back: terminal.KeyEvent,
-    indent: terminal.KeyEvent,
-    prompt_submit: terminal.KeyEvent,
-    prompt_backspace: terminal.KeyEvent,
-    save: terminal.KeyEvent,
-    undo: terminal.KeyEvent,
-    redo: terminal.KeyEvent,
-    select_all: terminal.KeyEvent,
-    copy: terminal.KeyEvent,
-    cut: terminal.KeyEvent,
-    paste: terminal.KeyEvent,
-    duplicate_line: terminal.KeyEvent,
-    delete_line: terminal.KeyEvent,
-    add_cursor_above: terminal.KeyEvent,
-    add_cursor_below: terminal.KeyEvent,
-    move_up: terminal.KeyEvent,
-    move_down: terminal.KeyEvent,
-    move_left: terminal.KeyEvent,
-    move_right: terminal.KeyEvent,
-    line_start: terminal.KeyEvent,
-    line_end: terminal.KeyEvent,
-    word_left: terminal.KeyEvent,
-    word_right: terminal.KeyEvent,
-    search_next: terminal.KeyEvent,
-    search_previous: terminal.KeyEvent,
-    completion_auto_trigger: terminal.KeyEvent,
-    completion_trigger: terminal.KeyEvent,
-    completion_next: terminal.KeyEvent,
-    completion_previous: terminal.KeyEvent,
-    completion_accept: terminal.KeyEvent,
-    completion_cancel: terminal.KeyEvent,
-
-    pub fn init(keys: config.KeybindingsConfig) ResolvedKeybindings {
-        return .{
-            .new_file = terminal.parseKeyChord(keys.new_file),
-            .open_file = terminal.parseKeyChord(keys.open_file),
-            .open_folder = terminal.parseKeyChord(keys.open_folder),
-            .settings = terminal.parseKeyChord(keys.settings),
-            .quit = terminal.parseKeyChord(keys.quit),
-            .toggle_explorer = terminal.parseKeyChord(keys.toggle_explorer),
-            .switch_focus = terminal.parseKeyChord(keys.switch_focus),
-            .close_tab = terminal.parseKeyChord(keys.close_tab),
-            .next_tab = terminal.parseKeyChord(keys.next_tab),
-            .previous_tab = terminal.parseKeyChord(keys.previous_tab),
-            .dashboard_up = terminal.parseKeyChord(keys.dashboard_up),
-            .dashboard_down = terminal.parseKeyChord(keys.dashboard_down),
-            .dashboard_select = terminal.parseKeyChord(keys.dashboard_select),
-            .explorer_up = terminal.parseKeyChord(keys.explorer_up),
-            .explorer_down = terminal.parseKeyChord(keys.explorer_down),
-            .explorer_open = terminal.parseKeyChord(keys.explorer_open),
-            .insert_mode = terminal.parseKeyChord(keys.insert_mode),
-            .command_mode = terminal.parseKeyChord(keys.command_mode),
-            .search_mode = terminal.parseKeyChord(keys.search_mode),
-            .normal_mode = terminal.parseKeyChord(keys.normal_mode),
-            .insert_newline = terminal.parseKeyChord(keys.insert_newline),
-            .delete_back = terminal.parseKeyChord(keys.delete_back),
-            .delete_word_back = terminal.parseKeyChord(keys.delete_word_back),
-            .indent = terminal.parseKeyChord(keys.indent),
-            .prompt_submit = terminal.parseKeyChord(keys.prompt_submit),
-            .prompt_backspace = terminal.parseKeyChord(keys.prompt_backspace),
-            .save = terminal.parseKeyChord(keys.save),
-            .undo = terminal.parseKeyChord(keys.undo),
-            .redo = terminal.parseKeyChord(keys.redo),
-            .select_all = terminal.parseKeyChord(keys.select_all),
-            .copy = terminal.parseKeyChord(keys.copy),
-            .cut = terminal.parseKeyChord(keys.cut),
-            .paste = terminal.parseKeyChord(keys.paste),
-            .duplicate_line = terminal.parseKeyChord(keys.duplicate_line),
-            .delete_line = terminal.parseKeyChord(keys.delete_line),
-            .add_cursor_above = terminal.parseKeyChord(keys.add_cursor_above),
-            .add_cursor_below = terminal.parseKeyChord(keys.add_cursor_below),
-            .move_up = terminal.parseKeyChord(keys.move_up),
-            .move_down = terminal.parseKeyChord(keys.move_down),
-            .move_left = terminal.parseKeyChord(keys.move_left),
-            .move_right = terminal.parseKeyChord(keys.move_right),
-            .line_start = terminal.parseKeyChord(keys.line_start),
-            .line_end = terminal.parseKeyChord(keys.line_end),
-            .word_left = terminal.parseKeyChord(keys.word_left),
-            .word_right = terminal.parseKeyChord(keys.word_right),
-            .search_next = terminal.parseKeyChord(keys.search_next),
-            .search_previous = terminal.parseKeyChord(keys.search_previous),
-            .completion_auto_trigger = terminal.parseKeyChord(keys.completion_auto_trigger),
-            .completion_trigger = terminal.parseKeyChord(keys.completion_trigger),
-            .completion_next = terminal.parseKeyChord(keys.completion_next),
-            .completion_previous = terminal.parseKeyChord(keys.completion_previous),
-            .completion_accept = terminal.parseKeyChord(keys.completion_accept),
-            .completion_cancel = terminal.parseKeyChord(keys.completion_cancel),
-        };
-    }
 };
 
 pub const Editor = struct {

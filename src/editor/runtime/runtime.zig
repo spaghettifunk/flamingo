@@ -1,8 +1,8 @@
 const std = @import("std");
 const event_queue = @import("event_queue.zig");
 const syntax_worker = @import("syntax_worker.zig");
-const lsp_manager = @import("../lsp/manager.zig");
-const perf = @import("../perf/perf.zig");
+const lsp_manager = @import("../../lsp/manager.zig");
+const perf = @import("../../perf/perf.zig");
 
 pub const EditorRuntime = struct {
     event_queue: *event_queue.EventQueue,

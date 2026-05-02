@@ -1,6 +1,6 @@
 const std = @import("std");
-const render_mod = @import("render.zig");
-const buffer = @import("buffer.zig");
+const render_mod = @import("virtual_screen.zig");
+const buffer = @import("../model/buffer.zig");
 
 pub const EditorRenderer = struct {
     legacy_frame: std.ArrayListUnmanaged(u8) = .empty,
