@@ -53,6 +53,15 @@ const RenderContext = struct {
     status_text_len: usize,
 };
 
+const CommandPopupGeometry = struct {
+    row: usize,
+    col: usize,
+    width: usize,
+    suggestion_count: usize,
+};
+
+const command_popup_title = " Cmdline ";
+
 const SelectionRange = struct {
     start_col: usize,
     end_col: usize,
@@ -502,6 +511,7 @@ pub const Editor = struct {
 
         const status_style: render_mod.RenderStyle = switch (self.state.mode) {
             .Search => .search_status,
+            .Command => .status_command,
             .Insert => .status_insert,
             else => .status_normal,
         };
@@ -520,9 +530,6 @@ pub const Editor = struct {
     }
 
     fn buildStatusText(self: *Editor, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
-        if (self.state.mode == .Command) {
-            return try std.fmt.bufPrint(buf, ":{s}", .{self.state.command_buffer.items});
-        }
         if (self.state.mode == .Search) {
             if (self.state.search_system) |s| {
                 if (s.matches.items.len > 0) {
@@ -536,7 +543,11 @@ pub const Editor = struct {
             return try std.fmt.bufPrint(buf, "{s}", .{err_msg});
         }
 
-        const mode_str = if (self.state.mode == .Normal) "-- NORMAL --" else "-- INSERT --";
+        const mode_str = switch (self.state.mode) {
+            .Command => "-- COMMAND --",
+            .Insert => "-- INSERT --",
+            else => "-- NORMAL --",
+        };
         if (tab) |t| {
             const diag_count = if (t.buf.filename) |fname| self.state.lsp_ui.diagnosticCountForFile(fname) else 0;
             if (diag_count > 0) {
@@ -635,7 +646,13 @@ pub const Editor = struct {
             return;
         }
 
-        const mode_color = if (self.state.mode == .Normal) "\x1b[48;5;121m\x1b[30m" else "\x1b[48;5;117m\x1b[30m";
+        const mode_color =
+            if (self.state.mode == .Command)
+                "\x1b[48;5;220m\x1b[30m"
+            else if (self.state.mode == .Normal)
+                "\x1b[48;5;121m\x1b[30m"
+            else
+                "\x1b[48;5;117m\x1b[30m";
         try writer.writeAll(mode_color);
         try writer.writeAll(status_text);
         if (self.width > status_text.len) {
@@ -906,6 +923,86 @@ pub const Editor = struct {
         try writer.writeAll("\x1b[0m");
     }
 
+    fn commandPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
+        if (!self.state.command_popup.visible or self.height < 6) return null;
+
+        const viewport = self.bufferViewportGeometry();
+        if (viewport.width < 16) return null;
+
+        const max_width = viewport.width -| 2;
+        const desired_width = @max(@as(usize, 40), (viewport.width * 9) / 10);
+        const popup_width = @min(max_width, desired_width);
+        if (popup_width < 16) return null;
+
+        const row: usize = 2;
+        const available_suggestions = self.height - row - 4;
+        const show_suggestions = self.state.command_popup.input.items.len > 0;
+        const suggestion_count = if (show_suggestions)
+            @min(self.state.command_popup.suggestions.items.len, @min(@as(usize, 6), available_suggestions))
+        else
+            0;
+        const viewport_col = viewport.start_col -| 1;
+        const col = viewport_col + (viewport.width - popup_width) / 2;
+        return .{
+            .row = row,
+            .col = col,
+            .width = popup_width,
+            .suggestion_count = suggestion_count,
+        };
+    }
+
+    fn renderCommandPopup(self: *Editor, writer: anytype) !void {
+        const geom = self.commandPopupGeometry() orelse return;
+        const popup = &self.state.command_popup;
+        const screen_row = geom.row + 1;
+        const screen_col = geom.col + 1;
+        const inner_width = geom.width - 2;
+        const title_col = if (geom.width > command_popup_title.len)
+            screen_col + (geom.width - command_popup_title.len) / 2
+        else
+            screen_col;
+
+        try terminal.moveCursor(writer, screen_row, screen_col);
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╭");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╮\x1b[0m");
+        if (command_popup_title.len + 2 < geom.width) {
+            try terminal.moveCursor(writer, screen_row, title_col);
+            try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
+            try writer.writeAll(command_popup_title);
+            try writer.writeAll("\x1b[0m");
+        }
+
+        try terminal.moveCursor(writer, screen_row + 1, screen_col);
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[48;5;235m\x1b[38;5;250m > \x1b[48;5;235m\x1b[38;5;255m");
+        const input_space = inner_width -| 3;
+        const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+        try writer.writeAll(shown_input);
+        for (shown_input.len..input_space) |_| try writer.writeByte(' ');
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[0m");
+
+        for (0..geom.suggestion_count) |i| {
+            const suggestion = popup.suggestions.items[i].name();
+            const selected = popup.selected_index != null and popup.selected_index.? == i;
+            try terminal.moveCursor(writer, screen_row + 2 + i, screen_col);
+            if (selected) {
+                try writer.writeAll("\x1b[48;5;238m\x1b[38;5;255m");
+            } else {
+                try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
+            }
+            try writer.writeAll("│ ");
+            const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
+            try writer.writeAll(shown);
+            for (shown.len..inner_width -| 1) |_| try writer.writeByte(' ');
+            try writer.writeAll("│\x1b[0m");
+        }
+
+        try terminal.moveCursor(writer, screen_row + 2 + geom.suggestion_count, screen_col);
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╰");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╯\x1b[0m");
+    }
+
     fn render(self: *Editor, writer: anytype) !void {
         if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt) {
             try self.state.dash.render(writer, self.width, self.height);
@@ -1040,7 +1137,16 @@ pub const Editor = struct {
         try terminal.clearLine(writer);
 
         if (self.state.mode == .Command) {
-            try writer.print(":{s}", .{self.state.command_buffer.items});
+            var status_buf: [160]u8 = undefined;
+            const status_text = try self.buildStatusText(tab, &status_buf);
+            try writer.writeAll("\x1b[48;5;220m\x1b[30m");
+            try writer.writeAll(status_text);
+            if (self.width > status_text.len) {
+                for (0..self.width - status_text.len) |_| {
+                    try writer.writeAll(" ");
+                }
+            }
+            try writer.writeAll("\x1b[0m");
         } else if (self.state.mode == .Search) {
             try writer.writeAll("\x1b[48;5;228m\x1b[30m"); // Light Yellow, Black text
             try writer.print("/{s}", .{self.state.search_buffer.items});
@@ -1086,9 +1192,15 @@ pub const Editor = struct {
             try writer.writeAll("\x1b[0m"); // Reset
         }
 
+        try self.renderCommandPopup(writer);
+
         // Move cursor to proper location
         if (self.state.mode == .Command) {
-            try terminal.moveCursor(writer, self.height, 2 + self.state.command_buffer.items.len);
+            if (self.commandPopupGeometry()) |geom| {
+                const input_space = geom.width -| 5;
+                const cursor_col = @min(self.state.command_popup.input.items.len, input_space);
+                try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
+            }
         } else if (self.state.mode == .Search) {
             try terminal.moveCursor(writer, self.height, 2 + self.state.search_buffer.items.len);
         } else if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null) {
@@ -1162,6 +1274,7 @@ pub const Editor = struct {
             }
         }
 
+        self.renderVirtualCommandPopup();
         self.renderVirtualStatus(ctx);
         _ = try self.renderer.screen_renderer.emit(writer, &self.renderer.screen);
         try self.renderVirtualTabSeparator(writer);
@@ -1211,6 +1324,51 @@ pub const Editor = struct {
         }
 
         self.renderer.screen.fillRow(1, '-', .dim);
+    }
+
+    fn renderVirtualCommandPopup(self: *Editor) void {
+        const geom = self.commandPopupGeometry() orelse return;
+        const popup = &self.state.command_popup;
+        const inner_width = geom.width - 2;
+        const title_col = if (geom.width > command_popup_title.len)
+            geom.col + (geom.width - command_popup_title.len) / 2
+        else
+            geom.col;
+
+        self.renderer.screen.set(geom.row, geom.col, '+', .command_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(geom.row, geom.col + i, '-', .command_popup_border);
+        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .command_popup_border);
+        if (command_popup_title.len + 2 < geom.width) {
+            self.renderer.screen.writeText(geom.row, title_col, command_popup_title, .command_popup_title);
+        }
+
+        const input_row = geom.row + 1;
+        self.renderer.screen.set(input_row, geom.col, '|', .command_popup_border);
+        self.renderer.screen.set(input_row, geom.col + geom.width - 1, '|', .command_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(input_row, geom.col + i, ' ', .command_popup);
+        self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
+        const input_space = inner_width -| 3;
+        const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+        self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
+
+        for (0..geom.suggestion_count) |i| {
+            const row = geom.row + 2 + i;
+            const style: render_mod.RenderStyle = if (popup.selected_index != null and popup.selected_index.? == i)
+                .command_popup_selected
+            else
+                .command_popup;
+            self.renderer.screen.set(row, geom.col, '|', .command_popup_border);
+            self.renderer.screen.set(row, geom.col + geom.width - 1, '|', .command_popup_border);
+            for (1..geom.width - 1) |col_offset| self.renderer.screen.set(row, geom.col + col_offset, ' ', style);
+            const suggestion = popup.suggestions.items[i].name();
+            const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
+            self.renderer.screen.writeText(row, geom.col + 2, shown, style);
+        }
+
+        const bottom_row = geom.row + 2 + geom.suggestion_count;
+        self.renderer.screen.set(bottom_row, geom.col, '+', .command_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(bottom_row, geom.col + i, '-', .command_popup_border);
+        self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .command_popup_border);
     }
 
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, gutter_width: usize) void {
@@ -1277,7 +1435,11 @@ pub const Editor = struct {
 
     fn moveVirtualCursor(self: *Editor, writer: anytype, tab: ?*Tab, gutter_width: usize, visible_rows: usize) !void {
         if (self.state.mode == .Command) {
-            try terminal.moveCursor(writer, self.height, 2 + self.state.command_buffer.items.len);
+            if (self.commandPopupGeometry()) |geom| {
+                const input_space = geom.width -| 5;
+                const cursor_col = @min(self.state.command_popup.input.items.len, input_space);
+                try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
+            }
             return;
         }
         if (self.state.mode == .Search) {
@@ -1537,6 +1699,19 @@ test "Editor.calculateGutterWidth" {
     // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
+}
+
+test "Editor command mode status is yellow Command label" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+
+    ed.state.mode = .Command;
+    var status_buf: [160]u8 = undefined;
+    const ctx = ed.buildRenderContext(&status_buf);
+
+    try std.testing.expectEqual(render_mod.RenderStyle.status_command, ctx.status_style);
+    try std.testing.expect(std.mem.indexOf(u8, ctx.status_text, "-- COMMAND --") != null);
 }
 
 test "Editor discards stale syntax parse results" {

@@ -276,6 +276,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (matches(event, keys.command_mode)) {
                 ed.state.mode = .Command;
                 ed.state.command_buffer.clearRetainingCapacity();
+                try ed.state.command_popup.open(ed.allocator);
             } else if (matches(event, keys.search_mode)) {
                 ed.state.mode = .Search;
                 ed.state.search_buffer.clearRetainingCapacity();
@@ -346,15 +347,21 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         .Command => {
             if (matches(event, keys.normal_mode)) {
                 ed.state.mode = .Normal;
+                ed.state.command_popup.close();
             } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.state.command_buffer.items.len > 0) {
-                    ed.state.command_buffer.shrinkRetainingCapacity(ed.state.command_buffer.items.len - 1);
-                }
+                try ed.state.command_popup.backspace(ed.allocator);
+            } else if (matches(event, keys.indent)) {
+                ed.state.command_popup.tabComplete();
+            } else if (event.key == .Down) {
+                ed.state.command_popup.selectNext();
+            } else if (event.key == .Up) {
+                ed.state.command_popup.selectPrevious();
             } else if (matches(event, keys.prompt_submit)) {
+                try ed.state.command_popup.acceptSelected(ed.allocator);
                 const command = @import("../command.zig");
                 try command.execute(ed);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
-                try ed.state.command_buffer.append(ed.allocator, event.char);
+                try ed.state.command_popup.appendChar(ed.allocator, event.char);
             }
         },
         .OpenFilePrompt => {

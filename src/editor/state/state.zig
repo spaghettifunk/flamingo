@@ -4,6 +4,7 @@ const explorer = @import("../explorer.zig");
 const search = @import("../search.zig");
 const syntax = @import("../syntax.zig");
 const lsp_state = @import("lsp_ui.zig");
+const command_popup = @import("../command_popup.zig");
 const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
 
@@ -22,6 +23,7 @@ pub const EditorState = struct {
     tabs: std.ArrayList(tab_mod.Tab),
     active_tab_index: usize = 0,
     command_buffer: std.ArrayListUnmanaged(u8) = .empty,
+    command_popup: command_popup.CommandPopup = .{},
     error_message: ?[]const u8 = null,
     tree: ?explorer.Explorer = null,
     explorer_visible: bool = false,
@@ -61,6 +63,7 @@ pub const EditorState = struct {
         }
         self.command_buffer.deinit(allocator);
         self.command_buffer = .empty;
+        self.command_popup.deinit(allocator);
         self.search_buffer.deinit(allocator);
         self.search_buffer = .empty;
         if (self.clipboard) |c| {

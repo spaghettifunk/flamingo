@@ -65,7 +65,9 @@ test "Normal → Command via ':'" {
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar(':')});
     try std.testing.expectEqual(editor_mod.EditorMode.Command, ed.state.mode);
+    try std.testing.expect(ed.state.command_popup.visible);
     try std.testing.expectEqual(@as(usize, 0), ed.state.command_buffer.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.command_popup.input.items.len);
 }
 
 test "Command → Normal via Esc" {
@@ -74,8 +76,10 @@ test "Command → Normal via Esc" {
     defer ed.deinit();
 
     ed.state.mode = .Command;
+    try ed.state.command_popup.open(a);
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.command_popup.visible);
 }
 
 test "Normal → Search via '/'" {
@@ -330,6 +334,46 @@ test "Command: unknown command shows error, stays Normal" {
 
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
     try std.testing.expect(ed.state.error_message != null);
+}
+
+test "Command popup: typing and backspace update suggestions" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('w'),
+        th.keyChar('q'),
+    });
+
+    try std.testing.expectEqualStrings("wq", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.command_popup.suggestions.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
+    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(usize, 2), ed.state.command_popup.suggestions.items.len);
+}
+
+test "Command popup: tab moves suggestion selection without editing input" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('w'),
+        th.keyChar('\t'),
+    });
+    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(?usize, 1), ed.state.command_popup.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
+    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(?usize, 0), ed.state.command_popup.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('!')});
+    try std.testing.expectEqualStrings("w!", ed.state.command_popup.input.items);
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────

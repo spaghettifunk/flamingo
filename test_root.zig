@@ -14,6 +14,8 @@ test {
 
     // Core modules (to run internal tests)
     _ = @import("src/editor/editor.zig");
+    _ = @import("src/editor/command_registry.zig");
+    _ = @import("src/editor/command_popup.zig");
     _ = @import("src/editor/model/buffer.zig");
     _ = @import("src/editor/actions.zig");
     _ = @import("src/editor/search.zig");

@@ -26,10 +26,16 @@ pub const RenderStyle = enum {
     search_active,
     status_normal,
     status_insert,
+    status_command,
     search_status,
     error_style,
     completion,
     completion_selected,
+    command_popup,
+    command_popup_border,
+    command_popup_title,
+    command_popup_prompt,
+    command_popup_selected,
 
     pub fn ansi(self: RenderStyle) []const u8 {
         return switch (self) {
@@ -51,10 +57,16 @@ pub const RenderStyle = enum {
             .search_active => "\x1b[48;5;214m\x1b[30m",
             .status_normal => "\x1b[48;5;121m\x1b[30m",
             .status_insert => "\x1b[48;5;117m\x1b[30m",
+            .status_command => "\x1b[48;5;220m\x1b[30m",
             .search_status => "\x1b[48;5;228m\x1b[30m",
             .error_style => "\x1b[31;1m",
             .completion => "\x1b[48;5;236m\x1b[38;5;250m",
             .completion_selected => "\x1b[48;5;25m\x1b[38;5;255m",
+            .command_popup => "\x1b[48;5;235m\x1b[38;5;255m",
+            .command_popup_border => "\x1b[48;5;235m\x1b[38;5;250m",
+            .command_popup_title => "\x1b[48;5;235m\x1b[38;5;250m",
+            .command_popup_prompt => "\x1b[48;5;235m\x1b[38;5;250m",
+            .command_popup_selected => "\x1b[48;5;238m\x1b[38;5;255m",
         };
     }
 };
