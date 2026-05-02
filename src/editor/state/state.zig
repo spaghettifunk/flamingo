@@ -7,6 +7,7 @@ const lsp_state = @import("lsp_ui.zig");
 const command_popup = @import("../command_popup.zig");
 const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
+const normal_sequence = @import("../input_router/normal_sequence.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -35,6 +36,7 @@ pub const EditorState = struct {
     force_full_render: bool = true,
     lsp_ui: lsp_state.LspUiState,
     next_syntax_buffer_id: u64 = 1,
+    pending_normal_sequence: normal_sequence.KeySequence = .{},
 
     pub fn init(allocator: std.mem.Allocator) EditorState {
         return .{

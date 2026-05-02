@@ -5,6 +5,7 @@ const editor = @import("../editor.zig");
 const buffer = @import("../model/buffer.zig");
 const explorer = @import("../explorer.zig");
 const actions = @import("../actions.zig");
+const normal_sequence = @import("normal_sequence.zig");
 
 fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     if (event.eql(expected)) return true;
@@ -39,6 +40,52 @@ fn matchesMovement(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     return event.shift and without_shift.eql(expected);
 }
 
+fn clearPendingNormalSequence(ed: *editor.Editor) void {
+    ed.state.pending_normal_sequence.clear();
+}
+
+fn handleNormalSequence(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
+    const had_pending_sequence = ed.state.pending_normal_sequence.len > 0;
+    var sequence = ed.state.pending_normal_sequence;
+    if (!sequence.append(event)) {
+        clearPendingNormalSequence(ed);
+        return had_pending_sequence;
+    }
+
+    switch (normal_sequence.resolve(sequence)) {
+        .command => |command| {
+            clearPendingNormalSequence(ed);
+            try executeNormalCommand(ed, command);
+            return true;
+        },
+        .prefix => {
+            ed.state.pending_normal_sequence = sequence;
+            return true;
+        },
+        .none => {
+            clearPendingNormalSequence(ed);
+            // Invalid continuations such as "g" then "x" are consumed. We do
+            // not redispatch the second key to avoid recursive/double execution.
+            return had_pending_sequence;
+        },
+    }
+}
+
+fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalCommand) !void {
+    switch (command) {
+        .jump_top => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                mc.row = 0;
+                mc.col = 0;
+                mc.preferred_col = null;
+                tab.scroll_row = 0;
+                ed.clampScroll();
+            }
+        },
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -47,6 +94,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     const keys = ed.keys;
 
     if (matches(event, keys.toggle_explorer)) {
+        clearPendingNormalSequence(ed);
         if (ed.state.tree == null) {
             ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
         }
@@ -61,6 +109,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     if (matches(event, keys.close_tab)) {
+        clearPendingNormalSequence(ed);
         if (ed.state.mode != .Dashboard) {
             ed.closeTab();
         }
@@ -68,6 +117,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     if (matches(event, keys.switch_focus)) {
+        clearPendingNormalSequence(ed);
         if (ed.state.explorer_visible) {
             ed.state.explorer_focused = !ed.state.explorer_focused;
         }
@@ -75,11 +125,13 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     if (matches(event, keys.next_tab)) {
+        clearPendingNormalSequence(ed);
         ed.nextTab();
         return;
     }
 
     if (matches(event, keys.previous_tab)) {
+        clearPendingNormalSequence(ed);
         ed.prevTab();
         return;
     }
@@ -87,22 +139,27 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     // --- Global Actions (Normal & Insert) ---
     if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
         if (matches(event, keys.select_all)) {
+            clearPendingNormalSequence(ed);
             actions.selectAll(ed);
             return;
         }
         if (matches(event, keys.copy)) {
+            clearPendingNormalSequence(ed);
             try actions.copy(ed);
             return;
         }
         if (matches(event, keys.cut)) {
+            clearPendingNormalSequence(ed);
             try actions.cut(ed);
             return;
         }
         if (matches(event, keys.paste)) {
+            clearPendingNormalSequence(ed);
             try actions.paste(ed);
             return;
         }
         if (matches(event, keys.save)) {
+            clearPendingNormalSequence(ed);
             if (ed.currentTab()) |tab| {
                 if (tab.buf.filename) |f| {
                     try tab.buf.saveToFile(ed.io, f);
@@ -111,34 +168,42 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             return;
         }
         if (matches(event, keys.undo)) {
+            clearPendingNormalSequence(ed);
             try actions.undo(ed);
             return;
         }
         if (matches(event, keys.redo)) {
+            clearPendingNormalSequence(ed);
             try actions.redo(ed);
             return;
         }
         if (matches(event, keys.delete_word_back)) {
+            clearPendingNormalSequence(ed);
             try actions.deleteWordBack(ed);
             return;
         }
         if (matches(event, keys.duplicate_line)) {
+            clearPendingNormalSequence(ed);
             try actions.duplicateLine(ed);
             return;
         }
         if (matches(event, keys.delete_line)) {
+            clearPendingNormalSequence(ed);
             try actions.deleteLine(ed);
             return;
         }
         if (matches(event, keys.add_cursor_above)) {
+            clearPendingNormalSequence(ed);
             try actions.addCursorAbove(ed);
             return;
         }
         if (matches(event, keys.add_cursor_below)) {
+            clearPendingNormalSequence(ed);
             try actions.addCursorBelow(ed);
             return;
         }
         if (matches(event, keys.normal_mode)) {
+            clearPendingNormalSequence(ed);
             actions.clearSelections(ed);
             if (ed.state.mode == .Insert) ed.state.mode = .Normal;
             return;
@@ -269,15 +334,20 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             }
         },
         .Normal => {
-            if (try handleMovement(ed, event)) {
+            if (try handleNormalSequence(ed, event)) {
+                // Handled
+            } else if (try handleMovement(ed, event)) {
                 // Handled
             } else if (matches(event, keys.insert_mode)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Insert;
             } else if (matches(event, keys.command_mode)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Command;
                 ed.state.command_buffer.clearRetainingCapacity();
                 try ed.state.command_popup.open(ed.allocator);
             } else if (matches(event, keys.search_mode)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Search;
                 ed.state.search_buffer.clearRetainingCapacity();
                 if (ed.state.search_system) |*s| s.clear();
@@ -346,6 +416,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .Command => {
             if (matches(event, keys.normal_mode)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Normal;
                 ed.state.command_popup.close();
             } else if (matches(event, keys.prompt_backspace)) {
@@ -359,6 +430,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (matches(event, keys.prompt_submit)) {
                 try ed.state.command_popup.acceptSelected(ed.allocator);
                 const command = @import("../command.zig");
+                clearPendingNormalSequence(ed);
                 try command.execute(ed);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.command_popup.appendChar(ed.allocator, event.char);
@@ -366,6 +438,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .OpenFilePrompt => {
             if (matches(event, keys.normal_mode)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Dashboard;
             } else if (matches(event, keys.prompt_backspace)) {
                 if (ed.state.command_buffer.items.len > 0) {
@@ -375,12 +448,15 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 if (ed.state.command_buffer.items.len > 0) {
                     if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.state.command_buffer.items)) |b| {
                         try ed.addTab(b);
+                        clearPendingNormalSequence(ed);
                         ed.state.mode = .Normal;
                     } else |_| {
                         ed.state.error_message = "Could not open file";
+                        clearPendingNormalSequence(ed);
                         ed.state.mode = .Dashboard;
                     }
                 } else {
+                    clearPendingNormalSequence(ed);
                     ed.state.mode = .Dashboard;
                 }
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
@@ -389,6 +465,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .Search => {
             if (matches(event, keys.normal_mode)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Normal;
                 if (ed.state.search_system) |*s| s.clear();
                 ed.state.search_buffer.clearRetainingCapacity();
@@ -407,6 +484,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     }
                 }
             } else if (matches(event, keys.prompt_submit)) {
+                clearPendingNormalSequence(ed);
                 ed.state.mode = .Normal;
                 if (ed.state.search_system) |*s| s.clear();
                 ed.state.search_buffer.clearRetainingCapacity();

@@ -114,6 +114,94 @@ test "Search → Normal via Enter" {
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
 }
 
+// ── Normal-mode key sequences ────────────────────────────────────────────────
+
+test "Normal: gg jumps to top of current file" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "top", "middle", "bottom" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 2;
+    tab.mainCursor().col = 4;
+    tab.mainCursor().preferred_col = 4;
+    tab.scroll_row = 2;
+
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyChar('g'), th.keyChar('g') });
+
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(?usize, null), tab.mainCursor().preferred_col);
+    try std.testing.expectEqual(@as(usize, 0), tab.scroll_row);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
+}
+
+test "Normal: unknown gx sequence clears pending state and consumes x" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "top", "middle" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 1;
+    tab.mainCursor().col = 2;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('g')});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.pending_normal_sequence.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('x')});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
+    try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().col);
+}
+
+test "Normal: Esc clears pending sequence" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"top"});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('g')});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.pending_normal_sequence.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+}
+
+test "Insert: gg inserts text and does not affect Normal pending sequence" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    ed.state.mode = .Insert;
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyChar('g'), th.keyChar('g') });
+
+    try expectLine(a, &ed, 0, "gg");
+    try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
+}
+
+test "Normal: repeated gggg resolves as two gg commands and leaves no pending state" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "top", "middle", "bottom" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 2;
+    tab.mainCursor().col = 3;
+    tab.scroll_row = 2;
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar('g'),
+        th.keyChar('g'),
+        th.keyChar('g'),
+        th.keyChar('g'),
+        th.keySpecial(.Down),
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
+}
+
 // ── Typing in Insert mode ─────────────────────────────────────────────────────
 
 test "Insert: typing ASCII chars updates buffer" {
