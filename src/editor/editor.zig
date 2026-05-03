@@ -63,6 +63,8 @@ const CommandPopupGeometry = struct {
 
 const command_popup_title = " Cmdline ";
 const global_search_popup_title = " Search ";
+const command_popup_border_ansi = "\x1b[48;5;235m\x1b[38;5;121m";
+const global_search_popup_border_ansi = "\x1b[48;5;235m\x1b[38;5;220m";
 
 const GlobalSearchRenderRow = union(enum) {
     header: []const u8,
@@ -703,7 +705,7 @@ pub const Editor = struct {
             const is_completion_auto_trigger = event.eql(self.keys.completion_auto_trigger);
             const is_completion_trigger = event.eql(self.keys.completion_trigger);
 
-            if (is_completion_auto_trigger or is_completion_trigger) {
+            if ((is_completion_auto_trigger or is_completion_trigger) and self.modeAllowsCompletion()) {
                 if (tab.buf.filename != null) {
                     if (self.runtime.lsp_mgr) |*mgr| {
                         const mc = tab.mainCursor();
@@ -714,6 +716,10 @@ pub const Editor = struct {
                 }
             }
         }
+    }
+
+    fn modeAllowsCompletion(self: *const Editor) bool {
+        return self.state.mode == .Normal or self.state.mode == .Insert;
     }
 
     fn handleSyntaxParseResult(self: *Editor, result: *syntax.ParseResult) !void {
@@ -994,23 +1000,23 @@ pub const Editor = struct {
             screen_col;
 
         try terminal.moveCursor(writer, screen_row, screen_col);
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╭");
+        try writer.writeAll(command_popup_border_ansi ++ "╭");
         for (0..inner_width) |_| try writer.writeAll("─");
         try writer.writeAll("╮\x1b[0m");
         if (command_popup_title.len + 2 < geom.width) {
             try terminal.moveCursor(writer, screen_row, title_col);
-            try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
+            try writer.writeAll(command_popup_border_ansi);
             try writer.writeAll(command_popup_title);
             try writer.writeAll("\x1b[0m");
         }
 
         try terminal.moveCursor(writer, screen_row + 1, screen_col);
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[48;5;235m\x1b[38;5;250m > \x1b[48;5;235m\x1b[38;5;255m");
+        try writer.writeAll(command_popup_border_ansi ++ "│" ++ command_popup_border_ansi ++ " > " ++ "\x1b[48;5;235m\x1b[38;5;255m");
         const input_space = inner_width -| 3;
         const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
         try writer.writeAll(shown_input);
         for (shown_input.len..input_space) |_| try writer.writeByte(' ');
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[0m");
+        try writer.writeAll(command_popup_border_ansi ++ "│\x1b[0m");
 
         for (0..geom.suggestion_count) |i| {
             const suggestion = popup.suggestions.items[i].name();
@@ -1021,15 +1027,23 @@ pub const Editor = struct {
             } else {
                 try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
             }
-            try writer.writeAll("│ ");
+            try writer.writeAll(command_popup_border_ansi);
+            try writer.writeAll("│");
+            if (selected) {
+                try writer.writeAll("\x1b[48;5;238m\x1b[38;5;255m");
+            } else {
+                try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
+            }
+            try writer.writeAll(" ");
             const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
             try writer.writeAll(shown);
             for (shown.len..inner_width -| 1) |_| try writer.writeByte(' ');
+            try writer.writeAll(command_popup_border_ansi);
             try writer.writeAll("│\x1b[0m");
         }
 
         try terminal.moveCursor(writer, screen_row + 2 + geom.suggestion_count, screen_col);
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╰");
+        try writer.writeAll(command_popup_border_ansi ++ "╰");
         for (0..inner_width) |_| try writer.writeAll("─");
         try writer.writeAll("╯\x1b[0m");
     }
@@ -1201,23 +1215,23 @@ pub const Editor = struct {
             screen_col;
 
         try terminal.moveCursor(writer, screen_row, screen_col);
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╭");
+        try writer.writeAll(global_search_popup_border_ansi ++ "╭");
         for (0..inner_width) |_| try writer.writeAll("─");
         try writer.writeAll("╮\x1b[0m");
         if (global_search_popup_title.len + 2 < geom.width) {
             try terminal.moveCursor(writer, screen_row, title_col);
-            try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
+            try writer.writeAll(global_search_popup_border_ansi);
             try writer.writeAll(global_search_popup_title);
             try writer.writeAll("\x1b[0m");
         }
 
         try terminal.moveCursor(writer, screen_row + 1, screen_col);
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[48;5;235m\x1b[38;5;250m > \x1b[48;5;235m\x1b[38;5;255m");
+        try writer.writeAll(global_search_popup_border_ansi ++ "│" ++ global_search_popup_border_ansi ++ " > " ++ "\x1b[48;5;235m\x1b[38;5;255m");
         const input_space = inner_width -| 3;
         const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
         try writer.writeAll(shown_input);
         for (shown_input.len..input_space) |_| try writer.writeByte(' ');
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[0m");
+        try writer.writeAll(global_search_popup_border_ansi ++ "│\x1b[0m");
 
         self.adjustGlobalSearchRenderScroll(geom.suggestion_count);
         for (0..geom.suggestion_count) |offset| {
@@ -1229,16 +1243,19 @@ pub const Editor = struct {
                 .header => false,
             };
             try terminal.moveCursor(writer, screen_row + 2 + offset, screen_col);
+            try writer.writeAll(global_search_popup_border_ansi);
+            try writer.writeAll("│");
             try writer.writeAll(globalSearchRowBaseAnsi(selected));
-            try writer.writeAll("│ ");
+            try writer.writeAll(" ");
             const written = try renderGlobalSearchRowText(writer, render_row, popup.results.items, inner_width -| 2, selected);
             try writer.writeAll(globalSearchRowBaseAnsi(selected));
             for (written..inner_width -| 1) |_| try writer.writeByte(' ');
+            try writer.writeAll(global_search_popup_border_ansi);
             try writer.writeAll("│\x1b[0m");
         }
 
         try terminal.moveCursor(writer, screen_row + 2 + geom.suggestion_count, screen_col);
-        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╰");
+        try writer.writeAll(global_search_popup_border_ansi ++ "╰");
         for (0..inner_width) |_| try writer.writeAll("─");
         try writer.writeAll("╯\x1b[0m");
     }
@@ -1598,7 +1615,7 @@ pub const Editor = struct {
         for (1..geom.width - 1) |i| self.renderer.screen.set(geom.row, geom.col + i, '-', .command_popup_border);
         self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .command_popup_border);
         if (command_popup_title.len + 2 < geom.width) {
-            self.renderer.screen.writeText(geom.row, title_col, command_popup_title, .command_popup_title);
+            self.renderer.screen.writeText(geom.row, title_col, command_popup_title, .command_popup_border);
         }
 
         const input_row = geom.row + 1;
@@ -1677,16 +1694,16 @@ pub const Editor = struct {
         else
             geom.col;
 
-        self.renderer.screen.set(geom.row, geom.col, '+', .command_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.set(geom.row, geom.col + i, '-', .command_popup_border);
-        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .command_popup_border);
+        self.renderer.screen.set(geom.row, geom.col, '+', .global_search_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(geom.row, geom.col + i, '-', .global_search_popup_border);
+        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .global_search_popup_border);
         if (global_search_popup_title.len + 2 < geom.width) {
-            self.renderer.screen.writeText(geom.row, title_col, global_search_popup_title, .command_popup_title);
+            self.renderer.screen.writeText(geom.row, title_col, global_search_popup_title, .global_search_popup_border);
         }
 
         const input_row = geom.row + 1;
-        self.renderer.screen.set(input_row, geom.col, '|', .command_popup_border);
-        self.renderer.screen.set(input_row, geom.col + geom.width - 1, '|', .command_popup_border);
+        self.renderer.screen.set(input_row, geom.col, '|', .global_search_popup_border);
+        self.renderer.screen.set(input_row, geom.col + geom.width - 1, '|', .global_search_popup_border);
         for (1..geom.width - 1) |i| self.renderer.screen.set(input_row, geom.col + i, ' ', .command_popup);
         self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
         const input_space = inner_width -| 3;
@@ -1707,16 +1724,16 @@ pub const Editor = struct {
                 .command_popup_selected
             else
                 .command_popup;
-            self.renderer.screen.set(row, geom.col, '|', .command_popup_border);
-            self.renderer.screen.set(row, geom.col + geom.width - 1, '|', .command_popup_border);
+            self.renderer.screen.set(row, geom.col, '|', .global_search_popup_border);
+            self.renderer.screen.set(row, geom.col + geom.width - 1, '|', .global_search_popup_border);
             for (1..geom.width - 1) |col_offset| self.renderer.screen.set(row, geom.col + col_offset, ' ', style);
             self.renderVirtualGlobalSearchRowText(row, geom.col + 2, geom.col + geom.width - 1, render_row, popup.results.items, selected);
         }
 
         const bottom_row = geom.row + 2 + geom.suggestion_count;
-        self.renderer.screen.set(bottom_row, geom.col, '+', .command_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.set(bottom_row, geom.col + i, '-', .command_popup_border);
-        self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .command_popup_border);
+        self.renderer.screen.set(bottom_row, geom.col, '+', .global_search_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(bottom_row, geom.col + i, '-', .global_search_popup_border);
+        self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .global_search_popup_border);
     }
 
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, gutter_width: usize) void {
@@ -2254,6 +2271,23 @@ test "LSP helper rejects malformed diagnostics and completions" {
     var malformed_completion = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"items\":null}", .{});
     defer malformed_completion.deinit();
     try std.testing.expect(!Editor.isValidCompletionValue(malformed_completion.value));
+}
+
+test "completion trigger is limited to buffer editing modes" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    const allowed = [_]EditorMode{ .Normal, .Insert };
+    for (allowed) |mode| {
+        ed.state.mode = mode;
+        try std.testing.expect(ed.modeAllowsCompletion());
+    }
+
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .Search, .GlobalSearch };
+    for (rejected) |mode| {
+        ed.state.mode = mode;
+        try std.testing.expect(!ed.modeAllowsCompletion());
+    }
 }
 
 fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
