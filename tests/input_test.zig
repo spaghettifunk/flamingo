@@ -8,6 +8,7 @@ const std = @import("std");
 const input_mod = @import("../src/editor/input_router/dispatch.zig");
 const editor_mod = @import("../src/editor/editor.zig");
 const buffer_mod = @import("../src/editor/model/buffer.zig");
+const explorer_mod = @import("../src/editor/explorer.zig");
 const navigation = @import("../src/editor/navigation.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
@@ -783,6 +784,116 @@ test "Command popup: tab moves suggestion selection without editing input" {
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('!')});
     try std.testing.expectEqualStrings("w!", ed.state.command_popup.input.items);
+}
+
+test "Command: :search enters GlobalSearch mode" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.state.tree = try explorer_mod.Explorer.init(a, io, root_path);
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('s'),
+        th.keyChar('e'),
+        th.keyChar('a'),
+        th.keyChar('r'),
+        th.keyChar('c'),
+        th.keyChar('h'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(editor_mod.EditorMode.GlobalSearch, ed.state.mode);
+    try std.testing.expect(ed.state.global_search.visible);
+    try std.testing.expect(!ed.state.command_popup.visible);
+    try std.testing.expectEqualStrings(root_path, ed.state.global_search.root_path);
+}
+
+test "GlobalSearch: Esc closes and typing/backspace refreshes query" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    try ed.state.global_search.open(a, root_path);
+    ed.state.mode = .GlobalSearch;
+
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyChar('a'), th.keyChar('l') });
+    try std.testing.expectEqualStrings("al", ed.state.global_search.input.items);
+    try std.testing.expect(ed.state.global_search.results.items.len > 0);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
+    try std.testing.expectEqualStrings("a", ed.state.global_search.input.items);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.global_search.visible);
+}
+
+test "GlobalSearch: Enter on path result opens file" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "opened\n" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    try ed.state.global_search.open(a, root_path);
+    ed.state.mode = .GlobalSearch;
+
+    for ("alpha") |ch| try feed(&ed, &[_]terminal.KeyEvent{th.keyChar(ch)});
+    try std.testing.expectEqual(@as(?usize, 0), ed.state.global_search.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(ed.currentTab().?.buf.filename != null);
+    try std.testing.expect(std.mem.endsWith(u8, ed.currentTab().?.buf.filename.?, "alpha.txt"));
+}
+
+test "GlobalSearch: Enter on content result opens file and jumps" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "plain.txt", .data = "first\nxxneedle here\n" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    try ed.state.global_search.open(a, root_path);
+    ed.state.mode = .GlobalSearch;
+
+    for ("needle") |ch| try feed(&ed, &[_]terminal.KeyEvent{th.keyChar(ch)});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    const tab = ed.currentTab().?;
+    try std.testing.expect(std.mem.endsWith(u8, tab.buf.filename.?, "plain.txt"));
+    try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().col);
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────

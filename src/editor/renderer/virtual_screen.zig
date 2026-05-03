@@ -36,6 +36,10 @@ pub const RenderStyle = enum {
     command_popup_title,
     command_popup_prompt,
     command_popup_selected,
+    global_search_file,
+    global_search_file_selected,
+    global_search_result,
+    global_search_result_selected,
 
     pub fn ansi(self: RenderStyle) []const u8 {
         return switch (self) {
@@ -67,6 +71,10 @@ pub const RenderStyle = enum {
             .command_popup_title => "\x1b[48;5;235m\x1b[38;5;250m",
             .command_popup_prompt => "\x1b[48;5;235m\x1b[38;5;250m",
             .command_popup_selected => "\x1b[48;5;238m\x1b[38;5;255m",
+            .global_search_file => "\x1b[48;5;235m\x1b[38;5;220m",
+            .global_search_file_selected => "\x1b[48;5;238m\x1b[38;5;220m",
+            .global_search_result => "\x1b[48;5;235m\x1b[38;5;121m",
+            .global_search_result_selected => "\x1b[48;5;238m\x1b[38;5;121m",
         };
     }
 };

@@ -4,6 +4,7 @@ const terminal = @import("../../terminal.zig");
 const editor = @import("../editor.zig");
 const buffer = @import("../model/buffer.zig");
 const explorer = @import("../explorer.zig");
+const global_search = @import("../global_search.zig");
 const actions = @import("../actions.zig");
 const normal_sequence = @import("normal_sequence.zig");
 const navigation = @import("../navigation.zig");
@@ -94,6 +95,81 @@ fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalComma
                 }
             }
         },
+    }
+}
+
+const GlobalSearchAction = union(enum) {
+    path: []u8,
+    content: struct {
+        open_path: []u8,
+        row: usize,
+        col: usize,
+    },
+
+    fn deinit(self: *GlobalSearchAction, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .path => |open_path| allocator.free(open_path),
+            .content => |action| allocator.free(action.open_path),
+        }
+    }
+};
+
+fn selectedGlobalSearchAction(ed: *editor.Editor) !?GlobalSearchAction {
+    const selected = ed.state.global_search.selectedResult() orelse return null;
+    return switch (selected) {
+        .path => |result| .{ .path = try ed.allocator.dupe(u8, result.open_path) },
+        .content => |result| .{ .content = .{
+            .open_path = try ed.allocator.dupe(u8, result.open_path),
+            .row = result.row,
+            .col = result.col,
+        } },
+    };
+}
+
+fn refreshGlobalSearchOrReport(ed: *editor.Editor) !void {
+    ed.state.global_search.refresh(ed.allocator, ed.io) catch |err| switch (err) {
+        global_search.Error.RootOpenFailed => {
+            ed.state.error_message = "Could not search project root";
+            ed.state.global_search.clearResults(ed.allocator);
+        },
+        else => return err,
+    };
+}
+
+fn acceptGlobalSearchResult(ed: *editor.Editor) !void {
+    var action = (try selectedGlobalSearchAction(ed)) orelse {
+        ed.state.global_search.close(ed.allocator);
+        ed.state.mode = .Normal;
+        ed.markDirty(.full);
+        return;
+    };
+    defer action.deinit(ed.allocator);
+
+    ed.state.global_search.close(ed.allocator);
+    ed.state.mode = .Normal;
+
+    const open_path = switch (action) {
+        .path => |path| path,
+        .content => |content| content.open_path,
+    };
+
+    if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, open_path)) |loaded| {
+        var b = loaded;
+        var consumed = false;
+        errdefer if (!consumed) b.deinit();
+        try navigation.recordCurrentJump(ed);
+        try ed.addTab(b);
+        consumed = true;
+        switch (action) {
+            .path => {},
+            .content => |content| {
+                _ = try navigation.jumpTo(ed, content.row, content.col, .{ .record_history = false });
+            },
+        }
+    } else |err| {
+        logz.err().fmt("msg", "failed to open global search file {s}: {s}", .{ open_path, @errorName(err) }).log();
+        ed.state.error_message = "Could not open file";
+        ed.markDirty(.full);
     }
 }
 
@@ -546,6 +622,36 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                         ed.clampScroll();
                     }
                 }
+            }
+        },
+        .GlobalSearch => {
+            if (matches(event, keys.normal_mode)) {
+                clearPendingNormalSequence(ed);
+                ed.state.global_search.close(ed.allocator);
+                ed.state.mode = .Normal;
+                ed.markDirty(.full);
+            } else if (matches(event, keys.prompt_backspace)) {
+                if (ed.state.global_search.input.items.len > 0) {
+                    ed.state.global_search.input.shrinkRetainingCapacity(ed.state.global_search.input.items.len - 1);
+                    try refreshGlobalSearchOrReport(ed);
+                    ed.markDirty(.full);
+                }
+            } else if (matches(event, keys.indent)) {
+                ed.state.global_search.selectNext();
+                ed.markDirty(.full);
+            } else if (event.key == .Down) {
+                ed.state.global_search.selectNext();
+                ed.markDirty(.full);
+            } else if (event.key == .Up) {
+                ed.state.global_search.selectPrevious();
+                ed.markDirty(.full);
+            } else if (matches(event, keys.prompt_submit)) {
+                clearPendingNormalSequence(ed);
+                try acceptGlobalSearchResult(ed);
+            } else if (event.key == .Char and !event.ctrl and !event.alt) {
+                try ed.state.global_search.input.append(ed.allocator, event.char);
+                try refreshGlobalSearchOrReport(ed);
+                ed.markDirty(.full);
             }
         },
     }

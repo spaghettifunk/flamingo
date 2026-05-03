@@ -28,9 +28,9 @@ A set of todos without order or priority. Simply grouped by category
 
 ## Editing TODO
 
-- [ ] implement file rename in explorer (and status bar with `:renameFile <path/to/file> <path/to/new_file_name`)
-- [ ] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>`)
-- [ ] implement file creation in explorer (and status bar with `:newFile <path/to/file>`)
+- [ ] implement file rename in explorer (and status bar with `:renameFile <path/to/file> <path/to/new_file_name` -- also `:rf <path/to/file> <path/to/new_file_name`)
+- [ ] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>` -- also `:df <path/to/file>`)
+- [ ] implement file creation in explorer (and status bar with `:newFile <path/to/file>` -- also `:nf <path/to/file>`)
 - [ ] replace occurrences (all in one go or one by one)
 - [x] jump to line
 - [x] jump to top/bottom of file
@@ -51,8 +51,8 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] implement the ability to create a new Pane and store the layout in the `~/.flamingo/config.toml`. Something like tmux
 - [ ] enable the terminal in the editor or the ability to submit commands via `:shell <comand> <...args>`. It can be a toggle to show/hide the terminal or a fixed panel
 - [x] implement a multi-key sequences
-- [ ] implement global search
+- [x] implement global search
   - [ ] Regex
   - [ ] Async/background indexing
   - [ ] Persistent search index
-  - [ ] Preview pane
+  - [x] Preview pane

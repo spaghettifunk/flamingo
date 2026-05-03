@@ -5,6 +5,7 @@ const terminal = @import("../terminal.zig");
 const buffer = @import("model/buffer.zig");
 const input = @import("input_router/router.zig");
 const search = @import("search.zig");
+const global_search = @import("global_search.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
@@ -61,6 +62,13 @@ const CommandPopupGeometry = struct {
 };
 
 const command_popup_title = " Cmdline ";
+const global_search_popup_title = " Search ";
+
+const GlobalSearchRenderRow = union(enum) {
+    header: []const u8,
+    path: usize,
+    content: usize,
+};
 
 const SelectionRange = struct {
     start_col: usize,
@@ -511,6 +519,7 @@ pub const Editor = struct {
 
         const status_style: render_mod.RenderStyle = switch (self.state.mode) {
             .Search => .search_status,
+            .GlobalSearch => .search_status,
             .Command => .status_command,
             .Insert => .status_insert,
             else => .status_normal,
@@ -545,6 +554,7 @@ pub const Editor = struct {
 
         const mode_str = switch (self.state.mode) {
             .Command => "-- COMMAND --",
+            .GlobalSearch => "-- GLOBAL SEARCH --",
             .Insert => "-- INSERT --",
             else => "-- NORMAL --",
         };
@@ -649,6 +659,8 @@ pub const Editor = struct {
         const mode_color =
             if (self.state.mode == .Command)
                 "\x1b[48;5;220m\x1b[30m"
+            else if (self.state.mode == .Search or self.state.mode == .GlobalSearch)
+                "\x1b[48;5;228m\x1b[30m"
             else if (self.state.mode == .Normal)
                 "\x1b[48;5;121m\x1b[30m"
             else
@@ -923,8 +935,8 @@ pub const Editor = struct {
         try writer.writeAll("\x1b[0m");
     }
 
-    fn commandPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
-        if (!self.state.command_popup.visible or self.height < 6) return null;
+    fn popupGeometry(self: *const Editor, visible: bool, item_count: usize, show_items: bool, max_visible_items: usize) ?CommandPopupGeometry {
+        if (!visible or self.height < 6) return null;
 
         const viewport = self.bufferViewportGeometry();
         if (viewport.width < 16) return null;
@@ -936,9 +948,8 @@ pub const Editor = struct {
 
         const row: usize = 2;
         const available_suggestions = self.height - row - 4;
-        const show_suggestions = self.state.command_popup.input.items.len > 0;
-        const suggestion_count = if (show_suggestions)
-            @min(self.state.command_popup.suggestions.items.len, @min(@as(usize, 6), available_suggestions))
+        const suggestion_count = if (show_items)
+            @min(item_count, @min(max_visible_items, available_suggestions))
         else
             0;
         const viewport_col = viewport.start_col -| 1;
@@ -949,6 +960,26 @@ pub const Editor = struct {
             .width = popup_width,
             .suggestion_count = suggestion_count,
         };
+    }
+
+    fn commandPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
+        return self.popupGeometry(
+            self.state.command_popup.visible,
+            self.state.command_popup.suggestions.items.len,
+            self.state.command_popup.input.items.len > 0,
+            6,
+        );
+    }
+
+    fn globalSearchPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
+        const render_row_count = globalSearchRenderRowCount(self.state.global_search.results.items);
+        const max_visible_items: usize = if (render_row_count > 6) 12 else 6;
+        return self.popupGeometry(
+            self.state.global_search.visible,
+            render_row_count,
+            self.state.global_search.input.items.len > 0,
+            max_visible_items,
+        );
     }
 
     fn renderCommandPopup(self: *Editor, writer: anytype) !void {
@@ -994,6 +1025,215 @@ pub const Editor = struct {
             const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
             try writer.writeAll(shown);
             for (shown.len..inner_width -| 1) |_| try writer.writeByte(' ');
+            try writer.writeAll("│\x1b[0m");
+        }
+
+        try terminal.moveCursor(writer, screen_row + 2 + geom.suggestion_count, screen_col);
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╰");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╯\x1b[0m");
+    }
+
+    fn writeTruncated(writer: anytype, text: []const u8, remaining: *usize) !usize {
+        if (remaining.* == 0) return 0;
+        const shown = text[0..@min(text.len, remaining.*)];
+        try writer.writeAll(shown);
+        remaining.* -= shown.len;
+        return shown.len;
+    }
+
+    fn globalSearchFileAnsi(selected: bool) []const u8 {
+        return if (selected) "\x1b[48;5;238m\x1b[38;5;220m" else "\x1b[48;5;235m\x1b[38;5;220m";
+    }
+
+    fn globalSearchResultAnsi(selected: bool) []const u8 {
+        return if (selected) "\x1b[48;5;238m\x1b[38;5;121m" else "\x1b[48;5;235m\x1b[38;5;121m";
+    }
+
+    fn globalSearchRowBaseAnsi(selected: bool) []const u8 {
+        return if (selected) "\x1b[48;5;238m\x1b[38;5;255m" else "\x1b[48;5;235m\x1b[38;5;250m";
+    }
+
+    fn isSameContentDisplayPath(a: global_search.GlobalSearchResult, b: global_search.GlobalSearchResult) bool {
+        return switch (a) {
+            .content => |a_content| switch (b) {
+                .content => |b_content| std.mem.eql(u8, a_content.display_path, b_content.display_path),
+                .path => false,
+            },
+            .path => false,
+        };
+    }
+
+    fn globalSearchRenderRowCount(results: []const global_search.GlobalSearchResult) usize {
+        var count: usize = 0;
+        var i: usize = 0;
+        while (i < results.len) {
+            switch (results[i]) {
+                .path => {
+                    count += 1;
+                    i += 1;
+                },
+                .content => {
+                    const group_start = i;
+                    count += 1; // file header
+                    while (i < results.len and isSameContentDisplayPath(results[i], results[group_start])) : (i += 1) {
+                        count += 1;
+                    }
+                },
+            }
+        }
+        return count;
+    }
+
+    fn globalSearchRenderRowAt(results: []const global_search.GlobalSearchResult, render_row: usize) ?GlobalSearchRenderRow {
+        var row: usize = 0;
+        var i: usize = 0;
+        while (i < results.len) {
+            switch (results[i]) {
+                .path => {
+                    if (row == render_row) return .{ .path = i };
+                    row += 1;
+                    i += 1;
+                },
+                .content => |content| {
+                    const group_path = content.display_path;
+                    if (row == render_row) return .{ .header = group_path };
+                    row += 1;
+                    while (i < results.len) : (i += 1) {
+                        switch (results[i]) {
+                            .content => |group_content| {
+                                if (!std.mem.eql(u8, group_content.display_path, group_path)) break;
+                                if (row == render_row) return .{ .content = i };
+                                row += 1;
+                            },
+                            .path => break,
+                        }
+                    }
+                },
+            }
+        }
+        return null;
+    }
+
+    fn selectedGlobalSearchRenderRow(results: []const global_search.GlobalSearchResult, selected_index: ?usize) ?usize {
+        const selected = selected_index orelse return null;
+        var row: usize = 0;
+        var i: usize = 0;
+        while (i < results.len) {
+            switch (results[i]) {
+                .path => {
+                    if (i == selected) return row;
+                    row += 1;
+                    i += 1;
+                },
+                .content => |content| {
+                    const group_path = content.display_path;
+                    row += 1; // header
+                    while (i < results.len) : (i += 1) {
+                        switch (results[i]) {
+                            .content => |group_content| {
+                                if (!std.mem.eql(u8, group_content.display_path, group_path)) break;
+                                if (i == selected) return row;
+                                row += 1;
+                            },
+                            .path => break,
+                        }
+                    }
+                },
+            }
+        }
+        return null;
+    }
+
+    fn adjustGlobalSearchRenderScroll(self: *Editor, view_height: usize) void {
+        if (view_height == 0) return;
+        const total_rows = globalSearchRenderRowCount(self.state.global_search.results.items);
+        if (total_rows == 0) {
+            self.state.global_search.scroll_offset = 0;
+            return;
+        }
+        if (self.state.global_search.scroll_offset >= total_rows) {
+            self.state.global_search.scroll_offset = total_rows - 1;
+        }
+        const selected_row = selectedGlobalSearchRenderRow(self.state.global_search.results.items, self.state.global_search.selected_index) orelse return;
+        if (selected_row < self.state.global_search.scroll_offset) {
+            self.state.global_search.scroll_offset = selected_row;
+        } else if (selected_row >= self.state.global_search.scroll_offset + view_height) {
+            self.state.global_search.scroll_offset = selected_row - view_height + 1;
+        }
+    }
+
+    fn renderGlobalSearchRowText(writer: anytype, row: GlobalSearchRenderRow, results: []const global_search.GlobalSearchResult, max_width: usize, selected: bool) !usize {
+        var remaining = max_width;
+        var written: usize = 0;
+        switch (row) {
+            .header => |display_path| {
+                try writer.writeAll(globalSearchFileAnsi(false));
+                written += try writeTruncated(writer, display_path, &remaining);
+            },
+            .path => |result_index| {
+                const path = results[result_index].path;
+                try writer.writeAll(globalSearchFileAnsi(selected));
+                written += try writeTruncated(writer, path.display_path, &remaining);
+            },
+            .content => |result_index| {
+                const content = results[result_index].content;
+                try writer.writeAll(globalSearchResultAnsi(selected));
+                written += try writeTruncated(writer, "  ", &remaining);
+                var location_buf: [48]u8 = undefined;
+                const location = try std.fmt.bufPrint(&location_buf, "{d}:{d}  ", .{ content.row + 1, content.col + 1 });
+                written += try writeTruncated(writer, location, &remaining);
+                written += try writeTruncated(writer, content.snippet, &remaining);
+            },
+        }
+        return written;
+    }
+
+    fn renderGlobalSearchPopup(self: *Editor, writer: anytype) !void {
+        const geom = self.globalSearchPopupGeometry() orelse return;
+        const popup = &self.state.global_search;
+        const screen_row = geom.row + 1;
+        const screen_col = geom.col + 1;
+        const inner_width = geom.width - 2;
+        const title_col = if (geom.width > global_search_popup_title.len)
+            screen_col + (geom.width - global_search_popup_title.len) / 2
+        else
+            screen_col;
+
+        try terminal.moveCursor(writer, screen_row, screen_col);
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m╭");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╮\x1b[0m");
+        if (global_search_popup_title.len + 2 < geom.width) {
+            try terminal.moveCursor(writer, screen_row, title_col);
+            try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m");
+            try writer.writeAll(global_search_popup_title);
+            try writer.writeAll("\x1b[0m");
+        }
+
+        try terminal.moveCursor(writer, screen_row + 1, screen_col);
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[48;5;235m\x1b[38;5;250m > \x1b[48;5;235m\x1b[38;5;255m");
+        const input_space = inner_width -| 3;
+        const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+        try writer.writeAll(shown_input);
+        for (shown_input.len..input_space) |_| try writer.writeByte(' ');
+        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m│\x1b[0m");
+
+        self.adjustGlobalSearchRenderScroll(geom.suggestion_count);
+        for (0..geom.suggestion_count) |offset| {
+            const render_row_index = self.state.global_search.scroll_offset + offset;
+            const render_row = globalSearchRenderRowAt(popup.results.items, render_row_index) orelse break;
+            const selected = switch (render_row) {
+                .path => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
+                .content => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
+                .header => false,
+            };
+            try terminal.moveCursor(writer, screen_row + 2 + offset, screen_col);
+            try writer.writeAll(globalSearchRowBaseAnsi(selected));
+            try writer.writeAll("│ ");
+            const written = try renderGlobalSearchRowText(writer, render_row, popup.results.items, inner_width -| 2, selected);
+            try writer.writeAll(globalSearchRowBaseAnsi(selected));
+            for (written..inner_width -| 1) |_| try writer.writeByte(' ');
             try writer.writeAll("│\x1b[0m");
         }
 
@@ -1170,6 +1410,17 @@ pub const Editor = struct {
                 }
             }
             try writer.writeAll("\x1b[0m"); // Reset
+        } else if (self.state.mode == .GlobalSearch) {
+            var status_buf: [160]u8 = undefined;
+            const status_text = try self.buildStatusText(tab, &status_buf);
+            try writer.writeAll("\x1b[48;5;228m\x1b[30m");
+            try writer.writeAll(status_text);
+            if (self.width > status_text.len) {
+                for (0..self.width - status_text.len) |_| {
+                    try writer.writeAll(" ");
+                }
+            }
+            try writer.writeAll("\x1b[0m");
         } else if (self.state.error_message) |err_msg| {
             try writer.writeAll("\x1b[31;1m"); // Red, Bold
             try writer.print("{s}", .{err_msg});
@@ -1193,12 +1444,19 @@ pub const Editor = struct {
         }
 
         try self.renderCommandPopup(writer);
+        try self.renderGlobalSearchPopup(writer);
 
         // Move cursor to proper location
         if (self.state.mode == .Command) {
             if (self.commandPopupGeometry()) |geom| {
                 const input_space = geom.width -| 5;
                 const cursor_col = @min(self.state.command_popup.input.items.len, input_space);
+                try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
+            }
+        } else if (self.state.mode == .GlobalSearch) {
+            if (self.globalSearchPopupGeometry()) |geom| {
+                const input_space = geom.width -| 5;
+                const cursor_col = @min(self.state.global_search.input.items.len, input_space);
                 try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
             }
         } else if (self.state.mode == .Search) {
@@ -1275,6 +1533,7 @@ pub const Editor = struct {
         }
 
         self.renderVirtualCommandPopup();
+        self.renderVirtualGlobalSearchPopup();
         self.renderVirtualStatus(ctx);
         _ = try self.renderer.screen_renderer.emit(writer, &self.renderer.screen);
         try self.renderVirtualTabSeparator(writer);
@@ -1371,6 +1630,95 @@ pub const Editor = struct {
         self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .command_popup_border);
     }
 
+    fn writeVirtualTruncated(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle) void {
+        if (col.* >= end_col) return;
+        const remaining = end_col - col.*;
+        const shown = text[0..@min(text.len, remaining)];
+        self.renderer.screen.writeText(row, col.*, shown, style);
+        col.* += shown.len;
+    }
+
+    fn globalSearchFileStyle(selected: bool) render_mod.RenderStyle {
+        return if (selected) .global_search_file_selected else .global_search_file;
+    }
+
+    fn globalSearchResultStyle(selected: bool) render_mod.RenderStyle {
+        return if (selected) .global_search_result_selected else .global_search_result;
+    }
+
+    fn renderVirtualGlobalSearchRowText(self: *Editor, row: usize, start_col: usize, end_col: usize, render_row: GlobalSearchRenderRow, results: []const global_search.GlobalSearchResult, selected: bool) void {
+        var col = start_col;
+        switch (render_row) {
+            .header => |display_path| {
+                self.writeVirtualTruncated(row, &col, end_col, display_path, globalSearchFileStyle(false));
+            },
+            .path => |result_index| {
+                const path = results[result_index].path;
+                self.writeVirtualTruncated(row, &col, end_col, path.display_path, globalSearchFileStyle(selected));
+            },
+            .content => |result_index| {
+                const content = results[result_index].content;
+                const style = globalSearchResultStyle(selected);
+                self.writeVirtualTruncated(row, &col, end_col, "  ", style);
+                var location_buf: [48]u8 = undefined;
+                const location = std.fmt.bufPrint(&location_buf, "{d}:{d}  ", .{ content.row + 1, content.col + 1 }) catch "";
+                self.writeVirtualTruncated(row, &col, end_col, location, style);
+                self.writeVirtualTruncated(row, &col, end_col, content.snippet, style);
+            },
+        }
+    }
+
+    fn renderVirtualGlobalSearchPopup(self: *Editor) void {
+        const geom = self.globalSearchPopupGeometry() orelse return;
+        const popup = &self.state.global_search;
+        const inner_width = geom.width - 2;
+        const title_col = if (geom.width > global_search_popup_title.len)
+            geom.col + (geom.width - global_search_popup_title.len) / 2
+        else
+            geom.col;
+
+        self.renderer.screen.set(geom.row, geom.col, '+', .command_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(geom.row, geom.col + i, '-', .command_popup_border);
+        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .command_popup_border);
+        if (global_search_popup_title.len + 2 < geom.width) {
+            self.renderer.screen.writeText(geom.row, title_col, global_search_popup_title, .command_popup_title);
+        }
+
+        const input_row = geom.row + 1;
+        self.renderer.screen.set(input_row, geom.col, '|', .command_popup_border);
+        self.renderer.screen.set(input_row, geom.col + geom.width - 1, '|', .command_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(input_row, geom.col + i, ' ', .command_popup);
+        self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
+        const input_space = inner_width -| 3;
+        const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+        self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
+
+        self.adjustGlobalSearchRenderScroll(geom.suggestion_count);
+        for (0..geom.suggestion_count) |offset| {
+            const render_row_index = self.state.global_search.scroll_offset + offset;
+            const render_row = globalSearchRenderRowAt(popup.results.items, render_row_index) orelse break;
+            const row = geom.row + 2 + offset;
+            const selected = switch (render_row) {
+                .path => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
+                .content => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
+                .header => false,
+            };
+            const style: render_mod.RenderStyle = if (selected)
+                .command_popup_selected
+            else
+                .command_popup;
+            self.renderer.screen.set(row, geom.col, '|', .command_popup_border);
+            self.renderer.screen.set(row, geom.col + geom.width - 1, '|', .command_popup_border);
+            for (1..geom.width - 1) |col_offset| self.renderer.screen.set(row, geom.col + col_offset, ' ', style);
+            self.renderVirtualGlobalSearchRowText(row, geom.col + 2, geom.col + geom.width - 1, render_row, popup.results.items, selected);
+        }
+
+        const bottom_row = geom.row + 2 + geom.suggestion_count;
+        self.renderer.screen.set(bottom_row, geom.col, '+', .command_popup_border);
+        for (1..geom.width - 1) |i| self.renderer.screen.set(bottom_row, geom.col + i, '-', .command_popup_border);
+        self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .command_popup_border);
+    }
+
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, gutter_width: usize) void {
         const mc = tab.mainCursor();
         const is_current = buffer_line_idx == mc.row;
@@ -1438,6 +1786,14 @@ pub const Editor = struct {
             if (self.commandPopupGeometry()) |geom| {
                 const input_space = geom.width -| 5;
                 const cursor_col = @min(self.state.command_popup.input.items.len, input_space);
+                try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
+            }
+            return;
+        }
+        if (self.state.mode == .GlobalSearch) {
+            if (self.globalSearchPopupGeometry()) |geom| {
+                const input_space = geom.width -| 5;
+                const cursor_col = @min(self.state.global_search.input.items.len, input_space);
                 try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
             }
             return;

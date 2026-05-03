@@ -5,6 +5,7 @@ const search = @import("../search.zig");
 const syntax = @import("../syntax.zig");
 const lsp_state = @import("lsp_ui.zig");
 const command_popup = @import("../command_popup.zig");
+const global_search = @import("../global_search.zig");
 const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
 const normal_sequence = @import("../input_router/normal_sequence.zig");
@@ -17,6 +18,7 @@ pub const EditorMode = enum {
     Command,
     OpenFilePrompt,
     Search,
+    GlobalSearch,
 };
 
 pub const EditorState = struct {
@@ -32,6 +34,7 @@ pub const EditorState = struct {
     explorer_focused: bool = false,
     search_buffer: std.ArrayListUnmanaged(u8) = .empty,
     search_system: ?search.SearchSystem = null,
+    global_search: global_search.GlobalSearch = .{},
     clipboard: ?[]u8 = null,
     render_dirty: bool = true,
     force_full_render: bool = true,
@@ -71,6 +74,7 @@ pub const EditorState = struct {
         self.command_popup.deinit(allocator);
         self.search_buffer.deinit(allocator);
         self.search_buffer = .empty;
+        self.global_search.deinit(allocator);
         if (self.clipboard) |c| {
             allocator.free(c);
             self.clipboard = null;

@@ -7,6 +7,7 @@ pub const Command = enum {
     force_quit,
     write,
     write_quit,
+    search,
 
     pub fn name(self: Command) []const u8 {
         return switch (self) {
@@ -14,6 +15,7 @@ pub const Command = enum {
             .force_quit => "q!",
             .write => "w",
             .write_quit => "wq",
+            .search => "search",
         };
     }
 
@@ -30,6 +32,7 @@ pub const all = [_]Command{
     .force_quit,
     .write,
     .write_quit,
+    .search,
 };
 
 fn parseLineJump(input: []const u8) ?usize {
@@ -126,6 +129,12 @@ pub fn execute(ed: *editor.Editor) !void {
                 ed.closeTab();
             }
         },
+        .search => {
+            const root_path = if (ed.state.tree) |tree| tree.root_path else ".";
+            try ed.state.global_search.open(ed.allocator, root_path);
+            ed.state.mode = .GlobalSearch;
+            ed.markDirty(.full);
+        },
     }
 }
 
@@ -134,5 +143,6 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.force_quit, Command.fromString("q!").?);
     try std.testing.expectEqual(Command.write, Command.fromString("w").?);
     try std.testing.expectEqual(Command.write_quit, Command.fromString("wq").?);
+    try std.testing.expectEqual(Command.search, Command.fromString("search").?);
     try std.testing.expect(Command.fromString("nope") == null);
 }
