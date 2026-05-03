@@ -86,6 +86,14 @@ fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalComma
                 _ = try navigation.jumpTo(ed, row, mc.col, .{ .record_history = true });
             }
         },
+        .jump_matching_bracket => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                if (navigation.findMatchingBracket(&tab.buf, .{ .row = mc.row, .col = mc.col })) |target| {
+                    _ = try navigation.jumpTo(ed, target.row, target.col, .{ .record_history = true });
+                }
+            }
+        },
     }
 }
 

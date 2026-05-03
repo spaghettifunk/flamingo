@@ -1,4 +1,5 @@
 const editor = @import("editor.zig");
+const buffer = @import("model/buffer.zig");
 const jump_history = @import("state/jump_history.zig");
 
 pub const JumpOptions = struct {
@@ -39,6 +40,18 @@ pub fn jumpTo(ed: *editor.Editor, row: usize, col: usize, options: JumpOptions) 
     return true;
 }
 
+pub fn findMatchingBracket(buf: *const buffer.Buffer, start_pos: buffer.TextPoint) ?buffer.TextPoint {
+    if (buf.lines.items.len == 0 or start_pos.row >= buf.lines.items.len) return null;
+
+    const start = findBracketOnLine(buf, start_pos) orelse return null;
+    const pair = bracketPair(start.char) orelse return null;
+
+    return if (pair.opens)
+        findForwardBracket(buf, start.pos, pair.open, pair.close)
+    else
+        findBackwardBracket(buf, start.pos, pair.open, pair.close);
+}
+
 pub fn jumpBack(ed: *editor.Editor) !bool {
     const current = currentLocation(ed) orelse return false;
     const target = ed.state.jump_history.popBack() orelse return false;
@@ -50,6 +63,94 @@ pub fn jumpBack(ed: *editor.Editor) !bool {
     try ed.state.jump_history.pushForward(ed.allocator, current);
     applyLocationToTab(ed, tab, clampLocation(tab, target));
     return true;
+}
+
+const BracketStart = struct {
+    pos: buffer.TextPoint,
+    char: u8,
+};
+
+const BracketPair = struct {
+    open: u8,
+    close: u8,
+    opens: bool,
+};
+
+fn bracketPair(c: u8) ?BracketPair {
+    return switch (c) {
+        '(' => .{ .open = '(', .close = ')', .opens = true },
+        ')' => .{ .open = '(', .close = ')', .opens = false },
+        '{' => .{ .open = '{', .close = '}', .opens = true },
+        '}' => .{ .open = '{', .close = '}', .opens = false },
+        '[' => .{ .open = '[', .close = ']', .opens = true },
+        ']' => .{ .open = '[', .close = ']', .opens = false },
+        else => null,
+    };
+}
+
+fn findBracketOnLine(buf: *const buffer.Buffer, start_pos: buffer.TextPoint) ?BracketStart {
+    const line = &buf.lines.items[start_pos.row];
+    const line_len = line.len();
+    var col = start_pos.col;
+    while (col < line_len) : (col += 1) {
+        const c = line.byteAt(col) orelse return null;
+        if (bracketPair(c) != null) {
+            return .{
+                .pos = .{ .row = start_pos.row, .col = col },
+                .char = c,
+            };
+        }
+    }
+    return null;
+}
+
+fn findForwardBracket(buf: *const buffer.Buffer, start_pos: buffer.TextPoint, open: u8, close: u8) ?buffer.TextPoint {
+    var depth: usize = 1;
+    var row = start_pos.row;
+    var col = start_pos.col + 1;
+
+    while (row < buf.lines.items.len) : (row += 1) {
+        const line = &buf.lines.items[row];
+        while (col < line.len()) : (col += 1) {
+            const c = line.byteAt(col) orelse return null;
+            if (c == open) {
+                depth += 1;
+            } else if (c == close) {
+                depth -= 1;
+                if (depth == 0) return .{ .row = row, .col = col };
+            }
+        }
+        col = 0;
+    }
+
+    return null;
+}
+
+fn findBackwardBracket(buf: *const buffer.Buffer, start_pos: buffer.TextPoint, open: u8, close: u8) ?buffer.TextPoint {
+    var depth: usize = 1;
+    var row = start_pos.row;
+    var col = start_pos.col;
+
+    while (true) {
+        const line = &buf.lines.items[row];
+        var i = @min(col, line.len());
+        while (i > 0) {
+            i -= 1;
+            const c = line.byteAt(i) orelse return null;
+            if (c == close) {
+                depth += 1;
+            } else if (c == open) {
+                depth -= 1;
+                if (depth == 0) return .{ .row = row, .col = i };
+            }
+        }
+
+        if (row == 0) break;
+        row -= 1;
+        col = buf.lines.items[row].len();
+    }
+
+    return null;
 }
 
 pub fn jumpForward(ed: *editor.Editor) !bool {

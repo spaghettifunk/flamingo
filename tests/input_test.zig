@@ -233,6 +233,136 @@ test "Normal: G on empty buffer stays at row zero col zero" {
     try std.testing.expectEqual(@as(usize, 0), ed.state.jump_history.back_stack.items.len);
 }
 
+test "Normal: percent bracket jump handles empty buffers" {
+    const a = std.testing.allocator;
+    var buf = try Buffer.init(a);
+    defer buf.deinit();
+
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    try std.testing.expectEqual(@as(?buffer_mod.TextPoint, null), navigation.findMatchingBracket(&buf, .{ .row = 0, .col = 0 }));
+}
+
+test "Normal: percent jumps between same-line parentheses" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"call(arg)"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 4;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 8), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.jump_history.back_stack.items.len);
+}
+
+test "Normal: percent jumps between same-line braces and brackets" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"{a[b]}"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 0;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+    try std.testing.expectEqual(@as(usize, 5), tab.mainCursor().col);
+
+    tab.mainCursor().col = 2;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+    try std.testing.expectEqual(@as(usize, 4), tab.mainCursor().col);
+}
+
+test "Normal: percent respects nested brackets" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"(a[b{c}])"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 0;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+    try std.testing.expectEqual(@as(usize, 8), tab.mainCursor().col);
+
+    tab.mainCursor().col = 2;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+    try std.testing.expectEqual(@as(usize, 7), tab.mainCursor().col);
+}
+
+test "Normal: percent supports multi-line bracket matches" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "fn main() {", "    call();", "}" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 10;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
+}
+
+test "Normal: percent scans forward on current line when cursor is not on bracket" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"abc [x]"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 1;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
+}
+
+test "Normal: percent at line end is a no-op" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"abc()"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 5;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+
+    try std.testing.expectEqual(@as(usize, 5), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.jump_history.back_stack.items.len);
+}
+
+test "Normal: percent without matching bracket is a no-op and does not record history" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"abc ("});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 4;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+
+    try std.testing.expectEqual(@as(usize, 4), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.jump_history.back_stack.items.len);
+}
+
+test "Normal: Ctrl+O can return from a successful percent jump" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"(value)"});
+    defer ed.deinit();
+
+    ed.config.keybindings.jump_back = "ctrl+o";
+    ed.refreshKeybindings();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().col = 0;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('%')});
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('o')});
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
+}
+
 test "Command: numeric line jump uses one-based line numbers" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three" });

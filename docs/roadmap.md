@@ -32,11 +32,11 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>`)
 - [ ] implement file creation in explorer (and status bar with `:newFile <path/to/file>`)
 - [ ] replace occurrences (all in one go or one by one)
-- [ ] jump to line
-- [ ] jump to top/bottom of file
-- [ ] implement jump between matching `() { } [ ]`
+- [x] jump to line
+- [x] jump to top/bottom of file
+- [x] implement jump between matching `() { } [ ]`
 - [ ] implement jump to function definition
-- [ ] implement going backwards/forwards like a browser
+- [x] implement going backwards/forwards like a browser
 - [ ] syntax highlight for Markdown files
 - [ ] Tabs with folder name in a different color
 
@@ -50,5 +50,9 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] implement a "Help" popup like LazyVim by doing `:help` showing what the editor can do
 - [ ] implement the ability to create a new Pane and store the layout in the `~/.flamingo/config.toml`. Something like tmux
 - [ ] enable the terminal in the editor or the ability to submit commands via `:shell <comand> <...args>`. It can be a toggle to show/hide the terminal or a fixed panel
-- [ ] global search
-- [ ] implement a multi-key sequences
+- [x] implement a multi-key sequences
+- [ ] implement global search
+  - [ ] Regex
+  - [ ] Async/background indexing
+  - [ ] Persistent search index
+  - [ ] Preview pane
