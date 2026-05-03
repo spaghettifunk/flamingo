@@ -8,6 +8,7 @@ const std = @import("std");
 const input_mod = @import("../src/editor/input_router/dispatch.zig");
 const editor_mod = @import("../src/editor/editor.zig");
 const buffer_mod = @import("../src/editor/model/buffer.zig");
+const navigation = @import("../src/editor/navigation.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
 const terminal = @import("../src/terminal.zig");
@@ -200,6 +201,196 @@ test "Normal: repeated gggg resolves as two gg commands and leaves no pending st
     try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
     try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
     try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
+}
+
+test "Normal: G jumps to bottom and records jump history" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "top", "middle", "bottom" });
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 10;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
+
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(?usize, null), tab.mainCursor().preferred_col);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.jump_history.back_stack.items.len);
+}
+
+test "Normal: G on empty buffer stays at row zero col zero" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
+
+    const tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.jump_history.back_stack.items.len);
+}
+
+test "Command: numeric line jump uses one-based line numbers" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three" });
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('1'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), ed.currentTab().?.mainCursor().row);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+}
+
+test "Command: line jump past EOF clamps to last line" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three" });
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('9'),
+        th.keyChar('9'),
+        th.keyChar('9'),
+        th.keyChar('9'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), ed.currentTab().?.mainCursor().row);
+}
+
+test "Command: goto and line jump commands move to requested line" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three", "four" });
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('g'),
+        th.keyChar('o'),
+        th.keyChar('t'),
+        th.keyChar('o'),
+        th.keyChar(' '),
+        th.keyChar('3'),
+        th.keySpecial(.Enter),
+    });
+    try std.testing.expectEqual(@as(usize, 2), ed.currentTab().?.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('l'),
+        th.keyChar('i'),
+        th.keyChar('n'),
+        th.keyChar('e'),
+        th.keyChar(' '),
+        th.keyChar('2'),
+        th.keySpecial(.Enter),
+    });
+    try std.testing.expectEqual(@as(usize, 1), ed.currentTab().?.mainCursor().row);
+}
+
+test "Normal: Alt+O and Alt+P navigate jump history" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three", "four" });
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyChar('g'), th.keyChar('g') });
+
+    const tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
+    try std.testing.expectEqual(@as(usize, 3), tab.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('p')});
+    try std.testing.expectEqual(@as(usize, 3), tab.mainCursor().row);
+}
+
+test "Normal: new jump after back clears forward history" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three", "four" });
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.jump_history.forward_stack.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('3'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(@as(usize, 0), ed.state.jump_history.forward_stack.items.len);
+    try std.testing.expectEqual(@as(usize, 2), ed.currentTab().?.mainCursor().row);
+}
+
+test "Normal: plain Tab is not Alt+P forward history" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two" });
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
+    try std.testing.expectEqual(@as(usize, 0), ed.currentTab().?.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
+    try std.testing.expectEqual(@as(usize, 0), ed.currentTab().?.mainCursor().row);
+}
+
+test "Normal: jump history keys are configurable" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two" });
+    defer ed.deinit();
+
+    ed.config.keybindings.jump_back = "alt+u";
+    ed.config.keybindings.jump_forward = "alt+j";
+    ed.refreshKeybindings();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
+    try std.testing.expectEqual(@as(usize, 1), ed.currentTab().?.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('u')});
+    try std.testing.expectEqual(@as(usize, 0), ed.currentTab().?.mainCursor().row);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('j')});
+    try std.testing.expectEqual(@as(usize, 1), ed.currentTab().?.mainCursor().row);
+}
+
+test "Normal: recorded file navigation can jump back and forward" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two", "three" });
+    defer ed.deinit();
+
+    const first_id = ed.currentTab().?.syntax_buffer_id;
+    ed.currentTab().?.mainCursor().row = 2;
+    ed.currentTab().?.mainCursor().col = 3;
+
+    try navigation.recordCurrentJump(&ed);
+    const second = try buffer_mod.Buffer.init(a);
+    try ed.addTab(second);
+    const second_id = ed.currentTab().?.syntax_buffer_id;
+
+    try std.testing.expectEqual(second_id, ed.currentTab().?.syntax_buffer_id);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
+    try std.testing.expectEqual(first_id, ed.currentTab().?.syntax_buffer_id);
+    try std.testing.expectEqual(@as(usize, 2), ed.currentTab().?.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 3), ed.currentTab().?.mainCursor().col);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('p')});
+    try std.testing.expectEqual(second_id, ed.currentTab().?.syntax_buffer_id);
 }
 
 // ── Typing in Insert mode ─────────────────────────────────────────────────────

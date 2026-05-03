@@ -1,5 +1,6 @@
 const std = @import("std");
 const editor = @import("editor.zig");
+const navigation = @import("navigation.zig");
 
 pub const Command = enum {
     quit,
@@ -31,6 +32,21 @@ pub const all = [_]Command{
     .write_quit,
 };
 
+fn parseLineJump(input: []const u8) ?usize {
+    if (input.len == 0) return null;
+    if (std.ascii.isDigit(input[0])) {
+        return std.fmt.parseInt(usize, input, 10) catch null;
+    }
+
+    var it = std.mem.splitScalar(u8, input, ' ');
+    const name = it.next() orelse return null;
+    if (!std.mem.eql(u8, name, "goto") and !std.mem.eql(u8, name, "line")) return null;
+
+    const line_text = it.next() orelse return null;
+    if (it.next() != null) return null;
+    return std.fmt.parseInt(usize, line_text, 10) catch null;
+}
+
 pub fn execute(ed: *editor.Editor) !void {
     const command_input = if (ed.state.command_popup.visible)
         ed.state.command_popup.input.items
@@ -39,6 +55,14 @@ pub fn execute(ed: *editor.Editor) !void {
     defer if (ed.state.command_popup.visible) ed.state.command_popup.close();
 
     if (command_input.len == 0) {
+        ed.state.mode = .Normal;
+        return;
+    }
+
+    if (parseLineJump(command_input)) |line_number| {
+        const row = line_number -| 1;
+        const col = if (ed.currentTab()) |tab| tab.mainCursor().col else 0;
+        _ = try navigation.jumpTo(ed, row, col, .{ .record_history = true });
         ed.state.mode = .Normal;
         return;
     }

@@ -8,6 +8,7 @@ const command_popup = @import("../command_popup.zig");
 const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
 const normal_sequence = @import("../input_router/normal_sequence.zig");
+const jump_history_mod = @import("jump_history.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -37,6 +38,7 @@ pub const EditorState = struct {
     lsp_ui: lsp_state.LspUiState,
     next_syntax_buffer_id: u64 = 1,
     pending_normal_sequence: normal_sequence.KeySequence = .{},
+    jump_history: jump_history_mod.JumpHistory = .{},
 
     pub fn init(allocator: std.mem.Allocator) EditorState {
         return .{
@@ -48,6 +50,7 @@ pub const EditorState = struct {
 
     pub fn deinit(self: *EditorState, allocator: std.mem.Allocator) void {
         self.lsp_ui.deinit();
+        self.jump_history.deinit(allocator);
 
         for (self.tabs.items) |*tab| {
             tab.deinit(allocator);

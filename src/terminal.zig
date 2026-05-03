@@ -410,6 +410,27 @@ pub fn readKey(reader: anytype) !KeyEvent {
                 }
 
                 // Common Mac Option shortcuts in UTF-8
+                if (len == 2 and utf8_buf[0] == 0xc3 and utf8_buf[1] == 0xb8) { // ø, Option+O
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'o';
+                    return event;
+                } else if (len == 2 and utf8_buf[0] == 0xcf and utf8_buf[1] == 0x80) { // π, Option+P
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'p';
+                    return event;
+                } else if (len == 2 and utf8_buf[0] == 0xcb and utf8_buf[1] == 0x86) { // ˆ, Option+I
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'i';
+                    return event;
+                } else if (len == 2 and utf8_buf[0] == 0xcc and utf8_buf[1] == 0x82) { // combining circumflex, Option+I
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'i';
+                    return event;
+                }
                 if (len == 3 and utf8_buf[0] == 0xe2 and utf8_buf[1] == 0x80) {
                     if (utf8_buf[2] == 0x9c or utf8_buf[2] == 0x9d) { // “ or ”
                         event.alt = true;

@@ -13,6 +13,8 @@ pub const KeybindingsConfig = struct {
     close_tab: []const u8 = "ctrl+w",
     next_tab: []const u8 = "alt+[",
     previous_tab: []const u8 = "alt+]",
+    jump_back: []const u8 = "alt+o",
+    jump_forward: []const u8 = "alt+p",
 
     dashboard_up: []const u8 = "up",
     dashboard_down: []const u8 = "down",

@@ -4,6 +4,7 @@ pub const max_sequence_len = 4;
 
 pub const NormalCommand = enum {
     jump_top,
+    jump_bottom,
 };
 
 pub const ResolveResult = union(enum) {
@@ -73,6 +74,10 @@ const normal_key_bindings = [_]NormalKeyBinding{
     .{
         .sequence = KeySequence.fromKeys(&.{ charKey('g'), charKey('g') }),
         .command = .jump_top,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{charKey('G')}),
+        .command = .jump_bottom,
     },
 };
 

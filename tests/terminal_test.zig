@@ -210,6 +210,34 @@ test "readKey: Option+Right (ESC f) — macOS word-jump" {
     try std.testing.expect(ev.alt);
 }
 
+test "readKey: macOS Option+O unicode maps to Alt+O" {
+    const ev = try readKeyFrom(&[_]u8{ 0xc3, 0xb8 });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'o'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: macOS Option+P unicode maps to Alt+P" {
+    const ev = try readKeyFrom(&[_]u8{ 0xcf, 0x80 });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'p'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: macOS Option+I unicode maps to Alt+I" {
+    const ev = try readKeyFrom(&[_]u8{ 0xcb, 0x86 });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'i'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: macOS Option+I combining accent maps to Alt+I" {
+    const ev = try readKeyFrom(&[_]u8{ 0xcc, 0x82 });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'i'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
 test "readKey: Option+Delete as ESC DEL maps to Alt+Backspace" {
     const ev = try readKeyFrom(&[_]u8{ 0x1b, 127 });
     try std.testing.expectEqual(Key.Backspace, ev.key);

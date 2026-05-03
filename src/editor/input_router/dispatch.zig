@@ -6,6 +6,7 @@ const buffer = @import("../model/buffer.zig");
 const explorer = @import("../explorer.zig");
 const actions = @import("../actions.zig");
 const normal_sequence = @import("normal_sequence.zig");
+const navigation = @import("../navigation.zig");
 
 fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     if (event.eql(expected)) return true;
@@ -74,13 +75,15 @@ fn handleNormalSequence(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
 fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalCommand) !void {
     switch (command) {
         .jump_top => {
+            if (ed.currentTab() != null) {
+                _ = try navigation.jumpTo(ed, 0, 0, .{ .record_history = true });
+            }
+        },
+        .jump_bottom => {
             if (ed.currentTab()) |tab| {
                 const mc = tab.mainCursor();
-                mc.row = 0;
-                mc.col = 0;
-                mc.preferred_col = null;
-                tab.scroll_row = 0;
-                ed.clampScroll();
+                const row = if (tab.buf.lines.items.len == 0) 0 else tab.buf.lines.items.len - 1;
+                _ = try navigation.jumpTo(ed, row, mc.col, .{ .record_history = true });
             }
         },
     }
@@ -236,6 +239,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                             ed.state.tree.?.toggleExpand() catch {};
                         } else {
                             if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, path)) |b| {
+                                try navigation.recordCurrentJump(ed);
                                 try ed.addTab(b);
                                 ed.state.explorer_focused = false;
                                 ed.state.mode = .Normal;
@@ -268,6 +272,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                         ed.state.tree.?.toggleExpand() catch {};
                     } else {
                         if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, node.absolute_path)) |b| {
+                            try navigation.recordCurrentJump(ed);
                             try ed.addTab(b);
                             ed.state.explorer_focused = false;
                             ed.state.mode = .Normal;
@@ -334,7 +339,13 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             }
         },
         .Normal => {
-            if (try handleNormalSequence(ed, event)) {
+            if (matches(event, keys.jump_back)) {
+                clearPendingNormalSequence(ed);
+                _ = try navigation.jumpBack(ed);
+            } else if (matches(event, keys.jump_forward)) {
+                clearPendingNormalSequence(ed);
+                _ = try navigation.jumpForward(ed);
+            } else if (try handleNormalSequence(ed, event)) {
                 // Handled
             } else if (try handleMovement(ed, event)) {
                 // Handled
@@ -447,6 +458,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (matches(event, keys.prompt_submit)) {
                 if (ed.state.command_buffer.items.len > 0) {
                     if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.state.command_buffer.items)) |b| {
+                        try navigation.recordCurrentJump(ed);
                         try ed.addTab(b);
                         clearPendingNormalSequence(ed);
                         ed.state.mode = .Normal;
