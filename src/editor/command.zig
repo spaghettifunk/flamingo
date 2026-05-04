@@ -1,6 +1,7 @@
 const std = @import("std");
 const editor = @import("editor.zig");
 const navigation = @import("navigation.zig");
+const fs_ops = @import("filesystem_ops.zig");
 
 pub const Command = enum {
     quit,
@@ -8,6 +9,9 @@ pub const Command = enum {
     write,
     write_quit,
     search,
+    rename_file,
+    delete_file,
+    new_file,
 
     pub fn name(self: Command) []const u8 {
         return switch (self) {
@@ -16,12 +20,27 @@ pub const Command = enum {
             .write => "w",
             .write_quit => "wq",
             .search => "search",
+            .rename_file => "renameFile",
+            .delete_file => "deleteFile",
+            .new_file => "newFile",
+        };
+    }
+
+    pub fn alias(self: Command) ?[]const u8 {
+        return switch (self) {
+            .rename_file => "rf",
+            .delete_file => "df",
+            .new_file => "nf",
+            else => null,
         };
     }
 
     pub fn fromString(value: []const u8) ?Command {
         for (all) |command| {
             if (std.mem.eql(u8, command.name(), value)) return command;
+            if (command.alias()) |a| {
+                if (std.mem.eql(u8, a, value)) return command;
+            }
         }
         return null;
     }
@@ -33,7 +52,39 @@ pub const all = [_]Command{
     .write,
     .write_quit,
     .search,
+    .rename_file,
+    .delete_file,
+    .new_file,
 };
+
+fn nextArg(it: *std.mem.SplitIterator(u8, .scalar)) ?[]const u8 {
+    while (it.next()) |arg| {
+        if (arg.len > 0) return arg;
+    }
+    return null;
+}
+
+fn requireNoMoreArgs(ed: *editor.Editor, it: *std.mem.SplitIterator(u8, .scalar)) bool {
+    if (nextArg(it) != null) {
+        ed.state.error_message = "Too many command arguments";
+        ed.state.mode = .Normal;
+        return false;
+    }
+    return true;
+}
+
+fn requireArg(ed: *editor.Editor, it: *std.mem.SplitIterator(u8, .scalar)) ?[]const u8 {
+    return nextArg(it) orelse {
+        ed.state.error_message = "Missing command argument";
+        ed.state.mode = .Normal;
+        return null;
+    };
+}
+
+fn setFsError(ed: *editor.Editor, err: anyerror) void {
+    ed.state.error_message = fs_ops.userMessage(err);
+    ed.state.mode = .Normal;
+}
 
 fn parseLineJump(input: []const u8) ?usize {
     if (input.len == 0) return null;
@@ -71,7 +122,7 @@ pub fn execute(ed: *editor.Editor) !void {
     }
 
     var it = std.mem.splitScalar(u8, command_input, ' ');
-    const cmd = it.next() orelse return;
+    const cmd = nextArg(&it) orelse return;
     const command = Command.fromString(cmd) orelse {
         ed.state.error_message = "Not an editor command";
         ed.state.mode = .Normal;
@@ -93,7 +144,7 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.closeTab();
         },
         .write => {
-            const filename = it.next();
+            const filename = nextArg(&it);
             if (ed.currentTab()) |tab| {
                 if (filename) |f| {
                     try tab.buf.setFilename(f);
@@ -109,7 +160,7 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.state.mode = .Normal;
         },
         .write_quit => {
-            const filename = it.next();
+            const filename = nextArg(&it);
             if (ed.currentTab()) |tab| {
                 if (filename) |f| {
                     try tab.buf.setFilename(f);
@@ -135,6 +186,64 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.state.mode = .GlobalSearch;
             ed.markDirty(.full);
         },
+        .new_file => {
+            const input_path = requireArg(ed, &it) orelse return;
+            if (!requireNoMoreArgs(ed, &it)) return;
+            const path = fs_ops.resolveProjectPath(ed.allocator, ed.io, ed.state.project_root, input_path) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            defer ed.allocator.free(path);
+            fs_ops.createFileAndOpen(ed, path, true) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            ed.state.mode = .Normal;
+        },
+        .rename_file => {
+            const old_input = requireArg(ed, &it) orelse return;
+            const new_input = requireArg(ed, &it) orelse return;
+            if (!requireNoMoreArgs(ed, &it)) return;
+            const old_path = fs_ops.resolveProjectPath(ed.allocator, ed.io, ed.state.project_root, old_input) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            defer ed.allocator.free(old_path);
+            const new_path = fs_ops.resolveProjectPath(ed.allocator, ed.io, ed.state.project_root, new_input) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            defer ed.allocator.free(new_path);
+            fs_ops.renameNoOverwrite(ed.io, old_path, new_path) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            fs_ops.updateOpenBuffersAfterRename(ed, old_path, new_path) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            fs_ops.refreshExplorerBestEffort(ed, new_path) catch {};
+            ed.state.mode = .Normal;
+        },
+        .delete_file => {
+            const input_path = requireArg(ed, &it) orelse return;
+            if (!requireNoMoreArgs(ed, &it)) return;
+            const path = fs_ops.resolveProjectPath(ed.allocator, ed.io, ed.state.project_root, input_path) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            defer ed.allocator.free(path);
+            if (fs_ops.isOpenInEditor(ed, path)) {
+                setFsError(ed, error.FileIsOpen);
+                return;
+            }
+            fs_ops.deleteRegularFile(ed.io, path) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            fs_ops.refreshExplorerBestEffort(ed, null) catch {};
+            ed.state.mode = .Normal;
+        },
     }
 }
 
@@ -144,5 +253,11 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.write, Command.fromString("w").?);
     try std.testing.expectEqual(Command.write_quit, Command.fromString("wq").?);
     try std.testing.expectEqual(Command.search, Command.fromString("search").?);
+    try std.testing.expectEqual(Command.rename_file, Command.fromString("renameFile").?);
+    try std.testing.expectEqual(Command.rename_file, Command.fromString("rf").?);
+    try std.testing.expectEqual(Command.delete_file, Command.fromString("deleteFile").?);
+    try std.testing.expectEqual(Command.delete_file, Command.fromString("df").?);
+    try std.testing.expectEqual(Command.new_file, Command.fromString("newFile").?);
+    try std.testing.expectEqual(Command.new_file, Command.fromString("nf").?);
     try std.testing.expect(Command.fromString("nope") == null);
 }

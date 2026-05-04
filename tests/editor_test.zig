@@ -267,7 +267,7 @@ test "Editor: mode-changing input renders before draining queued quit" {
     try ed.runWithIO(&reader, &out.writer);
 
     const rendered = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Open file:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Open File") != null);
     try std.testing.expect(ed.should_quit);
 }
 

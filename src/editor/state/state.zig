@@ -6,6 +6,8 @@ const syntax = @import("../syntax.zig");
 const lsp_state = @import("lsp_ui.zig");
 const command_popup = @import("../command_popup.zig");
 const global_search = @import("../global_search.zig");
+const filesystem_picker = @import("../filesystem_picker.zig");
+const prompt_popup = @import("../prompt_popup.zig");
 const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
 const normal_sequence = @import("../input_router/normal_sequence.zig");
@@ -17,6 +19,8 @@ pub const EditorMode = enum {
     Insert,
     Command,
     OpenFilePrompt,
+    FilesystemPicker,
+    Prompt,
     Search,
     GlobalSearch,
 };
@@ -28,7 +32,10 @@ pub const EditorState = struct {
     active_tab_index: usize = 0,
     command_buffer: std.ArrayListUnmanaged(u8) = .empty,
     command_popup: command_popup.CommandPopup = .{},
+    filesystem_picker: filesystem_picker.FilesystemPicker = .{},
+    prompt_popup: prompt_popup.PromptPopup = .{},
     error_message: ?[]const u8 = null,
+    project_root: ?[]u8 = null,
     tree: ?explorer.Explorer = null,
     explorer_visible: bool = false,
     explorer_focused: bool = false,
@@ -65,6 +72,10 @@ pub const EditorState = struct {
             t.deinit();
             self.tree = null;
         }
+        if (self.project_root) |root| {
+            allocator.free(root);
+            self.project_root = null;
+        }
         if (self.search_system) |*s| {
             s.deinit();
             self.search_system = null;
@@ -72,6 +83,8 @@ pub const EditorState = struct {
         self.command_buffer.deinit(allocator);
         self.command_buffer = .empty;
         self.command_popup.deinit(allocator);
+        self.filesystem_picker.deinit(allocator);
+        self.prompt_popup.deinit(allocator);
         self.search_buffer.deinit(allocator);
         self.search_buffer = .empty;
         self.global_search.deinit(allocator);
@@ -160,6 +173,12 @@ pub const EditorState = struct {
         self.mode = .Dashboard;
         self.explorer_visible = false;
         self.explorer_focused = false;
+    }
+
+    pub fn setProjectRoot(self: *EditorState, allocator: std.mem.Allocator, root_path: []const u8) !void {
+        const owned = try allocator.dupe(u8, root_path);
+        if (self.project_root) |old| allocator.free(old);
+        self.project_root = owned;
     }
 };
 

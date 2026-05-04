@@ -8,6 +8,9 @@ const global_search = @import("../global_search.zig");
 const actions = @import("../actions.zig");
 const normal_sequence = @import("normal_sequence.zig");
 const navigation = @import("../navigation.zig");
+const filesystem_picker = @import("../filesystem_picker.zig");
+const fs_ops = @import("../filesystem_ops.zig");
+const prompt_popup = @import("../prompt_popup.zig");
 
 fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     if (event.eql(expected)) return true;
@@ -173,6 +176,137 @@ fn acceptGlobalSearchResult(ed: *editor.Editor) !void {
     }
 }
 
+fn pickerStartDir(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    return ".";
+}
+
+fn openDashboardPicker(ed: *editor.Editor, mode: filesystem_picker.PickerMode) !void {
+    try ed.state.filesystem_picker.open(ed.allocator, ed.io, mode, pickerStartDir(ed));
+    ed.state.mode = .FilesystemPicker;
+    ed.markDirty(.full);
+}
+
+fn applyPickerResult(ed: *editor.Editor, result: filesystem_picker.PickerResult) !void {
+    defer result.deinit(ed.allocator);
+    switch (result) {
+        .open_file => |path| {
+            fs_ops.openFileInEditor(ed, path) catch |err| {
+                ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
+                return;
+            };
+        },
+        .open_folder => |path| {
+            fs_ops.openFolderInEditor(ed, path) catch |err| {
+                ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
+                return;
+            };
+        },
+        .create_file => |path| {
+            fs_ops.createFileAndOpen(ed, path, false) catch |err| {
+                ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
+                return;
+            };
+        },
+    }
+    ed.state.filesystem_picker.close(ed.allocator);
+    ed.markDirty(.full);
+}
+
+fn openExplorerPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
+    const tree = if (ed.state.tree) |*tree| tree else return;
+    if (tree.search_active) {
+        ed.state.error_message = "Finish explorer search before file operations";
+        return;
+    }
+    const node = tree.selectedNode();
+    const context_path = switch (kind) {
+        .explorer_new_file => tree.selectedBaseDirectory(),
+        .explorer_rename, .explorer_delete_confirm => if (node) |n| n.absolute_path else return,
+    };
+    const title = switch (kind) {
+        .explorer_new_file => "New File",
+        .explorer_rename => "Rename",
+        .explorer_delete_confirm => "Delete",
+    };
+    const initial = switch (kind) {
+        .explorer_rename => std.fs.path.basename(context_path),
+        else => "",
+    };
+    try ed.state.prompt_popup.open(ed.allocator, kind, title, context_path, initial);
+    ed.state.mode = .Prompt;
+    ed.markDirty(.full);
+}
+
+fn promptPath(ed: *editor.Editor, base: []const u8, input: []const u8) ![]u8 {
+    if (input.len == 0) return error.EmptyPath;
+    if (std.fs.path.isAbsolute(input)) return error.InvalidPath;
+    try fs_ops.rejectCommandPath(input);
+    const joined = try std.fs.path.join(ed.allocator, &.{ base, input });
+    defer ed.allocator.free(joined);
+    return fs_ops.resolvePathInsideProjectRoot(ed.allocator, ed.io, ed.state.project_root, joined);
+}
+
+fn applyPrompt(ed: *editor.Editor) !void {
+    const kind = ed.state.prompt_popup.kind;
+    const context = ed.state.prompt_popup.context_path;
+    const input_text = ed.state.prompt_popup.input.items;
+
+    switch (kind) {
+        .explorer_new_file => {
+            const path = promptPath(ed, context, input_text) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            defer ed.allocator.free(path);
+            fs_ops.createFileAndOpen(ed, path, false) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+        },
+        .explorer_rename => {
+            const stat = std.Io.Dir.cwd().statFile(ed.io, context, .{}) catch {
+                ed.state.prompt_popup.error_message = "File does not exist";
+                return;
+            };
+            if (stat.kind != .file) {
+                ed.state.prompt_popup.error_message = "Folder rename is not supported in V1";
+                return;
+            }
+            const parent = std.fs.path.dirname(context) orelse ".";
+            const new_path = promptPath(ed, parent, input_text) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            defer ed.allocator.free(new_path);
+            fs_ops.renameNoOverwrite(ed.io, context, new_path) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            try fs_ops.updateOpenBuffersAfterRename(ed, context, new_path);
+            fs_ops.refreshExplorerBestEffort(ed, new_path) catch {};
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+        },
+        .explorer_delete_confirm => {
+            if (fs_ops.isOpenInEditor(ed, context)) {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(error.FileIsOpen);
+                return;
+            }
+            fs_ops.deleteRegularFile(ed.io, context) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            fs_ops.refreshExplorerBestEffort(ed, null) catch {};
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+        },
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -209,6 +343,26 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             ed.state.explorer_focused = !ed.state.explorer_focused;
         }
         return;
+    }
+
+    if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null and
+        (ed.state.mode == .Normal or ed.state.mode == .Insert))
+    {
+        if (matches(event, keys.explorer_new_file)) {
+            clearPendingNormalSequence(ed);
+            try openExplorerPrompt(ed, .explorer_new_file);
+            return;
+        }
+        if (matches(event, keys.explorer_rename)) {
+            clearPendingNormalSequence(ed);
+            try openExplorerPrompt(ed, .explorer_rename);
+            return;
+        }
+        if (matches(event, keys.explorer_delete)) {
+            clearPendingNormalSequence(ed);
+            try openExplorerPrompt(ed, .explorer_delete_confirm);
+            return;
+        }
     }
 
     if (matches(event, keys.next_tab)) {
@@ -397,26 +551,13 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
             switch (action) {
                 .NewFile => {
-                    ed.state.mode = .Normal;
-                    try ed.addTab(try buffer.Buffer.init(ed.allocator));
+                    try openDashboardPicker(ed, .new_file_location);
                 },
                 .OpenFile => {
-                    ed.state.mode = .OpenFilePrompt;
-                    ed.state.command_buffer.clearRetainingCapacity();
+                    try openDashboardPicker(ed, .open_file);
                 },
                 .OpenFolder => {
-                    logz.info().string("msg", "action: OpenFolder").log();
-                    ed.closeAllTabs();
-                    ed.state.mode = .Normal;
-                    if (ed.state.tree) |*t| {
-                        t.deinit();
-                    }
-                    ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch |err| {
-                        logz.err().fmt("msg", "failed to init explorer: {s}", .{@errorName(err)}).log();
-                        return;
-                    };
-                    ed.state.explorer_visible = ed.state.tree != null;
-                    ed.state.explorer_focused = ed.state.tree != null;
+                    try openDashboardPicker(ed, .open_folder);
                 },
                 .Quit => ed.should_quit = true,
                 else => {},
@@ -557,6 +698,58 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.command_buffer.append(ed.allocator, event.char);
+            }
+        },
+        .FilesystemPicker => {
+            if (matches(event, keys.normal_mode)) {
+                clearPendingNormalSequence(ed);
+                ed.state.filesystem_picker.close(ed.allocator);
+                ed.state.mode = .Dashboard;
+                ed.markDirty(.full);
+            } else if (matches(event, keys.prompt_backspace)) {
+                try ed.state.filesystem_picker.backspace(ed.allocator, ed.io);
+                ed.markDirty(.full);
+            } else if (ed.state.filesystem_picker.mode == .new_file_location and ed.state.filesystem_picker.phase == .browsing and event.key == .Char and event.char == ' ' and !event.ctrl and !event.alt) {
+                ed.state.filesystem_picker.beginNameInput();
+                ed.markDirty(.full);
+            } else if (ed.state.filesystem_picker.mode == .open_folder and event.key == .Char and event.char == ' ' and !event.ctrl and !event.alt) {
+                if (try ed.state.filesystem_picker.selectFolder(ed.allocator)) |result| {
+                    try applyPickerResult(ed, result);
+                }
+            } else if (event.key == .Up) {
+                ed.state.filesystem_picker.moveUp();
+                ed.markDirty(.full);
+            } else if (event.key == .Down) {
+                ed.state.filesystem_picker.moveDown();
+                ed.markDirty(.full);
+            } else if (matches(event, keys.prompt_submit)) {
+                if (try ed.state.filesystem_picker.accept(ed.allocator, ed.io)) |result| {
+                    try applyPickerResult(ed, result);
+                }
+                ed.markDirty(.full);
+            } else if (event.key == .Char and !event.ctrl and !event.alt) {
+                try ed.state.filesystem_picker.appendChar(ed.allocator, event.char);
+                ed.markDirty(.full);
+            }
+        },
+        .Prompt => {
+            if (matches(event, keys.normal_mode) or (event.key == .Char and (event.char == 'n' or event.char == 'N') and ed.state.prompt_popup.kind == .explorer_delete_confirm)) {
+                clearPendingNormalSequence(ed);
+                ed.state.prompt_popup.close(ed.allocator);
+                ed.state.mode = .Normal;
+                ed.markDirty(.full);
+            } else if (ed.state.prompt_popup.kind == .explorer_delete_confirm and event.key == .Char and (event.char == 'y' or event.char == 'Y')) {
+                try applyPrompt(ed);
+                ed.markDirty(.full);
+            } else if (matches(event, keys.prompt_submit)) {
+                try applyPrompt(ed);
+                ed.markDirty(.full);
+            } else if (matches(event, keys.prompt_backspace) and ed.state.prompt_popup.kind != .explorer_delete_confirm) {
+                ed.state.prompt_popup.backspace();
+                ed.markDirty(.full);
+            } else if (event.key == .Char and !event.ctrl and !event.alt and ed.state.prompt_popup.kind != .explorer_delete_confirm) {
+                try ed.state.prompt_popup.appendChar(ed.allocator, event.char);
+                ed.markDirty(.full);
             }
         },
         .Search => {

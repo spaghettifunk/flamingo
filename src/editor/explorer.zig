@@ -302,6 +302,40 @@ pub const Explorer = struct {
         return self.search_results.items[self.search_selected_index];
     }
 
+    pub fn selectedNode(self: *Explorer) ?*FileNode {
+        if (self.search_active) return null;
+        if (self.nodes.items.len == 0) return null;
+        if (self.selected_index >= self.nodes.items.len) return null;
+        return &self.nodes.items[self.selected_index];
+    }
+
+    pub fn selectedBaseDirectory(self: *Explorer) []const u8 {
+        const node = self.selectedNode() orelse return self.root_path;
+        if (node.is_dir) return node.absolute_path;
+        return std.fs.path.dirname(node.absolute_path) orelse self.root_path;
+    }
+
+    pub fn refresh(self: *Explorer, reveal_path: ?[]const u8) !void {
+        const selected_path = if (reveal_path) |path|
+            try self.allocator.dupe(u8, path)
+        else if (self.selectedNode()) |node|
+            try self.allocator.dupe(u8, node.absolute_path)
+        else
+            null;
+        defer if (selected_path) |path| self.allocator.free(path);
+
+        for (self.nodes.items) |*node| node.deinit(self.allocator);
+        self.nodes.clearRetainingCapacity();
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+        self.cancelSearch();
+        try self.loadDirectory(self.root_path, 0, 0);
+
+        if (selected_path) |path| {
+            self.revealPath(path) catch {};
+        }
+    }
+
     pub fn revealPath(self: *Explorer, path: []const u8) !void {
         if (std.fs.path.dirname(path)) |parent| {
             try self.revealDirectory(parent);

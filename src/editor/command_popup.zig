@@ -121,6 +121,24 @@ test "CommandPopup prefix suggestions" {
     try popup.appendChar(allocator, 's');
     try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
     try std.testing.expectEqual(cmd.Command.search, popup.suggestions.items[0].command);
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'n');
+    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
+    try std.testing.expectEqual(cmd.Command.new_file, popup.suggestions.items[0].command);
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'r');
+    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
+    try std.testing.expectEqual(cmd.Command.rename_file, popup.suggestions.items[0].command);
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'd');
+    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
+    try std.testing.expectEqual(cmd.Command.delete_file, popup.suggestions.items[0].command);
 }
 
 test "CommandPopup tab moves selection without changing input" {

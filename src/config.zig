@@ -23,6 +23,9 @@ pub const KeybindingsConfig = struct {
     explorer_up: []const u8 = "up",
     explorer_down: []const u8 = "down",
     explorer_open: []const u8 = "enter",
+    explorer_new_file: []const u8 = "alt+n",
+    explorer_rename: []const u8 = "alt+r",
+    explorer_delete: []const u8 = "alt+delete",
 
     insert_mode: []const u8 = "i",
     command_mode: []const u8 = ":",

@@ -415,6 +415,26 @@ pub fn readKey(reader: anytype) !KeyEvent {
                     event.key = .Char;
                     event.char = 'o';
                     return event;
+                } else if (len == 2 and utf8_buf[0] == 0xcb and utf8_buf[1] == 0x9c) { // ˜, Option+N
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'n';
+                    return event;
+                } else if (len == 2 and utf8_buf[0] == 0xc3 and utf8_buf[1] == 0xb1) { // ñ, Option+N dead key followed by n
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'n';
+                    return event;
+                } else if (len == 2 and utf8_buf[0] == 0xcc and utf8_buf[1] == 0x83) { // combining tilde, Option+N
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'n';
+                    return event;
+                } else if (len == 2 and utf8_buf[0] == 0xc2 and utf8_buf[1] == 0xae) { // ®, Option+R
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = 'r';
+                    return event;
                 } else if (len == 2 and utf8_buf[0] == 0xcf and utf8_buf[1] == 0x80) { // π, Option+P
                     event.alt = true;
                     event.key = .Char;

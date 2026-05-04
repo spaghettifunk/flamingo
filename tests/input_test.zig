@@ -9,6 +9,7 @@ const input_mod = @import("../src/editor/input_router/dispatch.zig");
 const editor_mod = @import("../src/editor/editor.zig");
 const buffer_mod = @import("../src/editor/model/buffer.zig");
 const explorer_mod = @import("../src/editor/explorer.zig");
+const prompt_mod = @import("../src/editor/prompt_popup.zig");
 const navigation = @import("../src/editor/navigation.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
@@ -29,7 +30,7 @@ fn expectLine(a: std.mem.Allocator, ed: *editor_mod.Editor, row: usize, expected
 
 // ── Mode transitions ──────────────────────────────────────────────────────────
 
-test "Dashboard → Normal via Enter on 'New File'" {
+test "Dashboard → filesystem picker via Enter on 'New File'" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
@@ -37,8 +38,9 @@ test "Dashboard → Normal via Enter on 'New File'" {
     try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
     // Dashboard: selected_index starts at 0 ("New File"), press Enter to confirm.
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
-    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
-    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expectEqual(editor_mod.EditorMode.FilesystemPicker, ed.state.mode);
+    try std.testing.expect(ed.state.filesystem_picker.visible);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
 test "Normal → Insert via 'i'" {
@@ -1237,6 +1239,56 @@ test "configured Ctrl+E switches explorer focus" {
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
     try std.testing.expect(!ed.state.explorer_focused);
+}
+
+test "Explorer: Option+N opens new file prompt before edit shortcuts" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    ed.state.tree = try explorer_mod.Explorer.init(a, io, root_path);
+    ed.state.explorer_visible = true;
+    ed.state.explorer_focused = true;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('n')});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Prompt, ed.state.mode);
+    try std.testing.expect(ed.state.prompt_popup.visible);
+    try std.testing.expectEqual(prompt_mod.PromptKind.explorer_new_file, ed.state.prompt_popup.kind);
+}
+
+test "Explorer: Option+R opens rename prompt" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    ed.state.tree = try explorer_mod.Explorer.init(a, io, root_path);
+    ed.state.explorer_visible = true;
+    ed.state.explorer_focused = true;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('r')});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Prompt, ed.state.mode);
+    try std.testing.expect(ed.state.prompt_popup.visible);
+    try std.testing.expectEqual(prompt_mod.PromptKind.explorer_rename, ed.state.prompt_popup.kind);
+    try std.testing.expectEqualStrings("alpha.txt", ed.state.prompt_popup.input.items);
 }
 
 test "plain Tab inserts indentation when explorer is visible" {

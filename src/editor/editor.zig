@@ -16,6 +16,8 @@ const state_mod = @import("state/state.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const keybindings = @import("input_router/keybindings.zig");
+const filesystem_picker = @import("filesystem_picker.zig");
+const prompt_popup = @import("prompt_popup.zig");
 
 const max_fifo_events_per_idle_tick = 8;
 
@@ -63,6 +65,8 @@ const CommandPopupGeometry = struct {
 
 const command_popup_title = " Cmdline ";
 const global_search_popup_title = " Search ";
+const filesystem_picker_border_ansi = "\x1b[48;5;235m\x1b[38;5;117m";
+const prompt_popup_border_ansi = "\x1b[48;5;235m\x1b[38;5;204m";
 const command_popup_border_ansi = "\x1b[48;5;235m\x1b[38;5;121m";
 const global_search_popup_border_ansi = "\x1b[48;5;235m\x1b[38;5;220m";
 
@@ -523,6 +527,8 @@ pub const Editor = struct {
             .Search => .search_status,
             .GlobalSearch => .search_status,
             .Command => .status_command,
+            .FilesystemPicker => .status_command,
+            .Prompt => .status_command,
             .Insert => .status_insert,
             else => .status_normal,
         };
@@ -557,6 +563,8 @@ pub const Editor = struct {
         const mode_str = switch (self.state.mode) {
             .Command => "-- COMMAND --",
             .GlobalSearch => "-- GLOBAL SEARCH --",
+            .FilesystemPicker => "-- FILES --",
+            .Prompt => "-- PROMPT --",
             .Insert => "-- INSERT --",
             else => "-- NORMAL --",
         };
@@ -1260,11 +1268,212 @@ pub const Editor = struct {
         try writer.writeAll("╯\x1b[0m");
     }
 
+    fn pickerTitle(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
+        return switch (mode) {
+            .open_file => " Open File ",
+            .open_folder => " Open Folder ",
+            .new_file_location => if (phase == .entering_name) " New File " else " New File Location ",
+        };
+    }
+
+    fn pickerFooter(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
+        if (mode == .new_file_location and phase == .entering_name) {
+            return "Enter create  Backspace edit  Esc cancel";
+        }
+        return switch (mode) {
+            .open_file => "Up/Down move  Enter open  Backspace up  Esc cancel",
+            .open_folder => "Up/Down move  Enter enter folder  Space select folder  Backspace up  Esc cancel",
+            .new_file_location => "Up/Down move  Enter enter folder  Space choose location  Backspace up  Esc cancel",
+        };
+    }
+
+    fn renderFilesystemPickerPopup(self: *Editor, writer: anytype) !void {
+        if (!self.state.filesystem_picker.visible) return;
+        const picker = &self.state.filesystem_picker;
+        const item_count: usize = if (picker.phase == .browsing) picker.entries.items.len else 1;
+        const geom = self.popupGeometry(true, item_count + 3, true, 12) orelse return;
+        const screen_row = geom.row + 1;
+        const screen_col = geom.col + 1;
+        const inner_width = geom.width - 2;
+        const title = pickerTitle(picker.mode, picker.phase);
+        const title_col = if (geom.width > title.len)
+            screen_col + (geom.width - title.len) / 2
+        else
+            screen_col;
+
+        try terminal.moveCursor(writer, screen_row, screen_col);
+        try writer.writeAll(filesystem_picker_border_ansi ++ "╭");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╮\x1b[0m");
+        if (title.len + 2 < geom.width) {
+            try terminal.moveCursor(writer, screen_row, title_col);
+            try writer.writeAll(filesystem_picker_border_ansi);
+            try writer.writeAll(title);
+            try writer.writeAll("\x1b[0m");
+        }
+
+        try terminal.moveCursor(writer, screen_row + 1, screen_col);
+        try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;255m ");
+        const shown_cwd = picker.cwd[0..@min(picker.cwd.len, inner_width -| 2)];
+        try writer.writeAll(shown_cwd);
+        for (shown_cwd.len..inner_width -| 1) |_| try writer.writeByte(' ');
+        try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[0m");
+
+        var rows_written: usize = 0;
+        if (picker.phase == .entering_name) {
+            try terminal.moveCursor(writer, screen_row + 2, screen_col);
+            try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;255m filename: ");
+            const prefix_len = " filename: ".len;
+            const input_space = inner_width -| prefix_len -| 1;
+            const shown = picker.input.items[0..@min(picker.input.items.len, input_space)];
+            try writer.writeAll(shown);
+            for (shown.len..input_space) |_| try writer.writeByte(' ');
+            try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[0m");
+            rows_written = 1;
+        } else {
+            var offset: usize = 0;
+            if (geom.suggestion_count > 3) {
+                const view_height = geom.suggestion_count - 3;
+                if (picker.selected_index >= picker.scroll_offset + view_height) {
+                    picker.scroll_offset = picker.selected_index - view_height + 1;
+                } else if (picker.selected_index < picker.scroll_offset) {
+                    picker.scroll_offset = picker.selected_index;
+                }
+                while (offset < view_height and picker.scroll_offset + offset < picker.entries.items.len) : (offset += 1) {
+                    const index = picker.scroll_offset + offset;
+                    const entry = picker.entries.items[index];
+                    const selected = index == picker.selected_index;
+                    try terminal.moveCursor(writer, screen_row + 2 + offset, screen_col);
+                    try writer.writeAll(filesystem_picker_border_ansi ++ "│");
+                    if (selected) {
+                        try writer.writeAll("\x1b[48;5;238m\x1b[38;5;255m ");
+                    } else {
+                        try writer.writeAll("\x1b[48;5;235m\x1b[38;5;250m ");
+                    }
+                    const suffix = if (entry.kind == .directory) "/" else "";
+                    var remaining = inner_width -| 1;
+                    const shown_name = entry.name[0..@min(entry.name.len, remaining)];
+                    try writer.writeAll(shown_name);
+                    remaining -|= shown_name.len;
+                    if (suffix.len > 0 and remaining > 0) {
+                        try writer.writeAll(suffix);
+                        remaining -|= suffix.len;
+                    }
+                    for (0..remaining) |_| try writer.writeByte(' ');
+                    try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[0m");
+                }
+            }
+            rows_written = offset;
+        }
+
+        if (picker.error_message) |msg| {
+            try terminal.moveCursor(writer, screen_row + 2 + rows_written, screen_col);
+            try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;203m ");
+            const shown = msg[0..@min(msg.len, inner_width -| 2)];
+            try writer.writeAll(shown);
+            for (shown.len..inner_width -| 1) |_| try writer.writeByte(' ');
+            try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[0m");
+            rows_written += 1;
+        }
+
+        try terminal.moveCursor(writer, screen_row + 2 + rows_written, screen_col);
+        try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;245m ");
+        const footer = pickerFooter(picker.mode, picker.phase);
+        const shown_footer = footer[0..@min(footer.len, inner_width -| 2)];
+        try writer.writeAll(shown_footer);
+        for (shown_footer.len..inner_width -| 1) |_| try writer.writeByte(' ');
+        try writer.writeAll(filesystem_picker_border_ansi ++ "│\x1b[0m");
+
+        try terminal.moveCursor(writer, screen_row + 3 + rows_written, screen_col);
+        try writer.writeAll(filesystem_picker_border_ansi ++ "╰");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╯\x1b[0m");
+    }
+
+    fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
+        return switch (kind) {
+            .explorer_new_file => "Enter create  Backspace edit  Esc cancel",
+            .explorer_rename => "Enter rename  Backspace edit  Esc cancel",
+            .explorer_delete_confirm => "Enter/y confirm  Esc/n cancel",
+        };
+    }
+
+    fn renderPromptPopup(self: *Editor, writer: anytype) !void {
+        if (!self.state.prompt_popup.visible) return;
+        const popup = &self.state.prompt_popup;
+        const geom = self.popupGeometry(true, 4, true, 4) orelse return;
+        const screen_row = geom.row + 1;
+        const screen_col = geom.col + 1;
+        const inner_width = geom.width - 2;
+        const title_col = if (geom.width > popup.title.len)
+            screen_col + (geom.width - popup.title.len) / 2
+        else
+            screen_col;
+
+        try terminal.moveCursor(writer, screen_row, screen_col);
+        try writer.writeAll(prompt_popup_border_ansi ++ "╭");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╮\x1b[0m");
+        if (popup.title.len + 2 < geom.width) {
+            try terminal.moveCursor(writer, screen_row, title_col);
+            try writer.writeAll(prompt_popup_border_ansi);
+            try writer.writeAll(popup.title);
+            try writer.writeAll("\x1b[0m");
+        }
+
+        try terminal.moveCursor(writer, screen_row + 1, screen_col);
+        try writer.writeAll(prompt_popup_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;255m ");
+        if (popup.kind == .explorer_delete_confirm) {
+            try writer.writeAll("Delete ");
+            const shown = popup.context_path[0..@min(popup.context_path.len, inner_width -| 10)];
+            try writer.writeAll(shown);
+            try writer.writeAll("?");
+            const used = " Delete ".len + shown.len + 1;
+            for (used..inner_width -| 1) |_| try writer.writeByte(' ');
+        } else {
+            const shown_context = popup.context_path[0..@min(popup.context_path.len, inner_width / 2)];
+            try writer.writeAll(shown_context);
+            try writer.writeAll(" > ");
+            const used_prefix = 1 + shown_context.len + 3;
+            const input_space = inner_width -| used_prefix -| 1;
+            const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+            try writer.writeAll(shown_input);
+            for (shown_input.len..input_space) |_| try writer.writeByte(' ');
+        }
+        try writer.writeAll(prompt_popup_border_ansi ++ "│\x1b[0m");
+
+        var row_offset: usize = 2;
+        if (popup.error_message) |msg| {
+            try terminal.moveCursor(writer, screen_row + row_offset, screen_col);
+            try writer.writeAll(prompt_popup_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;203m ");
+            const shown = msg[0..@min(msg.len, inner_width -| 2)];
+            try writer.writeAll(shown);
+            for (shown.len..inner_width -| 1) |_| try writer.writeByte(' ');
+            try writer.writeAll(prompt_popup_border_ansi ++ "│\x1b[0m");
+            row_offset += 1;
+        }
+
+        try terminal.moveCursor(writer, screen_row + row_offset, screen_col);
+        try writer.writeAll(prompt_popup_border_ansi ++ "│\x1b[48;5;235m\x1b[38;5;245m ");
+        const footer = promptFooter(popup.kind);
+        const shown_footer = footer[0..@min(footer.len, inner_width -| 2)];
+        try writer.writeAll(shown_footer);
+        for (shown_footer.len..inner_width -| 1) |_| try writer.writeByte(' ');
+        try writer.writeAll(prompt_popup_border_ansi ++ "│\x1b[0m");
+
+        try terminal.moveCursor(writer, screen_row + row_offset + 1, screen_col);
+        try writer.writeAll(prompt_popup_border_ansi ++ "╰");
+        for (0..inner_width) |_| try writer.writeAll("─");
+        try writer.writeAll("╯\x1b[0m");
+    }
+
     fn render(self: *Editor, writer: anytype) !void {
-        if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt) {
+        if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt or self.state.mode == .FilesystemPicker) {
             try self.state.dash.render(writer, self.width, self.height);
 
-            if (self.state.mode == .OpenFilePrompt) {
+            if (self.state.mode == .FilesystemPicker) {
+                try self.renderFilesystemPickerPopup(writer);
+            } else if (self.state.mode == .OpenFilePrompt) {
                 try terminal.moveCursor(writer, self.height, 1);
                 try terminal.clearLine(writer);
                 try writer.print("Open file: {s}", .{self.state.command_buffer.items});
@@ -1462,6 +1671,8 @@ pub const Editor = struct {
 
         try self.renderCommandPopup(writer);
         try self.renderGlobalSearchPopup(writer);
+        try self.renderFilesystemPickerPopup(writer);
+        try self.renderPromptPopup(writer);
 
         // Move cursor to proper location
         if (self.state.mode == .Command) {
@@ -1478,6 +1689,10 @@ pub const Editor = struct {
             }
         } else if (self.state.mode == .Search) {
             try terminal.moveCursor(writer, self.height, 2 + self.state.search_buffer.items.len);
+        } else if (self.state.mode == .FilesystemPicker and self.state.filesystem_picker.phase == .entering_name) {
+            try terminal.moveCursor(writer, self.height, self.width);
+        } else if (self.state.mode == .Prompt) {
+            try terminal.moveCursor(writer, self.height, self.width);
         } else if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null) {
             try terminal.moveCursor(writer, self.height, self.width);
         } else if (tab) |t| {
@@ -1521,6 +1736,8 @@ pub const Editor = struct {
     fn canUseVirtualRenderer(self: *const Editor) bool {
         return self.state.mode != .Dashboard and
             self.state.mode != .OpenFilePrompt and
+            self.state.mode != .FilesystemPicker and
+            self.state.mode != .Prompt and
             !self.state.explorer_visible and
             !self.state.lsp_ui.completion_active;
     }
@@ -2283,7 +2500,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .Search, .GlobalSearch };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());
