@@ -3,7 +3,6 @@ const render_mod = @import("virtual_screen.zig");
 const buffer = @import("../model/buffer.zig");
 
 pub const EditorRenderer = struct {
-    legacy_frame: std.ArrayListUnmanaged(u8) = .empty,
     screen: render_mod.VirtualScreen,
     screen_renderer: render_mod.VirtualScreenRenderer,
 
@@ -14,9 +13,7 @@ pub const EditorRenderer = struct {
         };
     }
 
-    pub fn deinit(self: *EditorRenderer, allocator: std.mem.Allocator) void {
-        self.legacy_frame.deinit(allocator);
-        self.legacy_frame = .empty;
+    pub fn deinit(self: *EditorRenderer, _: std.mem.Allocator) void {
         self.screen.deinit();
         self.screen_renderer.deinit();
     }
