@@ -12,6 +12,7 @@ const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
 const normal_sequence = @import("../input_router/normal_sequence.zig");
 const jump_history_mod = @import("jump_history.zig");
+const git_status = @import("../git_status.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -46,6 +47,7 @@ pub const EditorState = struct {
     render_dirty: bool = true,
     force_full_render: bool = true,
     lsp_ui: lsp_state.LspUiState,
+    git_snapshot: ?git_status.Snapshot = null,
     next_syntax_buffer_id: u64 = 1,
     pending_normal_sequence: normal_sequence.KeySequence = .{},
     jump_history: jump_history_mod.JumpHistory = .{},
@@ -60,6 +62,10 @@ pub const EditorState = struct {
 
     pub fn deinit(self: *EditorState, allocator: std.mem.Allocator) void {
         self.lsp_ui.deinit();
+        if (self.git_snapshot) |*snapshot| {
+            snapshot.deinit();
+            self.git_snapshot = null;
+        }
         self.jump_history.deinit(allocator);
 
         for (self.tabs.items) |*tab| {

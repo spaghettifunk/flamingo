@@ -51,9 +51,6 @@ const RenderContext = struct {
     buf_width: usize,
     gutter_width: usize,
     visible_rows: usize,
-    status_style: render_mod.RenderStyle,
-    status_text: []const u8,
-    status_text_len: usize,
 };
 
 const CommandPopupGeometry = struct {
@@ -122,6 +119,7 @@ pub const Editor = struct {
     height: usize = 0,
     should_quit: bool = false,
     is_deinitialized: bool = false,
+    last_status_minute: i64 = -1,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
         var runtime = try runtime_mod.EditorRuntime.init(allocator, io);
@@ -301,6 +299,7 @@ pub const Editor = struct {
 
                 const update_start = perf.nowNs();
                 try self.flushPendingLspChanges(false);
+                self.updateStatusClockDirty();
                 metrics.add(.update_state, perf.elapsedNs(update_start));
             }
 
@@ -385,6 +384,11 @@ pub const Editor = struct {
                     defer self.allocator.free(msg.message);
                     try self.handleLspEvent(msg.plugin_name, msg.message);
                 },
+                .git_status_snapshot => |snapshot| {
+                    if (self.state.git_snapshot) |*old| old.deinit();
+                    self.state.git_snapshot = snapshot;
+                    self.markDirty(.partial);
+                },
                 .syntax_parse_result => unreachable,
             }
         }
@@ -399,6 +403,14 @@ pub const Editor = struct {
             self.handleSyntaxParseResult(result) catch |err| {
                 logz.err().fmt("msg", "failed to install syntax parse result: {any}", .{err}).log();
             };
+        }
+    }
+
+    fn updateStatusClockDirty(self: *Editor) void {
+        const minute = self.currentMinute();
+        if (minute != self.last_status_minute) {
+            self.last_status_minute = minute;
+            self.markDirty(.partial);
         }
     }
 
@@ -523,16 +535,7 @@ pub const Editor = struct {
         const bot_reserved = 1;
         const visible_rows = if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
 
-        const status_style: render_mod.RenderStyle = switch (self.state.mode) {
-            .Search => .search_status,
-            .GlobalSearch => .search_status,
-            .Command => .status_command,
-            .FilesystemPicker => .status_command,
-            .Prompt => .status_command,
-            .Insert => .status_insert,
-            else => .status_normal,
-        };
-        const status_text = self.buildStatusText(tab, status_buf) catch "";
+        _ = status_buf;
 
         return .{
             .tab = tab,
@@ -540,9 +543,6 @@ pub const Editor = struct {
             .buf_width = viewport.width,
             .gutter_width = gutter_width,
             .visible_rows = visible_rows,
-            .status_style = status_style,
-            .status_text = status_text,
-            .status_text_len = status_text.len,
         };
     }
 
@@ -561,21 +561,22 @@ pub const Editor = struct {
         }
 
         const mode_str = switch (self.state.mode) {
-            .Command => "-- COMMAND --",
-            .GlobalSearch => "-- GLOBAL SEARCH --",
-            .FilesystemPicker => "-- FILES --",
-            .Prompt => "-- PROMPT --",
-            .Insert => "-- INSERT --",
-            else => "-- NORMAL --",
+            .Command => "COMMAND",
+            .GlobalSearch => "GLOBAL SEARCH",
+            .FilesystemPicker => "FILES",
+            .Prompt => "PROMPT",
+            .Insert => "INSERT",
+            .Search => "SEARCH",
+            else => "NORMAL",
         };
         if (tab) |t| {
             const diag_count = if (t.buf.filename) |fname| self.state.lsp_ui.diagnosticCountForFile(fname) else 0;
             if (diag_count > 0) {
-                return try std.fmt.bufPrint(buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | ERR: {d} | FPS: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, diag_count, self.runtime.fps });
+                return try std.fmt.bufPrint(buf, " {s}   {d}  {d}:{d} ", .{ mode_str, diag_count, t.mainCursor().row + 1, t.mainCursor().col + 1 });
             }
-            return try std.fmt.bufPrint(buf, " {s} | Row: {d}, Col: {d} | Cursors: {d} | FPS: {d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1, t.cursors.items.len, self.runtime.fps });
+            return try std.fmt.bufPrint(buf, " {s}  {d}:{d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1 });
         }
-        return try std.fmt.bufPrint(buf, " {s} | No file open | FPS: {d} ", .{ mode_str, self.runtime.fps });
+        return try std.fmt.bufPrint(buf, " {s}  No file open ", .{mode_str});
     }
 
     fn canFastRenderCursorMove(self: *Editor, before: CursorMoveState) bool {
@@ -621,12 +622,43 @@ pub const Editor = struct {
             try self.renderLineNumberGutterAt(writer, tab, mc.row, true, before);
         }
 
-        try self.renderStatusLineLegacyStyle(writer, tab);
+        try self.renderFastStatusRightLegacy(writer, tab);
 
         const content_width = before.buf_width -| before.gutter_width;
         const vis_col = if (mc.col > content_width) content_width else mc.col;
         const vis_row = mc.row - tab.scroll_row + 3;
         try terminal.moveCursor(writer, vis_row, before.buf_start_col + before.gutter_width + vis_col);
+    }
+
+    fn renderFastStatusRightLegacy(self: *Editor, writer: anytype, tab: ?*Tab) !void {
+        if (self.height == 0 or self.width == 0) return;
+
+        const window_width = @min(self.width, @as(usize, 56));
+        const start_col = self.width - window_width;
+
+        try terminal.moveCursor(writer, self.height, start_col + 1);
+        try writer.writeAll(render_mod.RenderStyle.status_bg.ansi());
+        for (0..window_width) |_| try writer.writeByte(' ');
+
+        var right_buf: [192]u8 = undefined;
+        const right = self.buildRightStatus(tab, &right_buf) catch "";
+        const right_cells = render_mod.displayCellCount(right);
+        const total_cells = @min(window_width, right_cells + 1);
+        const gap = window_width - total_cells;
+
+        try terminal.moveCursor(writer, self.height, start_col + 1);
+        try writer.writeAll(render_mod.RenderStyle.status_bg.ansi());
+        for (0..gap) |_| try writer.writeByte(' ');
+
+        var written = start_col + gap;
+        if (written < self.width) {
+            try writer.writeAll(render_mod.RenderStyle.status_sep_right.ansi());
+            try writer.writeAll("");
+            written += 1;
+        }
+        try writer.writeAll(render_mod.RenderStyle.status_right.ansi());
+        try writeClippedLegacy(writer, right, self.width - written, &written);
+        try writer.writeAll("\x1b[0m");
     }
 
     fn renderLineNumberGutterAt(self: *Editor, writer: anytype, tab: *Tab, line_idx: usize, is_current: bool, state: CursorMoveState) !void {
@@ -657,32 +689,186 @@ pub const Editor = struct {
         try terminal.moveCursor(writer, self.height, 1);
         try terminal.clearLine(writer);
 
-        var status_buf: [160]u8 = undefined;
-        const status_text = self.buildStatusText(tab, &status_buf) catch "";
-        if (self.state.error_message) |err_msg| {
-            try writer.writeAll("\x1b[31;1m");
-            try writer.print("{s}", .{err_msg});
-            try writer.writeAll("\x1b[0m");
+        var right_buf: [192]u8 = undefined;
+        const right = self.buildRightStatus(tab, &right_buf) catch "";
+        const right_cells = render_mod.displayCellCount(right);
+        const right_reserve = @min(self.width, right_cells + 1);
+        const left_limit = self.width -| right_reserve;
+
+        var cells: usize = 0;
+        try self.writeStatusLeftLegacy(writer, tab, &cells, left_limit);
+        try self.writeStatusRightLegacy(writer, right, cells);
+        try writer.writeAll("\x1b[0m");
+    }
+
+    fn statusModeLabel(self: *const Editor) []const u8 {
+        return switch (self.state.mode) {
+            .Insert => "INSERT",
+            .Command => "COMMAND",
+            .Search => "SEARCH",
+            .GlobalSearch => "GLOBAL",
+            .FilesystemPicker => "FILES",
+            .Prompt => "PROMPT",
+            else => "NORMAL",
+        };
+    }
+
+    fn statusModeStyle(self: *const Editor) render_mod.RenderStyle {
+        return switch (self.state.mode) {
+            .Insert => .status_mode_insert,
+            .Command, .FilesystemPicker, .Prompt => .status_mode_command,
+            .Search, .GlobalSearch => .status_mode_search,
+            else => .status_mode_normal,
+        };
+    }
+
+    fn statusModeSepStyle(self: *const Editor) render_mod.RenderStyle {
+        return switch (self.state.mode) {
+            .Insert => .status_sep_insert,
+            .Command, .FilesystemPicker, .Prompt => .status_sep_command,
+            .Search, .GlobalSearch => .status_sep_search,
+            else => .status_sep_normal,
+        };
+    }
+
+    fn fileIconForName(name: []const u8) []const u8 {
+        const ext = std.fs.path.extension(name);
+        if (std.mem.eql(u8, ext, ".zig")) return "";
+        if (std.mem.eql(u8, ext, ".toml") or std.mem.eql(u8, ext, ".json") or
+            std.mem.eql(u8, ext, ".zon") or std.mem.eql(u8, ext, ".xml"))
+            return "";
+        if (std.mem.eql(u8, ext, ".md")) return "";
+        if (std.ascii.eqlIgnoreCase(std.fs.path.basename(name), "LICENSE")) return "";
+        return "";
+    }
+
+    fn statusFilePath(self: *const Editor, tab: ?*Tab) []const u8 {
+        var filename = if (tab) |t| t.buf.filename orelse "unsaved" else "No file";
+        if (self.state.git_snapshot) |snapshot| {
+            if (snapshot.root_path) |root| {
+                if (std.mem.startsWith(u8, filename, root)) {
+                    var rel = filename[root.len..];
+                    if (rel.len > 0 and (rel[0] == '/' or rel[0] == std.fs.path.sep)) rel = rel[1..];
+                    if (rel.len > 0) return rel;
+                }
+            }
+        }
+        while (std.mem.startsWith(u8, filename, "./")) filename = filename[2..];
+        return filename;
+    }
+
+    fn statusContext(self: *const Editor) ?[]const u8 {
+        if (self.state.mode == .Prompt) return @tagName(self.state.prompt_popup.kind);
+        if (self.state.mode == .Command) return "command";
+        if (self.state.mode == .Search) return "search";
+        if (self.state.mode == .GlobalSearch) return "global_search";
+        return null;
+    }
+
+    fn currentMinute(self: *const Editor) i64 {
+        const ns = std.Io.Timestamp.now(self.io, .real).nanoseconds;
+        return @intCast(@divTrunc(ns, std.time.ns_per_min));
+    }
+
+    fn clockText(self: *const Editor, buf: *[16]u8) []const u8 {
+        const ns = std.Io.Timestamp.now(self.io, .real).nanoseconds;
+        const secs: u64 = @intCast(@max(@divTrunc(ns, std.time.ns_per_s), 0));
+        const day = (std.time.epoch.EpochSeconds{ .secs = secs }).getDaySeconds();
+        return std.fmt.bufPrint(buf, " {d:0>2}:{d:0>2}", .{ day.getHoursIntoDay(), day.getMinutesIntoHour() }) catch " --:--";
+    }
+
+    fn writeLegacyStyled(writer: anytype, style: render_mod.RenderStyle, text: []const u8, cells: *usize) !void {
+        try writer.writeAll(style.ansi());
+        try writer.writeAll(text);
+        cells.* += render_mod.displayCellCount(text);
+    }
+
+    fn writeLegacyStyledClipped(writer: anytype, style: render_mod.RenderStyle, text: []const u8, cells: *usize, max_cells: usize) !void {
+        if (cells.* >= max_cells) return;
+        try writer.writeAll(style.ansi());
+        try writeClippedLegacy(writer, text, max_cells - cells.*, cells);
+    }
+
+    fn writeStatusLeftLegacy(self: *Editor, writer: anytype, tab: ?*Tab, cells: *usize, max_cells: usize) !void {
+        if (self.state.error_message) |err| {
+            try writeLegacyStyledClipped(writer, .status_error, " ERROR ", cells, max_cells);
+            try writeLegacyStyledClipped(writer, .status_sep_error, "", cells, max_cells);
+            try writeLegacyStyledClipped(writer, .status_file, " ", cells, max_cells);
+            try writeLegacyStyledClipped(writer, .status_file, err, cells, max_cells);
             return;
         }
 
-        const mode_color =
-            if (self.state.mode == .Command)
-                "\x1b[48;5;220m\x1b[30m"
-            else if (self.state.mode == .Search or self.state.mode == .GlobalSearch)
-                "\x1b[48;5;228m\x1b[30m"
-            else if (self.state.mode == .Normal)
-                "\x1b[48;5;121m\x1b[30m"
-            else
-                "\x1b[48;5;117m\x1b[30m";
-        try writer.writeAll(mode_color);
-        try writer.writeAll(status_text);
-        if (self.width > status_text.len) {
-            for (0..self.width - status_text.len) |_| {
-                try writer.writeAll(" ");
+        var mode_buf: [32]u8 = undefined;
+        const mode = std.fmt.bufPrint(&mode_buf, " {s} ", .{self.statusModeLabel()}) catch " NORMAL ";
+        try writeLegacyStyledClipped(writer, self.statusModeStyle(), mode, cells, max_cells);
+        try writeLegacyStyledClipped(writer, self.statusModeSepStyle(), "", cells, max_cells);
+
+        if (self.state.git_snapshot) |snapshot| {
+            if (snapshot.branch) |branch| {
+                var branch_buf: [96]u8 = undefined;
+                const branch_text = std.fmt.bufPrint(&branch_buf, "  {s} ", .{branch}) catch "";
+                try writeLegacyStyledClipped(writer, .status_branch, branch_text, cells, max_cells);
+                try writeLegacyStyledClipped(writer, .status_sep_branch, "", cells, max_cells);
             }
         }
-        try writer.writeAll("\x1b[0m");
+
+        var file_buf: [192]u8 = undefined;
+        const file_path = self.statusFilePath(tab);
+        const file_text = std.fmt.bufPrint(&file_buf, " {s} {s} ", .{ fileIconForName(file_path), file_path }) catch "";
+        try writeLegacyStyledClipped(writer, .status_file, file_text, cells, max_cells);
+
+        if (self.statusContext()) |context| {
+            try writeLegacyStyledClipped(writer, .status_sep_file, "", cells, max_cells);
+            var context_buf: [96]u8 = undefined;
+            const context_text = std.fmt.bufPrint(&context_buf, " ◆ {s} ", .{context}) catch "";
+            try writeLegacyStyledClipped(writer, .status_context, context_text, cells, max_cells);
+        }
+        try writeLegacyStyledClipped(writer, .status_sep_context, "", cells, max_cells);
+    }
+
+    fn writeStatusRightLegacy(self: *Editor, writer: anytype, right: []const u8, left_cells: usize) !void {
+        if (left_cells >= self.width) return;
+        const right_cells = render_mod.displayCellCount(right);
+        const available = self.width - left_cells;
+        const need = right_cells + 1;
+        const gap = available -| need;
+        try writer.writeAll(render_mod.RenderStyle.status_bg.ansi());
+        for (0..gap) |_| try writer.writeAll(" ");
+        var written: usize = left_cells + gap;
+        if (written < self.width) {
+            try writer.writeAll(render_mod.RenderStyle.status_sep_right.ansi());
+            try writer.writeAll("");
+            written += 1;
+        }
+        try writer.writeAll(render_mod.RenderStyle.status_right.ansi());
+        try writeClippedLegacy(writer, right, self.width - written, &written);
+    }
+
+    fn writeClippedLegacy(writer: anytype, text: []const u8, max_cells: usize, cells: *usize) !void {
+        var written: usize = 0;
+        var i: usize = 0;
+        while (i < text.len and written < max_cells) : (written += 1) {
+            const len = @min(render_mod.utf8CellLen(text[i]), text.len - i);
+            try writer.writeAll(text[i .. i + len]);
+            i += len;
+        }
+        cells.* += written;
+    }
+
+    fn buildRightStatus(self: *Editor, tab: ?*Tab, buf: *[192]u8) ![]const u8 {
+        var clock_buf: [16]u8 = undefined;
+        const clock = self.clockText(&clock_buf);
+        if (tab) |t| {
+            const mc = t.mainCursor();
+            const total_lines = t.buf.lines.items.len;
+            const pct = if (total_lines <= 1) 100 else @min(@as(usize, 100), ((mc.row + 1) * 100) / total_lines);
+            const diag_count = if (t.buf.filename) |fname| self.state.lsp_ui.diagnosticCountForFile(fname) else 0;
+            if (diag_count > 0) {
+                return try std.fmt.bufPrint(buf, "  {d}  ◇ {d}  {d}%  {d}:{d}  {s} ", .{ diag_count, total_lines, pct, mc.row + 1, mc.col + 1, clock });
+            }
+            return try std.fmt.bufPrint(buf, " ◇ {d}  {d}%  {d}:{d}  {s} ", .{ total_lines, pct, mc.row + 1, mc.col + 1, clock });
+        }
+        return try std.fmt.bufPrint(buf, " {s} ", .{clock});
     }
 
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
@@ -1503,7 +1689,7 @@ pub const Editor = struct {
             const exp_width = (self.width * @as(usize, self.config.explorer.width_percentage)) / 100;
             if (exp_width > 0) {
                 // Explorer starts at row 2
-                try self.state.tree.?.renderAt(writer, exp_width, self.height - 1, 2, self.state.explorer_focused);
+                try self.state.tree.?.renderAt(writer, exp_width, self.height - 1, 2, self.state.explorer_focused, if (self.state.git_snapshot) |*s| s else null);
 
                 for (2..self.height) |r| {
                     try terminal.moveCursor(writer, r, exp_width + 1);
@@ -1598,76 +1784,7 @@ pub const Editor = struct {
             try terminal.eraseToLineEnd(writer);
         }
 
-        // Draw status bar
-        try terminal.moveCursor(writer, self.height, 1);
-        try terminal.clearLine(writer);
-
-        if (self.state.mode == .Command) {
-            var status_buf: [160]u8 = undefined;
-            const status_text = try self.buildStatusText(tab, &status_buf);
-            try writer.writeAll("\x1b[48;5;220m\x1b[30m");
-            try writer.writeAll(status_text);
-            if (self.width > status_text.len) {
-                for (0..self.width - status_text.len) |_| {
-                    try writer.writeAll(" ");
-                }
-            }
-            try writer.writeAll("\x1b[0m");
-        } else if (self.state.mode == .Search) {
-            try writer.writeAll("\x1b[48;5;228m\x1b[30m"); // Light Yellow, Black text
-            try writer.print("/{s}", .{self.state.search_buffer.items});
-            var written: usize = 1 + self.state.search_buffer.items.len;
-            if (self.state.search_system) |s| {
-                if (s.matches.items.len > 0) {
-                    var buf: [64]u8 = undefined;
-                    const match_info = try std.fmt.bufPrint(&buf, " ({d}/{d})", .{ (s.active_match_idx orelse 0) + 1, s.matches.items.len });
-                    try writer.writeAll(match_info);
-                    written += match_info.len;
-                } else {
-                    const no_match = " (no matches)";
-                    try writer.writeAll(no_match);
-                    written += no_match.len;
-                }
-            }
-            // Pad status bar
-            if (self.width > written) {
-                for (0..self.width - written) |_| {
-                    try writer.writeAll(" ");
-                }
-            }
-            try writer.writeAll("\x1b[0m"); // Reset
-        } else if (self.state.mode == .GlobalSearch) {
-            var status_buf: [160]u8 = undefined;
-            const status_text = try self.buildStatusText(tab, &status_buf);
-            try writer.writeAll("\x1b[48;5;228m\x1b[30m");
-            try writer.writeAll(status_text);
-            if (self.width > status_text.len) {
-                for (0..self.width - status_text.len) |_| {
-                    try writer.writeAll(" ");
-                }
-            }
-            try writer.writeAll("\x1b[0m");
-        } else if (self.state.error_message) |err_msg| {
-            try writer.writeAll("\x1b[31;1m"); // Red, Bold
-            try writer.print("{s}", .{err_msg});
-            try writer.writeAll("\x1b[0m"); // Reset
-        } else {
-            const mode_color = if (self.state.mode == .Normal) "\x1b[48;5;121m\x1b[30m" else "\x1b[48;5;117m\x1b[30m";
-            try writer.writeAll(mode_color);
-
-            var status_buf: [160]u8 = undefined;
-            const status_text = try self.buildStatusText(tab, &status_buf);
-
-            try writer.writeAll(status_text);
-
-            // Pad status bar
-            if (self.width > status_text.len) {
-                for (0..self.width - status_text.len) |_| {
-                    try writer.writeAll(" ");
-                }
-            }
-            try writer.writeAll("\x1b[0m"); // Reset
-        }
+        try self.renderStatusLineLegacyStyle(writer, tab);
 
         try self.renderCommandPopup(writer);
         try self.renderGlobalSearchPopup(writer);
@@ -2005,14 +2122,62 @@ pub const Editor = struct {
     fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
         if (self.height == 0) return;
         const row = self.height - 1;
-        if (self.state.error_message != null) {
-            self.renderer.screen.fillRow(row, ' ', .normal);
-            self.renderer.screen.writeText(row, 0, ctx.status_text, .error_style);
+        self.renderer.screen.fillRow(row, ' ', .status_bg);
+
+        var col: usize = 0;
+        self.writeVirtualStatusLeft(row, &col, ctx.tab);
+
+        var right_buf: [192]u8 = undefined;
+        const right = self.buildRightStatus(ctx.tab, &right_buf) catch "";
+        const right_cells = render_mod.displayCellCount(right) + 1;
+        if (right_cells < self.width) {
+            const start = self.width - right_cells;
+            self.renderer.screen.writeText(row, start, "", .status_sep_right);
+            self.renderer.screen.writeText(row, start + 1, right, .status_right);
+        }
+    }
+
+    fn writeVirtualStatusText(self: *Editor, row: usize, col: *usize, text: []const u8, style: render_mod.RenderStyle) void {
+        if (col.* >= self.width) return;
+        self.renderer.screen.writeText(row, col.*, text, style);
+        col.* += @min(render_mod.displayCellCount(text), self.width - col.*);
+    }
+
+    fn writeVirtualStatusLeft(self: *Editor, row: usize, col: *usize, tab: ?*Tab) void {
+        if (self.state.error_message) |err| {
+            self.writeVirtualStatusText(row, col, " ERROR ", .status_error);
+            self.writeVirtualStatusText(row, col, "", .status_sep_error);
+            self.writeVirtualStatusText(row, col, " ", .status_file);
+            self.writeVirtualStatusText(row, col, err, .status_file);
             return;
         }
 
-        self.renderer.screen.fillRow(row, ' ', ctx.status_style);
-        self.renderer.screen.writeText(row, 0, ctx.status_text, ctx.status_style);
+        var mode_buf: [32]u8 = undefined;
+        const mode = std.fmt.bufPrint(&mode_buf, " {s} ", .{self.statusModeLabel()}) catch " NORMAL ";
+        self.writeVirtualStatusText(row, col, mode, self.statusModeStyle());
+        self.writeVirtualStatusText(row, col, "", self.statusModeSepStyle());
+
+        if (self.state.git_snapshot) |snapshot| {
+            if (snapshot.branch) |branch| {
+                var branch_buf: [96]u8 = undefined;
+                const branch_text = std.fmt.bufPrint(&branch_buf, "  {s} ", .{branch}) catch "";
+                self.writeVirtualStatusText(row, col, branch_text, .status_branch);
+                self.writeVirtualStatusText(row, col, "", .status_sep_branch);
+            }
+        }
+
+        var file_buf: [192]u8 = undefined;
+        const file_path = self.statusFilePath(tab);
+        const file_text = std.fmt.bufPrint(&file_buf, " {s} {s} ", .{ fileIconForName(file_path), file_path }) catch "";
+        self.writeVirtualStatusText(row, col, file_text, .status_file);
+
+        if (self.statusContext()) |context| {
+            self.writeVirtualStatusText(row, col, "", .status_sep_file);
+            var context_buf: [96]u8 = undefined;
+            const context_text = std.fmt.bufPrint(&context_buf, " ◆ {s} ", .{context}) catch "";
+            self.writeVirtualStatusText(row, col, context_text, .status_context);
+        }
+        self.writeVirtualStatusText(row, col, "", .status_sep_context);
     }
 
     fn moveVirtualCursor(self: *Editor, writer: anytype, tab: ?*Tab, gutter_width: usize, visible_rows: usize) !void {
@@ -2281,6 +2446,8 @@ test "Editor.calculateGutterWidth" {
     const cfg = config.Config{};
     var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
     defer ed.deinit();
+    ed.width = 120;
+    ed.height = 24;
 
     // 1-99 lines => 2 digits min => 1 + 2 + 1 = 4
     try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(5));
@@ -2291,17 +2458,119 @@ test "Editor.calculateGutterWidth" {
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
 }
 
-test "Editor command mode status is yellow Command label" {
+test "Editor command mode status uses command segment label" {
     const cfg = config.Config{};
     var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
     defer ed.deinit();
 
     ed.state.mode = .Command;
     var status_buf: [160]u8 = undefined;
-    const ctx = ed.buildRenderContext(&status_buf);
+    const status_text = try ed.buildStatusText(null, &status_buf);
 
-    try std.testing.expectEqual(render_mod.RenderStyle.status_command, ctx.status_style);
-    try std.testing.expect(std.mem.indexOf(u8, ctx.status_text, "-- COMMAND --") != null);
+    try std.testing.expectEqual(render_mod.RenderStyle.status_mode_command, ed.statusModeStyle());
+    try std.testing.expect(std.mem.indexOf(u8, status_text, "COMMAND") != null);
+}
+
+test "Editor status includes branch file context and diagnostics" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+    ed.width = 120;
+    ed.height = 24;
+
+    var buf = try buffer.Buffer.init(std.testing.allocator);
+    try buf.setFilename("src/config.zig");
+    try std.testing.expect(try ed.state.addTab(ed.allocator, buf));
+    ed.state.mode = .Prompt;
+    ed.state.prompt_popup.kind = .explorer_rename;
+
+    var snapshot = @import("git_status.zig").Snapshot.init(std.testing.allocator);
+    snapshot.branch = try std.testing.allocator.dupe(u8, "main");
+    ed.state.git_snapshot = snapshot;
+
+    var diagnostics = std.json.Array.init(std.testing.allocator);
+    try diagnostics.append(.null);
+    var obj: std.json.ObjectMap = .{};
+    try obj.put(std.testing.allocator, try std.testing.allocator.dupe(u8, "diagnostics"), .{ .array = diagnostics });
+    try ed.state.lsp_ui.replaceDiagnostics("src/config.zig", .{ .object = obj });
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+    try ed.renderStatusLineLegacyStyle(&out.writer, ed.currentTab());
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " main") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " src/config.zig") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "◆ explorer_rename") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " 1") != null);
+}
+
+test "Editor status omits git branch outside repository and keeps error" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.error_message = "boom";
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+    try ed.renderStatusLineLegacyStyle(&out.writer, null);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "ERROR") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "boom") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "") == null);
+}
+
+fn visibleCellsIgnoringAnsi(bytes: []const u8) usize {
+    var cells: usize = 0;
+    var i: usize = 0;
+    while (i < bytes.len) {
+        if (bytes[i] == 0x1b) {
+            i += 1;
+            if (i < bytes.len and bytes[i] == '[') {
+                i += 1;
+                while (i < bytes.len) : (i += 1) {
+                    const b = bytes[i];
+                    if (b >= 0x40 and b <= 0x7e) {
+                        i += 1;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        const len = @min(render_mod.utf8CellLen(bytes[i]), bytes.len - i);
+        i += len;
+        cells += 1;
+    }
+    return cells;
+}
+
+test "Editor legacy status never writes past terminal width" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+    ed.width = 40;
+    ed.height = 24;
+
+    var buf = try buffer.Buffer.init(std.testing.allocator);
+    try buf.setFilename("src/a/very/long/path/that/would/wrap/without/clipping/config.zig");
+    try std.testing.expect(try ed.state.addTab(ed.allocator, buf));
+    ed.state.mode = .Prompt;
+    ed.state.prompt_popup.kind = .explorer_rename;
+
+    var snapshot = @import("git_status.zig").Snapshot.init(std.testing.allocator);
+    snapshot.branch = try std.testing.allocator.dupe(u8, "feature/very-long-branch-name");
+    ed.state.git_snapshot = snapshot;
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+    try ed.renderStatusLineLegacyStyle(&out.writer, ed.currentTab());
+
+    try std.testing.expect(visibleCellsIgnoringAnsi(out.written()) <= ed.width);
 }
 
 test "Editor discards stale syntax parse results" {
@@ -2472,8 +2741,8 @@ test "fast cursor move output stays small and updates status only" {
     try ed.renderFastCursorMove(&out.writer, before);
 
     const rendered = out.written();
-    try std.testing.expect(rendered.len < 300);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "Row: 2, Col: 1") != null);
+    try std.testing.expect(rendered.len < 650);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "2:1") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "alpha") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "beta") == null);
 }

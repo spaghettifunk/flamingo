@@ -1,5 +1,6 @@
 const std = @import("std");
 const syntax = @import("../syntax.zig");
+const git_status = @import("../git_status.zig");
 
 pub const QueueError = error{
     QueueClosed,
@@ -17,6 +18,9 @@ pub const Event = union(enum) {
     /// Owned parse result. Pushing this event transfers ownership to the queue
     /// unless push returns an error, in which case the caller still owns it.
     syntax_parse_result: syntax.ParseResult,
+
+    /// Owned git status snapshot. Whoever consumes or discards this event must deinit it.
+    git_status_snapshot: git_status.Snapshot,
 };
 
 pub const EventQueue = struct {
@@ -75,7 +79,7 @@ pub const EventQueue = struct {
 
     pub fn push(self: *EventQueue, event: Event) !void {
         switch (event) {
-            .lsp_message => try self.pushFifo(event),
+            .lsp_message, .git_status_snapshot => try self.pushFifo(event),
             .syntax_parse_result => |result| try self.pushSyntaxResult(result),
         }
     }
@@ -203,6 +207,9 @@ pub const EventQueue = struct {
             },
             .syntax_parse_result => |*result| {
                 result.deinit(self.allocator);
+            },
+            .git_status_snapshot => |*snapshot| {
+                snapshot.deinit();
             },
         }
     }
