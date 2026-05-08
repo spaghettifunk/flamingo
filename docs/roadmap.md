@@ -21,16 +21,16 @@ A set of todos without order or priority. Simply grouped by category
 
 ## Initial Page TODO
 
-- [ ] implement "New File" by using a popup to show the filesystem (and navigate it) and create the file
-- [ ] implement "Open Folder" by selecting a specific folder (and not just `.`) using a popup to show the filesystem (and navigate it)
-- [ ] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
+- [x] implement "New File" by using a popup to show the filesystem (and navigate it) and create the file
+- [x] implement "Open Folder" by selecting a specific folder (and not just `.`) using a popup to show the filesystem (and navigate it)
+- [x] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
 - [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file. This step cannot happen until I find a way to automatically put the file in a specific folder at startup time
 
 ## Editing TODO
 
-- [ ] implement file rename in explorer (and status bar with `:renameFile <path/to/file> <path/to/new_file_name` -- also `:rf <path/to/file> <path/to/new_file_name`)
-- [ ] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>` -- also `:df <path/to/file>`)
-- [ ] implement file creation in explorer (and status bar with `:newFile <path/to/file>` -- also `:nf <path/to/file>`)
+- [x] implement file rename in explorer (and status bar with `:renameFile <path/to/file> <path/to/new_file_name` -- also `:rf <path/to/file> <path/to/new_file_name`)
+- [x] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>` -- also `:df <path/to/file>`)
+- [x] implement file creation in explorer (and status bar with `:newFile <path/to/file>` -- also `:nf <path/to/file>`)
 - [ ] replace occurrences (all in one go or one by one)
 - [x] jump to line
 - [x] jump to top/bottom of file

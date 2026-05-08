@@ -130,6 +130,44 @@ fn readShort(reader: anytype, buffer: []u8) !usize {
     return reader.read(buffer);
 }
 
+fn readContinuationByte(reader: anytype, buffer: []u8) !usize {
+    var attempts: usize = 0;
+    while (attempts < 3) : (attempts += 1) {
+        const n = try readShort(reader, buffer);
+        if (n != 0) return n;
+        const req = std.c.timespec{
+            .sec = 0,
+            .nsec = std.time.ns_per_ms,
+        };
+        _ = std.c.nanosleep(&req, null);
+    }
+    return 0;
+}
+
+fn utf8Len(first: u8) usize {
+    return if (first & 0xe0 == 0xc0) 2 else if (first & 0xf0 == 0xe0) 3 else if (first & 0xf8 == 0xf0) 4 else 1;
+}
+
+fn macOptionUtf8Char(bytes: []const u8) ?u8 {
+    if (bytes.len == 2) {
+        if (bytes[0] == 0xc3 and bytes[1] == 0xb8) return 'o'; // ø, Option+O
+        if (bytes[0] == 0xcb and bytes[1] == 0x9c) return 'n'; // ˜, Option+N
+        if (bytes[0] == 0xc3 and bytes[1] == 0xb1) return 'n'; // ñ, Option+N dead key followed by n
+        if (bytes[0] == 0xcc and bytes[1] == 0x83) return 'n'; // combining tilde, Option+N
+        if (bytes[0] == 0xc2 and bytes[1] == 0xae) return 'r'; // ®, Option+R
+        if (bytes[0] == 0xcf and bytes[1] == 0x80) return 'p'; // π, Option+P
+        if (bytes[0] == 0xcb and bytes[1] == 0x86) return 'i'; // ˆ, Option+I
+        if (bytes[0] == 0xcc and bytes[1] == 0x82) return 'i'; // combining circumflex, Option+I
+    }
+
+    if (bytes.len == 3 and bytes[0] == 0xe2 and bytes[1] == 0x80) {
+        if (bytes[2] == 0x9c or bytes[2] == 0x9d) return '['; // “ or ”
+        if (bytes[2] == 0x98 or bytes[2] == 0x99) return ']'; // ‘ or ’
+    }
+
+    return null;
+}
+
 pub fn enableRawMode(io: std.Io) !void {
     const fd = std.posix.STDIN_FILENO;
     const termios = try std.posix.tcgetattr(fd);
@@ -227,7 +265,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
         var seq: [16]u8 = undefined;
         var seq_len: usize = 0;
 
-        if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) {
+        if ((try readContinuationByte(reader, seq[seq_len .. seq_len + 1])) == 0) {
             event.key = .Esc;
             return event;
         }
@@ -236,7 +274,7 @@ pub fn readKey(reader: anytype) !KeyEvent {
         var alt_prefix = false;
         if (seq[0] == '\x1b') {
             alt_prefix = true;
-            if ((try readShort(reader, seq[seq_len .. seq_len + 1])) == 0) {
+            if ((try readContinuationByte(reader, seq[seq_len .. seq_len + 1])) == 0) {
                 event.key = .Esc;
                 return event;
             }
@@ -367,6 +405,21 @@ pub fn readKey(reader: anytype) !KeyEvent {
                 return event;
             }
 
+            if (seq[0] >= 128) {
+                var utf8_buf: [4]u8 = .{ 0, 0, 0, 0 };
+                utf8_buf[0] = seq[0];
+                const len = utf8Len(seq[0]);
+                for (1..len) |i| {
+                    if ((try readContinuationByte(reader, utf8_buf[i .. i + 1])) == 0) break;
+                }
+                if (macOptionUtf8Char(utf8_buf[0..len])) |mapped| {
+                    event.alt = true;
+                    event.key = .Char;
+                    event.char = mapped;
+                    return event;
+                }
+            }
+
             event.alt = true;
             event.key = .Char;
             event.char = seq[0];
@@ -401,68 +454,19 @@ pub fn readKey(reader: anytype) !KeyEvent {
         else => {
             // Handle UTF-8 or Option keys on Mac
             if (c >= 128) {
-                var utf8_buf: [4]u8 = undefined;
+                var utf8_buf: [4]u8 = .{ 0, 0, 0, 0 };
                 utf8_buf[0] = c;
-                const len: usize = if (c & 0xe0 == 0xc0) 2 else if (c & 0xf0 == 0xe0) 3 else if (c & 0xf8 == 0xf0) 4 else 1;
+                const len = utf8Len(c);
 
                 for (1..len) |i| {
-                    _ = try readShort(reader, utf8_buf[i .. i + 1]);
+                    if ((try readContinuationByte(reader, utf8_buf[i .. i + 1])) == 0) break;
                 }
 
-                // Common Mac Option shortcuts in UTF-8
-                if (len == 2 and utf8_buf[0] == 0xc3 and utf8_buf[1] == 0xb8) { // ø, Option+O
+                if (macOptionUtf8Char(utf8_buf[0..len])) |mapped| {
                     event.alt = true;
                     event.key = .Char;
-                    event.char = 'o';
+                    event.char = mapped;
                     return event;
-                } else if (len == 2 and utf8_buf[0] == 0xcb and utf8_buf[1] == 0x9c) { // ˜, Option+N
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'n';
-                    return event;
-                } else if (len == 2 and utf8_buf[0] == 0xc3 and utf8_buf[1] == 0xb1) { // ñ, Option+N dead key followed by n
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'n';
-                    return event;
-                } else if (len == 2 and utf8_buf[0] == 0xcc and utf8_buf[1] == 0x83) { // combining tilde, Option+N
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'n';
-                    return event;
-                } else if (len == 2 and utf8_buf[0] == 0xc2 and utf8_buf[1] == 0xae) { // ®, Option+R
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'r';
-                    return event;
-                } else if (len == 2 and utf8_buf[0] == 0xcf and utf8_buf[1] == 0x80) { // π, Option+P
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'p';
-                    return event;
-                } else if (len == 2 and utf8_buf[0] == 0xcb and utf8_buf[1] == 0x86) { // ˆ, Option+I
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'i';
-                    return event;
-                } else if (len == 2 and utf8_buf[0] == 0xcc and utf8_buf[1] == 0x82) { // combining circumflex, Option+I
-                    event.alt = true;
-                    event.key = .Char;
-                    event.char = 'i';
-                    return event;
-                }
-                if (len == 3 and utf8_buf[0] == 0xe2 and utf8_buf[1] == 0x80) {
-                    if (utf8_buf[2] == 0x9c or utf8_buf[2] == 0x9d) { // “ or ”
-                        event.alt = true;
-                        event.key = .Char;
-                        event.char = '[';
-                        return event;
-                    } else if (utf8_buf[2] == 0x98 or utf8_buf[2] == 0x99) { // ‘ or ’
-                        event.alt = true;
-                        event.key = .Char;
-                        event.char = ']';
-                        return event;
-                    }
                 }
 
                 event.key = .Char;

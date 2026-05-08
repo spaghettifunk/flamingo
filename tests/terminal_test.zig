@@ -113,6 +113,31 @@ fn readKeyFrom(bytes: []const u8) !KeyEvent {
     return terminal.readKey(&reader);
 }
 
+const DelayedReader = struct {
+    bytes: []const u8,
+    zero_before_indices: []const usize,
+    index: usize = 0,
+    zero_index: usize = 0,
+
+    pub fn readSliceShort(self: *DelayedReader, dest: []u8) !usize {
+        if (self.zero_index < self.zero_before_indices.len and
+            self.index == self.zero_before_indices[self.zero_index])
+        {
+            self.zero_index += 1;
+            return 0;
+        }
+        if (self.index >= self.bytes.len) return 0;
+        dest[0] = self.bytes[self.index];
+        self.index += 1;
+        return 1;
+    }
+};
+
+fn readKeyFromDelayed(bytes: []const u8, zero_before_indices: []const usize) !KeyEvent {
+    var reader = DelayedReader{ .bytes = bytes, .zero_before_indices = zero_before_indices };
+    return terminal.readKey(&reader);
+}
+
 test "readKey: ASCII printable char 'a'" {
     const ev = try readKeyFrom("a");
     try std.testing.expectEqual(Key.Char, ev.key);
@@ -219,6 +244,20 @@ test "readKey: macOS Option+O unicode maps to Alt+O" {
 
 test "readKey: macOS Option+N unicode maps to Alt+N" {
     const ev = try readKeyFrom(&[_]u8{ 0xcb, 0x9c });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'n'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: ESC-prefixed macOS Option+N unicode maps to Alt+N" {
+    const ev = try readKeyFrom(&[_]u8{ 0x1b, 0xcb, 0x9c });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'n'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: delayed ESC-prefixed macOS Option+N unicode maps to Alt+N" {
+    const ev = try readKeyFromDelayed(&[_]u8{ 0x1b, 0xcb, 0x9c }, &[_]usize{ 1, 2 });
     try std.testing.expectEqual(Key.Char, ev.key);
     try std.testing.expectEqual(@as(u8, 'n'), ev.char);
     try std.testing.expect(ev.alt);
