@@ -56,6 +56,19 @@ pub const Snapshot = struct {
         entry.value_ptr.* = if (entry.found_existing) mergeState(entry.value_ptr.*, state) else state;
     }
 
+    pub fn eql(self: *const Snapshot, other: *const Snapshot) bool {
+        if (!optionalBytesEql(self.root_path, other.root_path)) return false;
+        if (!optionalBytesEql(self.branch, other.branch)) return false;
+        if (self.entries.count() != other.entries.count()) return false;
+
+        var it = self.entries.iterator();
+        while (it.next()) |entry| {
+            const other_state = other.entries.get(entry.key_ptr.*) orelse return false;
+            if (other_state != entry.value_ptr.*) return false;
+        }
+        return true;
+    }
+
     pub fn stateForPath(self: *const Snapshot, path: []const u8) ?FileState {
         if (self.entries.count() == 0) return null;
         var rel = path;
@@ -123,6 +136,11 @@ pub const Snapshot = struct {
     }
 };
 
+fn optionalBytesEql(lhs: ?[]const u8, rhs: ?[]const u8) bool {
+    if (lhs == null or rhs == null) return lhs == null and rhs == null;
+    return std.mem.eql(u8, lhs.?, rhs.?);
+}
+
 fn mergeState(old: FileState, new: FileState) FileState {
     if (old == .modified or new == .modified) return .modified;
     if (old == .untracked or new == .untracked) return .untracked;
@@ -172,4 +190,23 @@ test "git porcelain snapshot parses branch and states" {
     try std.testing.expectEqual(FileState.modified, snapshot.stateForPath("src/main.zig").?);
     try std.testing.expectEqual(FileState.untracked, snapshot.stateForPath("./notes.md").?);
     try std.testing.expectEqual(FileState.ignored, snapshot.stateForPath("zig-out").?);
+}
+
+test "git snapshot equality compares branch root and entries" {
+    const allocator = std.testing.allocator;
+    var lhs = Snapshot.init(allocator);
+    defer lhs.deinit();
+    var rhs = Snapshot.init(allocator);
+    defer rhs.deinit();
+
+    lhs.root_path = try allocator.dupe(u8, "/repo");
+    rhs.root_path = try allocator.dupe(u8, "/repo");
+    lhs.branch = try allocator.dupe(u8, "main");
+    rhs.branch = try allocator.dupe(u8, "main");
+    try lhs.put("src/main.zig", .modified);
+    try rhs.put("src/main.zig", .modified);
+
+    try std.testing.expect(lhs.eql(&rhs));
+    try rhs.put("README.md", .untracked);
+    try std.testing.expect(!lhs.eql(&rhs));
 }

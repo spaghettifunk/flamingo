@@ -45,6 +45,40 @@ const CursorMoveState = struct {
     gutter_width: usize,
 };
 
+const StatusFieldCache = struct {
+    terminal_col: usize = 0,
+    width: usize = 0,
+    valid: bool = false,
+};
+
+const StatusLayoutCache = struct {
+    width: usize = 0,
+    height: usize = 0,
+    cursor: StatusFieldCache = .{},
+    percent: StatusFieldCache = .{},
+    last_cursor_row: usize = 0,
+    last_cursor_col: usize = 0,
+    last_percent: usize = 0,
+    valid: bool = false,
+
+    fn invalidate(self: *StatusLayoutCache) void {
+        self.* = .{};
+    }
+};
+
+const RightStatusLayout = struct {
+    text: []const u8,
+    cursor_offset: usize = 0,
+    cursor_width: usize = 0,
+    cursor_valid: bool = false,
+    percent_offset: usize = 0,
+    percent_width: usize = 0,
+    percent_valid: bool = false,
+    cursor_row: usize = 0,
+    cursor_col: usize = 0,
+    percent: usize = 0,
+};
+
 const RenderContext = struct {
     tab: ?*Tab,
     buf_start_col: usize,
@@ -120,9 +154,14 @@ pub const Editor = struct {
     should_quit: bool = false,
     is_deinitialized: bool = false,
     last_status_minute: i64 = -1,
+    status_cache: StatusLayoutCache = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
-        var runtime = try runtime_mod.EditorRuntime.init(allocator, io);
+        return initWithRuntimeOptions(allocator, io, cfg, .{});
+    }
+
+    pub fn initWithRuntimeOptions(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, runtime_options: runtime_mod.EditorRuntime.Options) !Editor {
+        var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
 
         return Editor{
@@ -198,6 +237,7 @@ pub const Editor = struct {
         self.state.render_dirty = true;
         if (invalidation == .full) {
             self.state.force_full_render = true;
+            self.status_cache.invalidate();
         }
         self.renderer.screen_renderer.invalidate(invalidation);
     }
@@ -385,6 +425,13 @@ pub const Editor = struct {
                     try self.handleLspEvent(msg.plugin_name, msg.message);
                 },
                 .git_status_snapshot => |snapshot| {
+                    if (self.state.git_snapshot) |*old| {
+                        if (old.eql(&snapshot)) {
+                            var duplicate = snapshot;
+                            duplicate.deinit();
+                            continue;
+                        }
+                    }
                     if (self.state.git_snapshot) |*old| old.deinit();
                     self.state.git_snapshot = snapshot;
                     self.markDirty(.partial);
@@ -632,32 +679,49 @@ pub const Editor = struct {
 
     fn renderFastStatusRightLegacy(self: *Editor, writer: anytype, tab: ?*Tab) !void {
         if (self.height == 0 or self.width == 0) return;
-
-        const window_width = @min(self.width, @as(usize, 56));
-        const start_col = self.width - window_width;
-
-        try terminal.moveCursor(writer, self.height, start_col + 1);
-        try writer.writeAll(render_mod.RenderStyle.status_bg.ansi());
-        for (0..window_width) |_| try writer.writeByte(' ');
-
-        var right_buf: [192]u8 = undefined;
-        const right = self.buildRightStatus(tab, &right_buf) catch "";
-        const right_cells = render_mod.displayCellCount(right);
-        const total_cells = @min(window_width, right_cells + 1);
-        const gap = window_width - total_cells;
-
-        try terminal.moveCursor(writer, self.height, start_col + 1);
-        try writer.writeAll(render_mod.RenderStyle.status_bg.ansi());
-        for (0..gap) |_| try writer.writeByte(' ');
-
-        var written = start_col + gap;
-        if (written < self.width) {
-            try writer.writeAll(render_mod.RenderStyle.status_sep_right.ansi());
-            try writer.writeAll("");
-            written += 1;
+        const t = tab orelse return;
+        if (!self.status_cache.valid or
+            self.status_cache.width != self.width or
+            self.status_cache.height != self.height or
+            !self.status_cache.cursor.valid)
+        {
+            try self.renderStatusLineLegacyStyle(writer, tab);
+            return;
         }
+
+        const mc = t.mainCursor();
+        const total_lines = t.buf.lines.items.len;
+        const pct = statusScrollPercent(mc.row, total_lines);
+
+        if (self.status_cache.percent.valid and pct != self.status_cache.last_percent) {
+            var pct_buf: [8]u8 = undefined;
+            const pct_text = std.fmt.bufPrint(&pct_buf, "{d}%", .{pct}) catch "";
+            try self.writeFastStatusField(writer, self.status_cache.percent, pct_text);
+            self.status_cache.last_percent = pct;
+        }
+
+        var cursor_buf: [32]u8 = undefined;
+        const cursor_text = std.fmt.bufPrint(&cursor_buf, "{d}:{d}", .{ mc.row + 1, mc.col + 1 }) catch "";
+        try self.writeFastStatusField(writer, self.status_cache.cursor, cursor_text);
+        self.status_cache.last_cursor_row = mc.row;
+        self.status_cache.last_cursor_col = mc.col;
+    }
+
+    fn writeFastStatusField(self: *Editor, writer: anytype, field: StatusFieldCache, text: []const u8) !void {
+        if (!field.valid or field.width == 0 or field.terminal_col == 0) return;
+        try terminal.moveCursor(writer, self.height, field.terminal_col);
         try writer.writeAll(render_mod.RenderStyle.status_right.ansi());
-        try writeClippedLegacy(writer, right, self.width - written, &written);
+
+        var written: usize = 0;
+        var i: usize = 0;
+        while (i < text.len and written < field.width) : (written += 1) {
+            const len = @min(render_mod.utf8CellLen(text[i]), text.len - i);
+            try writer.writeAll(text[i .. i + len]);
+            i += len;
+        }
+        while (written < field.width) : (written += 1) {
+            try writer.writeByte(' ');
+        }
         try writer.writeAll("\x1b[0m");
     }
 
@@ -690,8 +754,8 @@ pub const Editor = struct {
         try terminal.clearLine(writer);
 
         var right_buf: [192]u8 = undefined;
-        const right = self.buildRightStatus(tab, &right_buf) catch "";
-        const right_cells = render_mod.displayCellCount(right);
+        const right = self.buildRightStatusLayout(tab, &right_buf) catch RightStatusLayout{ .text = "" };
+        const right_cells = render_mod.displayCellCount(right.text);
         const right_reserve = @min(self.width, right_cells + 1);
         const left_limit = self.width -| right_reserve;
 
@@ -826,9 +890,12 @@ pub const Editor = struct {
         try writeLegacyStyledClipped(writer, .status_sep_context, "", cells, max_cells);
     }
 
-    fn writeStatusRightLegacy(self: *Editor, writer: anytype, right: []const u8, left_cells: usize) !void {
-        if (left_cells >= self.width) return;
-        const right_cells = render_mod.displayCellCount(right);
+    fn writeStatusRightLegacy(self: *Editor, writer: anytype, right: RightStatusLayout, left_cells: usize) !void {
+        if (left_cells >= self.width) {
+            self.status_cache.invalidate();
+            return;
+        }
+        const right_cells = render_mod.displayCellCount(right.text);
         const available = self.width - left_cells;
         const need = right_cells + 1;
         const gap = available -| need;
@@ -841,7 +908,10 @@ pub const Editor = struct {
             written += 1;
         }
         try writer.writeAll(render_mod.RenderStyle.status_right.ansi());
-        try writeClippedLegacy(writer, right, self.width - written, &written);
+        const text_start_terminal_col = written + 1;
+        const text_available = self.width - written;
+        self.cacheRightStatusLayout(right, text_start_terminal_col, text_available);
+        try writeClippedLegacy(writer, right.text, text_available, &written);
     }
 
     fn writeClippedLegacy(writer: anytype, text: []const u8, max_cells: usize, cells: *usize) !void {
@@ -855,20 +925,108 @@ pub const Editor = struct {
         cells.* += written;
     }
 
+    fn cacheRightStatusLayout(self: *Editor, right: RightStatusLayout, text_start_terminal_col: usize, text_available: usize) void {
+        self.status_cache = .{
+            .width = self.width,
+            .height = self.height,
+            .last_cursor_row = right.cursor_row,
+            .last_cursor_col = right.cursor_col,
+            .last_percent = right.percent,
+            .valid = true,
+        };
+        if (right.cursor_valid and right.cursor_offset + right.cursor_width <= text_available) {
+            self.status_cache.cursor = .{
+                .terminal_col = text_start_terminal_col + right.cursor_offset,
+                .width = right.cursor_width,
+                .valid = true,
+            };
+        }
+        if (right.percent_valid and right.percent_offset + right.percent_width <= text_available) {
+            self.status_cache.percent = .{
+                .terminal_col = text_start_terminal_col + right.percent_offset,
+                .width = right.percent_width,
+                .valid = true,
+            };
+        }
+    }
+
     fn buildRightStatus(self: *Editor, tab: ?*Tab, buf: *[192]u8) ![]const u8 {
+        return (try self.buildRightStatusLayout(tab, buf)).text;
+    }
+
+    fn buildRightStatusLayout(self: *Editor, tab: ?*Tab, buf: *[192]u8) !RightStatusLayout {
+        const cursor_field_width = 12;
+        const percent_field_width = 4;
+
+        var layout = RightStatusLayout{ .text = "" };
+        var idx: usize = 0;
+        var cells: usize = 0;
+
         var clock_buf: [16]u8 = undefined;
         const clock = self.clockText(&clock_buf);
         if (tab) |t| {
             const mc = t.mainCursor();
             const total_lines = t.buf.lines.items.len;
-            const pct = if (total_lines <= 1) 100 else @min(@as(usize, 100), ((mc.row + 1) * 100) / total_lines);
+            const pct = statusScrollPercent(mc.row, total_lines);
             const diag_count = if (t.buf.filename) |fname| self.state.lsp_ui.diagnosticCountForFile(fname) else 0;
             if (diag_count > 0) {
-                return try std.fmt.bufPrint(buf, "  {d}  ◇ {d}  {d}%  {d}:{d}  {s} ", .{ diag_count, total_lines, pct, mc.row + 1, mc.col + 1, clock });
+                try appendStatusFmt(buf, &idx, &cells, "  {d}  ", .{diag_count});
             }
-            return try std.fmt.bufPrint(buf, " ◇ {d}  {d}%  {d}:{d}  {s} ", .{ total_lines, pct, mc.row + 1, mc.col + 1, clock });
+            try appendStatusFmt(buf, &idx, &cells, "◇ {d}  ", .{total_lines});
+
+            layout.percent_offset = cells;
+            layout.percent_width = percent_field_width;
+            layout.percent_valid = true;
+            layout.percent = pct;
+            try appendStatusFieldFmt(buf, &idx, &cells, percent_field_width, "{d}%", .{pct});
+            try appendStatusText(buf, &idx, &cells, "  ");
+
+            layout.cursor_offset = cells;
+            layout.cursor_width = cursor_field_width;
+            layout.cursor_valid = true;
+            layout.cursor_row = mc.row;
+            layout.cursor_col = mc.col;
+            try appendStatusFieldFmt(buf, &idx, &cells, cursor_field_width, "{d}:{d}", .{ mc.row + 1, mc.col + 1 });
+            try appendStatusFmt(buf, &idx, &cells, "  {s} ", .{clock});
+
+            layout.text = buf[0..idx];
+            return layout;
         }
-        return try std.fmt.bufPrint(buf, " {s} ", .{clock});
+        try appendStatusFmt(buf, &idx, &cells, " {s} ", .{clock});
+        layout.text = buf[0..idx];
+        return layout;
+    }
+
+    fn appendStatusText(buf: *[192]u8, idx: *usize, cells: *usize, text: []const u8) !void {
+        if (idx.* + text.len > buf.len) return error.NoSpaceLeft;
+        @memcpy(buf[idx.* .. idx.* + text.len], text);
+        idx.* += text.len;
+        cells.* += render_mod.displayCellCount(text);
+    }
+
+    fn appendStatusFmt(buf: *[192]u8, idx: *usize, cells: *usize, comptime fmt: []const u8, args: anytype) !void {
+        const part = try std.fmt.bufPrint(buf[idx.*..], fmt, args);
+        idx.* += part.len;
+        cells.* += render_mod.displayCellCount(part);
+    }
+
+    fn appendStatusFieldFmt(buf: *[192]u8, idx: *usize, cells: *usize, width: usize, comptime fmt: []const u8, args: anytype) !void {
+        const part = try std.fmt.bufPrint(buf[idx.*..], fmt, args);
+        idx.* += part.len;
+        const part_cells = render_mod.displayCellCount(part);
+        cells.* += part_cells;
+        if (part_cells < width) {
+            const pad = width - part_cells;
+            if (idx.* + pad > buf.len) return error.NoSpaceLeft;
+            @memset(buf[idx.* .. idx.* + pad], ' ');
+            idx.* += pad;
+            cells.* += pad;
+        }
+    }
+
+    fn statusScrollPercent(row: usize, total_lines: usize) usize {
+        if (total_lines <= 1) return 100;
+        return @min(@as(usize, 100), ((row + 1) * 100) / total_lines);
     }
 
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
@@ -2128,12 +2286,15 @@ pub const Editor = struct {
         self.writeVirtualStatusLeft(row, &col, ctx.tab);
 
         var right_buf: [192]u8 = undefined;
-        const right = self.buildRightStatus(ctx.tab, &right_buf) catch "";
-        const right_cells = render_mod.displayCellCount(right) + 1;
+        const right = self.buildRightStatusLayout(ctx.tab, &right_buf) catch RightStatusLayout{ .text = "" };
+        const right_cells = render_mod.displayCellCount(right.text) + 1;
         if (right_cells < self.width) {
             const start = self.width - right_cells;
             self.renderer.screen.writeText(row, start, "", .status_sep_right);
-            self.renderer.screen.writeText(row, start + 1, right, .status_right);
+            self.renderer.screen.writeText(row, start + 1, right.text, .status_right);
+            self.cacheRightStatusLayout(right, start + 2, right_cells - 1);
+        } else {
+            self.status_cache.invalidate();
         }
     }
 
@@ -2741,10 +2902,66 @@ test "fast cursor move output stays small and updates status only" {
     try ed.renderFastCursorMove(&out.writer, before);
 
     const rendered = out.written();
-    try std.testing.expect(rendered.len < 650);
+    try std.testing.expect(rendered.len < 300);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "2:1") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "alpha") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "beta") == null);
+}
+
+test "fast cursor move overwrites wider cursor position in cached field" {
+    var ed = try makeFastMoveTestEditorWithLineCount(std.testing.allocator, 12);
+    defer ed.deinit();
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 8;
+    tab.mainCursor().col = 0;
+    tab.scroll_row = 0;
+    try ed.renderBenchmarkFrame(&out.writer);
+    out.clearRetainingCapacity();
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_down);
+    try std.testing.expect(ed.canFastRenderCursorMove(before));
+    try ed.renderFastCursorMove(&out.writer, before);
+
+    const rendered = out.written();
+    try std.testing.expect(rendered.len < 300);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "10:1") != null);
+}
+
+test "fast cursor move does not repaint stable status segments" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    try ed.currentTab().?.buf.setFilename("src/config.zig");
+    var snapshot = @import("git_status.zig").Snapshot.init(std.testing.allocator);
+    snapshot.branch = try std.testing.allocator.dupe(u8, "main");
+    ed.state.git_snapshot = snapshot;
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 1;
+    tab.mainCursor().col = 0;
+    tab.scroll_row = 0;
+    try ed.renderBenchmarkFrame(&out.writer);
+    out.clearRetainingCapacity();
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_right);
+    try std.testing.expect(ed.canFastRenderCursorMove(before));
+    try ed.renderFastCursorMove(&out.writer, before);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "2:2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "src/config.zig") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "◇") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "") == null);
 }
 
 test "LSP helper rejects malformed diagnostics and completions" {
@@ -2777,6 +2994,10 @@ test "completion trigger is limited to buffer editing modes" {
 }
 
 fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
+    return makeFastMoveTestEditorWithLineCount(allocator, 4);
+}
+
+fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count: usize) !Editor {
     var ed = try Editor.init(allocator, std.testing.io, .{});
     errdefer ed.deinit();
 
@@ -2785,8 +3006,9 @@ fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
     var first = buf.lines.orderedRemove(0);
     first.deinit();
 
-    const lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
-    for (lines) |line| {
+    const seed_lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
+    for (0..line_count) |i| {
+        const line = if (i < seed_lines.len) seed_lines[i] else "filler";
         try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
     }
 
