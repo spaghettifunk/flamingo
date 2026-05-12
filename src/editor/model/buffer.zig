@@ -141,6 +141,11 @@ pub const Line = struct {
         try writer.writeAll(self.buf[self.gap_end .. self.gap_end + right_len]);
     }
 
+    pub fn appendToList(self: *const Line, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) !void {
+        try out.appendSlice(allocator, self.buf[0..self.gap_start]);
+        try out.appendSlice(allocator, self.buf[self.gap_end..]);
+    }
+
     pub fn writeRange(self: *const Line, writer: anytype, start: usize, max_len: usize) !void {
         const line_len = self.len();
         if (start >= line_len or max_len == 0) return;
@@ -334,11 +339,8 @@ pub const Buffer = struct {
         errdefer out.deinit(self.allocator);
 
         for (self.lines.items, 0..) |*line, i| {
-            const data = try line.slice(self.allocator);
-            defer self.allocator.free(data);
-
             if (i > 0) try out.append(self.allocator, '\n');
-            try out.appendSlice(self.allocator, data);
+            try line.appendToList(self.allocator, &out);
         }
 
         return out.toOwnedSlice(self.allocator);
@@ -536,9 +538,7 @@ pub const Buffer = struct {
         var out = std.ArrayList(u8).empty;
         errdefer out.deinit(allocator);
         for (self.lines.items) |*line| {
-            const data = try line.slice(allocator);
-            defer allocator.free(data);
-            try out.appendSlice(allocator, data);
+            try line.appendToList(allocator, &out);
             try out.append(allocator, '\n');
         }
         return out.toOwnedSlice(allocator);
@@ -947,4 +947,22 @@ test "Buffer text snapshot preserves trailing newline contract" {
     const snapshot = try buf.toOwnedTextSnapshot(allocator);
     defer allocator.free(snapshot);
     try std.testing.expectEqualStrings("a\nb\n", snapshot);
+}
+
+test "Buffer snapshots append line gap segments without temporary line copies" {
+    const allocator = std.testing.allocator;
+    var buf = try Buffer.init(allocator);
+    defer buf.deinit();
+
+    try buf.insertChar(0, 0, 'a');
+    try buf.insertChar(0, 1, 'c');
+    try buf.insertChar(0, 1, 'b');
+
+    const undo_snapshot = try buf.snapshot();
+    defer allocator.free(undo_snapshot);
+    try std.testing.expectEqualStrings("abc", undo_snapshot);
+
+    const text_snapshot = try buf.toOwnedTextSnapshot(allocator);
+    defer allocator.free(text_snapshot);
+    try std.testing.expectEqualStrings("abc\n", text_snapshot);
 }

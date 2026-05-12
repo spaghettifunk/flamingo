@@ -20,12 +20,14 @@ const filesystem_picker = @import("filesystem_picker.zig");
 const prompt_popup = @import("prompt_popup.zig");
 
 const max_fifo_events_per_idle_tick = 8;
+const syntax_parse_idle_delay_ns = 50 * std.time.ns_per_ms;
 
 pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
 pub const Cursor = tab_mod.Cursor;
 pub const Tab = tab_mod.Tab;
 pub const ResolvedKeybindings = keybindings.ResolvedKeybindings;
+const FastCursorRejectReason = perf.FastCursorRejectReason;
 
 const CursorMoveState = struct {
     row: usize,
@@ -292,6 +294,7 @@ pub const Editor = struct {
         var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &render_buffer);
         defer aw.deinit();
         const writer = &aw.writer;
+        var last_input_ns: ?u64 = null;
 
         while (!self.should_quit) {
             const loop_start = perf.nowNs();
@@ -327,9 +330,12 @@ pub const Editor = struct {
                 metrics.add(.update_state, update_elapsed);
                 metrics.input_to_update_ns += update_end - read_start;
                 last_update_end_ns = update_end;
+                last_input_ns = update_end;
 
                 if (self.should_quit) break;
-                if (!render_after_event) break;
+                // Paint after each input event. Cursor-repeat streams should not
+                // wait for a large nonblocking-read batch before becoming visible.
+                break;
             }
 
             if (!handled_input) {
@@ -349,7 +355,9 @@ pub const Editor = struct {
                 var rendered_fast_cursor = false;
                 if (fast_cursor_candidate) {
                     if (first_fast_cursor_before) |before| {
-                        if (self.canFastRenderCursorMove(before)) {
+                        if (self.fastCursorMoveRejectReason(before)) |reason| {
+                            metrics.recordFastCursorReject(reason);
+                        } else {
                             const frame_start = perf.nowNs();
                             try self.renderFastCursorMove(writer, before);
                             metrics.add(.build_frame, perf.elapsedNs(frame_start));
@@ -357,6 +365,8 @@ pub const Editor = struct {
                             metrics.render_kind = .fast_cursor;
                             rendered_fast_cursor = true;
                         }
+                    } else if (metrics.cursor_move_events > 0) {
+                        metrics.recordFastCursorReject(.no_active_tab);
                     }
                 }
 
@@ -393,7 +403,13 @@ pub const Editor = struct {
 
             if (!handled_input) {
                 const syntax_request_start = perf.nowNs();
-                try self.queueSyntaxParseForCurrentTab();
+                const can_queue_syntax = if (last_input_ns) |last_input|
+                    syntax_request_start - last_input >= syntax_parse_idle_delay_ns
+                else
+                    true;
+                if (can_queue_syntax) {
+                    try self.queueSyntaxParseForCurrentTab();
+                }
                 metrics.add(.update_state, perf.elapsedNs(syntax_request_start));
             }
 
@@ -627,35 +643,39 @@ pub const Editor = struct {
     }
 
     fn canFastRenderCursorMove(self: *Editor, before: CursorMoveState) bool {
-        if (before.mode != .Normal and before.mode != .Insert) return false;
-        if (self.state.mode != .Normal and self.state.mode != .Insert) return false;
-        if (before.cursor_count != 1) return false;
-        if (before.had_selection) return false;
-        if (self.state.tabs.items.len != before.tab_count) return false;
-        if (self.state.active_tab_index != before.active_tab_index) return false;
-        if (self.width != before.width or self.height != before.height) return false;
-        if (self.state.explorer_focused) return false;
-        if (self.state.tree) |tree| {
-            if (tree.search_active) return false;
-        }
-        if (self.state.lsp_ui.completion_active) return false;
-        if (self.state.search_buffer.items.len > 0) return false;
+        return self.fastCursorMoveRejectReason(before) == null;
+    }
 
-        const tab = self.currentTab() orelse return false;
-        if (&tab.buf != before.buffer_ptr) return false;
-        if (tab.scroll_row != before.scroll_row) return false;
-        if (tab.cursors.items.len != 1) return false;
-        if (tab.main_cursor_idx != 0) return false;
+    fn fastCursorMoveRejectReason(self: *Editor, before: CursorMoveState) ?FastCursorRejectReason {
+        if (before.mode != .Normal and before.mode != .Insert) return .mode;
+        if (self.state.mode != .Normal and self.state.mode != .Insert) return .mode;
+        if (before.cursor_count != 1) return .multiple_cursors;
+        if (before.had_selection) return .selection_active;
+        if (self.state.tabs.items.len != before.tab_count) return .tab_changed;
+        if (self.state.active_tab_index != before.active_tab_index) return .tab_changed;
+        if (self.width != before.width or self.height != before.height) return .viewport_changed;
+        if (self.state.explorer_focused) return .explorer_focused;
+        if (self.state.tree) |tree| {
+            if (tree.search_active) return .explorer_search_active;
+        }
+        if (self.state.lsp_ui.completion_active) return .completion_active;
+        if (self.state.search_buffer.items.len > 0) return .search_active;
+
+        const tab = self.currentTab() orelse return .no_active_tab;
+        if (&tab.buf != before.buffer_ptr) return .tab_changed;
+        if (tab.scroll_row != before.scroll_row) return .viewport_scrolled;
+        if (tab.cursors.items.len != 1) return .multiple_cursors;
+        if (tab.main_cursor_idx != 0) return .multiple_cursors;
 
         const mc = tab.mainCursor();
         const viewport = self.bufferViewportGeometry();
-        if (viewport.start_col != before.buf_start_col or viewport.width != before.buf_width) return false;
-        if (mc.selection_start != null) return false;
-        if (mc.row == before.row and mc.col == before.col) return false;
-        if (before.row < tab.scroll_row or before.row >= tab.scroll_row + before.visible_rows) return false;
-        if (mc.row < tab.scroll_row or mc.row >= tab.scroll_row + before.visible_rows) return false;
+        if (viewport.start_col != before.buf_start_col or viewport.width != before.buf_width) return .viewport_changed;
+        if (mc.selection_start != null) return .selection_active;
+        if (mc.row == before.row and mc.col == before.col) return .no_movement;
+        if (before.row < tab.scroll_row or before.row >= tab.scroll_row + before.visible_rows) return .cursor_outside_viewport;
+        if (mc.row < tab.scroll_row or mc.row >= tab.scroll_row + before.visible_rows) return .cursor_outside_viewport;
 
-        return true;
+        return null;
     }
 
     fn renderFastCursorMove(self: *Editor, writer: anytype, before: CursorMoveState) !void {
@@ -1030,8 +1050,6 @@ pub const Editor = struct {
     }
 
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
-        logz.debug().fmt("msg", "key event: key={s}, char={c}, ctrl={}, alt={}", .{ @tagName(event.key), event.char, event.ctrl, event.alt }).log();
-
         if (event.eql(self.keys.quit)) {
             self.should_quit = true;
             self.markDirty(.full);
@@ -2793,6 +2811,20 @@ test "fast cursor move eligibility accepts plain movement inside viewport" {
     }
 }
 
+test "fast cursor move reject reason is null for eligible movement" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 1;
+    tab.mainCursor().col = 1;
+    tab.scroll_row = 0;
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_right);
+    try std.testing.expectEqual(@as(?FastCursorRejectReason, null), ed.fastCursorMoveRejectReason(before));
+}
+
 test "fast cursor move eligibility rejects scrolling movement" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
@@ -2805,6 +2837,7 @@ test "fast cursor move eligibility rejects scrolling movement" {
     const before = ed.captureCursorMoveState().?;
     try input.handleInput(&ed, ed.keys.move_down);
     try std.testing.expect(!ed.canFastRenderCursorMove(before));
+    try std.testing.expectEqual(@as(?FastCursorRejectReason, FastCursorRejectReason.viewport_scrolled), ed.fastCursorMoveRejectReason(before));
 }
 
 test "fast cursor move eligibility rejects active overlays and complex cursors" {
@@ -2819,6 +2852,7 @@ test "fast cursor move eligibility rejects active overlays and complex cursors" 
         const before = ed.captureCursorMoveState().?;
         try input.handleInput(&ed, ed.keys.move_right);
         try std.testing.expect(!ed.canFastRenderCursorMove(before));
+        try std.testing.expectEqual(@as(?FastCursorRejectReason, FastCursorRejectReason.selection_active), ed.fastCursorMoveRejectReason(before));
         tab.mainCursor().selection_start = null;
     }
 
@@ -2828,6 +2862,7 @@ test "fast cursor move eligibility rejects active overlays and complex cursors" 
         const before = ed.captureCursorMoveState().?;
         try input.handleInput(&ed, ed.keys.move_right);
         try std.testing.expect(!ed.canFastRenderCursorMove(before));
+        try std.testing.expectEqual(@as(?FastCursorRejectReason, FastCursorRejectReason.multiple_cursors), ed.fastCursorMoveRejectReason(before));
         _ = tab.cursors.pop();
     }
 
@@ -2837,12 +2872,13 @@ test "fast cursor move eligibility rejects active overlays and complex cursors" 
         explorer_focused: bool = false,
         completion_active: bool = false,
         search_text: []const u8 = "",
+        reason: FastCursorRejectReason,
     }{
-        .{ .explorer_visible = true, .explorer_focused = true },
-        .{ .completion_active = true },
-        .{ .search_text = "needle" },
-        .{ .mode = .Command },
-        .{ .mode = .Search },
+        .{ .explorer_visible = true, .explorer_focused = true, .reason = .explorer_focused },
+        .{ .completion_active = true, .reason = .completion_active },
+        .{ .search_text = "needle", .reason = .search_active },
+        .{ .mode = .Command, .reason = .mode },
+        .{ .mode = .Search, .reason = .mode },
     };
 
     for (rejection_cases) |case| {
@@ -2862,6 +2898,7 @@ test "fast cursor move eligibility rejects active overlays and complex cursors" 
             try input.handleInput(&ed, ed.keys.move_right);
         }
         try std.testing.expect(!ed.canFastRenderCursorMove(before));
+        try std.testing.expectEqual(@as(?FastCursorRejectReason, case.reason), ed.fastCursorMoveRejectReason(before));
     }
 }
 

@@ -11,11 +11,13 @@ pub const Snapshot = struct {
     root_path: ?[]u8 = null,
     branch: ?[]u8 = null,
     entries: std.StringHashMap(FileState),
+    directories: std.StringHashMap(FileState),
 
     pub fn init(allocator: std.mem.Allocator) Snapshot {
         return .{
             .allocator = allocator,
             .entries = std.StringHashMap(FileState).init(allocator),
+            .directories = std.StringHashMap(FileState).init(allocator),
         };
     }
 
@@ -34,6 +36,13 @@ pub const Snapshot = struct {
         }
         self.entries.deinit();
         self.entries = std.StringHashMap(FileState).init(self.allocator);
+
+        var dir_it = self.directories.iterator();
+        while (dir_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.directories.deinit();
+        self.directories = std.StringHashMap(FileState).init(self.allocator);
     }
 
     pub fn put(self: *Snapshot, path: []const u8, state: FileState) !void {
@@ -42,28 +51,24 @@ pub const Snapshot = struct {
         while (normalized.len > 0 and normalized[normalized.len - 1] == '/') normalized = normalized[0 .. normalized.len - 1];
         if (normalized.len == 0) return;
 
-        const owned = try self.allocator.dupe(u8, normalized);
-        var key_owned = true;
-        errdefer if (key_owned) self.allocator.free(owned);
-
-        const entry = try self.entries.getOrPut(owned);
-        if (entry.found_existing) {
-            self.allocator.free(owned);
-            key_owned = false;
-        } else {
-            key_owned = false;
-        }
-        entry.value_ptr.* = if (entry.found_existing) mergeState(entry.value_ptr.*, state) else state;
+        try putMerged(&self.entries, self.allocator, normalized, state);
+        try self.putDirectoryAncestors(normalized, state);
     }
 
     pub fn eql(self: *const Snapshot, other: *const Snapshot) bool {
         if (!optionalBytesEql(self.root_path, other.root_path)) return false;
         if (!optionalBytesEql(self.branch, other.branch)) return false;
         if (self.entries.count() != other.entries.count()) return false;
+        if (self.directories.count() != other.directories.count()) return false;
 
         var it = self.entries.iterator();
         while (it.next()) |entry| {
             const other_state = other.entries.get(entry.key_ptr.*) orelse return false;
+            if (other_state != entry.value_ptr.*) return false;
+        }
+        var dir_it = self.directories.iterator();
+        while (dir_it.next()) |entry| {
+            const other_state = other.directories.get(entry.key_ptr.*) orelse return false;
             if (other_state != entry.value_ptr.*) return false;
         }
         return true;
@@ -85,18 +90,18 @@ pub const Snapshot = struct {
         while (rel.len > 0 and rel[rel.len - 1] == '/') rel = rel[0 .. rel.len - 1];
 
         if (self.entries.get(rel)) |state| return state;
-
-        // Directories sometimes need to inherit from a tracked descendant.
-        var it = self.entries.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.startsWith(u8, entry.key_ptr.*, rel) and
-                entry.key_ptr.*.len > rel.len and
-                entry.key_ptr.*[rel.len] == '/')
-            {
-                return entry.value_ptr.*;
-            }
-        }
+        if (self.directories.get(rel)) |state| return state;
         return null;
+    }
+
+    fn putDirectoryAncestors(self: *Snapshot, path: []const u8, state: FileState) !void {
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, path, start, '/')) |slash| {
+            if (slash > 0) {
+                try putMerged(&self.directories, self.allocator, path[0..slash], state);
+            }
+            start = slash + 1;
+        }
     }
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io) !Snapshot {
@@ -147,6 +152,19 @@ fn mergeState(old: FileState, new: FileState) FileState {
     return .ignored;
 }
 
+fn putMerged(map: *std.StringHashMap(FileState), allocator: std.mem.Allocator, key: []const u8, state: FileState) !void {
+    const owned = try allocator.dupe(u8, key);
+    errdefer allocator.free(owned);
+
+    const entry = try map.getOrPut(owned);
+    if (entry.found_existing) {
+        allocator.free(owned);
+        entry.value_ptr.* = mergeState(entry.value_ptr.*, state);
+    } else {
+        entry.value_ptr.* = state;
+    }
+}
+
 fn stateFromStatus(status: []const u8) ?FileState {
     if (status.len < 2) return null;
     if (status[0] == '!' and status[1] == '!') return .ignored;
@@ -188,6 +206,7 @@ test "git porcelain snapshot parses branch and states" {
 
     try std.testing.expectEqualStrings("main", snapshot.branch.?);
     try std.testing.expectEqual(FileState.modified, snapshot.stateForPath("src/main.zig").?);
+    try std.testing.expectEqual(FileState.modified, snapshot.stateForPath("src").?);
     try std.testing.expectEqual(FileState.untracked, snapshot.stateForPath("./notes.md").?);
     try std.testing.expectEqual(FileState.ignored, snapshot.stateForPath("zig-out").?);
 }

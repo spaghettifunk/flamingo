@@ -32,10 +32,47 @@ pub const RenderKind = enum {
     full,
 };
 
+pub const FastCursorRejectReason = enum {
+    mode,
+    selection_active,
+    multiple_cursors,
+    tab_changed,
+    viewport_changed,
+    viewport_scrolled,
+    explorer_focused,
+    explorer_search_active,
+    completion_active,
+    search_active,
+    no_active_tab,
+    no_movement,
+    cursor_outside_viewport,
+
+    pub fn name(self: FastCursorRejectReason) []const u8 {
+        return switch (self) {
+            .mode => "mode",
+            .selection_active => "selection",
+            .multiple_cursors => "multi_cursor",
+            .tab_changed => "tab_changed",
+            .viewport_changed => "viewport_changed",
+            .viewport_scrolled => "viewport_scrolled",
+            .explorer_focused => "explorer_focused",
+            .explorer_search_active => "explorer_search",
+            .completion_active => "completion",
+            .search_active => "search",
+            .no_active_tab => "no_tab",
+            .no_movement => "no_movement",
+            .cursor_outside_viewport => "outside_viewport",
+        };
+    }
+};
+
+pub const FastCursorRejectReasonCount = @typeInfo(FastCursorRejectReason).@"enum".fields.len;
+
 pub const FrameMetrics = struct {
     phases_ns: [PhaseCount]u64 = [_]u64{0} ** PhaseCount,
     rendered: bool = false,
     fast_cursor_move: bool = false,
+    fast_cursor_rejects: [FastCursorRejectReasonCount]u64 = [_]u64{0} ** FastCursorRejectReasonCount,
     render_kind: RenderKind = .none,
     bytes_emitted: usize = 0,
     input_events: usize = 0,
@@ -51,6 +88,10 @@ pub const FrameMetrics = struct {
     pub fn get(self: *const FrameMetrics, phase: Phase) u64 {
         return self.phases_ns[@intFromEnum(phase)];
     }
+
+    pub fn recordFastCursorReject(self: *FrameMetrics, reason: FastCursorRejectReason) void {
+        self.fast_cursor_rejects[@intFromEnum(reason)] += 1;
+    }
 };
 
 pub const PerfSampler = struct {
@@ -65,6 +106,7 @@ pub const PerfSampler = struct {
     sample_cursor_move_events: u64 = 0,
     sample_write_count: u64 = 0,
     sample_render_kinds: [@typeInfo(RenderKind).@"enum".fields.len]u64 = [_]u64{0} ** @typeInfo(RenderKind).@"enum".fields.len,
+    sample_fast_cursor_rejects: [FastCursorRejectReasonCount]u64 = [_]u64{0} ** FastCursorRejectReasonCount,
     total_input_to_update_ns: u128 = 0,
     total_update_to_flush_ns: u128 = 0,
     totals_ns: [PhaseCount]u128 = [_]u128{0} ** PhaseCount,
@@ -98,6 +140,9 @@ pub const PerfSampler = struct {
         self.sample_cursor_move_events += metrics.cursor_move_events;
         self.sample_write_count += metrics.write_count;
         self.sample_render_kinds[@intFromEnum(metrics.render_kind)] += 1;
+        inline for (@typeInfo(FastCursorRejectReason).@"enum".fields) |field| {
+            self.sample_fast_cursor_rejects[field.value] += metrics.fast_cursor_rejects[field.value];
+        }
         self.total_input_to_update_ns += metrics.input_to_update_ns;
         self.total_update_to_flush_ns += metrics.update_to_flush_ns;
 
@@ -159,6 +204,41 @@ pub const PerfSampler = struct {
             )
             .log();
 
+        logz.info()
+            .fmt(
+                "msg",
+                "perf fast_cursor_reject {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d} {s}={d}",
+                .{
+                    FastCursorRejectReason.mode.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.mode)],
+                    FastCursorRejectReason.selection_active.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.selection_active)],
+                    FastCursorRejectReason.multiple_cursors.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.multiple_cursors)],
+                    FastCursorRejectReason.tab_changed.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.tab_changed)],
+                    FastCursorRejectReason.viewport_changed.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.viewport_changed)],
+                    FastCursorRejectReason.viewport_scrolled.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.viewport_scrolled)],
+                    FastCursorRejectReason.explorer_focused.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.explorer_focused)],
+                    FastCursorRejectReason.explorer_search_active.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.explorer_search_active)],
+                    FastCursorRejectReason.completion_active.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.completion_active)],
+                    FastCursorRejectReason.search_active.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.search_active)],
+                    FastCursorRejectReason.no_active_tab.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.no_active_tab)],
+                    FastCursorRejectReason.no_movement.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.no_movement)],
+                    FastCursorRejectReason.cursor_outside_viewport.name(),
+                    self.sample_fast_cursor_rejects[@intFromEnum(FastCursorRejectReason.cursor_outside_viewport)],
+                },
+            )
+            .log();
+
         self.sample_rendered_frames = 0;
         self.sample_fast_cursor_moves = 0;
         self.sample_loop_ticks = 0;
@@ -167,6 +247,7 @@ pub const PerfSampler = struct {
         self.sample_cursor_move_events = 0;
         self.sample_write_count = 0;
         self.sample_render_kinds = [_]u64{0} ** @typeInfo(RenderKind).@"enum".fields.len;
+        self.sample_fast_cursor_rejects = [_]u64{0} ** FastCursorRejectReasonCount;
         self.total_input_to_update_ns = 0;
         self.total_update_to_flush_ns = 0;
         self.totals_ns = [_]u128{0} ** PhaseCount;

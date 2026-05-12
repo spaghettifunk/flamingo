@@ -131,10 +131,12 @@ fn readShort(reader: anytype, buffer: []u8) !usize {
 }
 
 fn readContinuationByte(reader: anytype, buffer: []u8) !usize {
+    const max_attempts = 3;
     var attempts: usize = 0;
-    while (attempts < 3) : (attempts += 1) {
+    while (attempts < max_attempts) : (attempts += 1) {
         const n = try readShort(reader, buffer);
         if (n != 0) return n;
+        if (attempts + 1 == max_attempts) break;
         const req = std.c.timespec{
             .sec = 0,
             .nsec = std.time.ns_per_ms,

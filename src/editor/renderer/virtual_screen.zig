@@ -148,23 +148,32 @@ pub const RenderStyle = enum {
 };
 
 pub const RenderCell = struct {
-    bytes: [4]u8 = .{ ' ', 0, 0, 0 },
+    bytes: u32 = ' ',
     len: u3 = 1,
     style: RenderStyle = .normal,
 
     pub fn eql(self: RenderCell, other: RenderCell) bool {
         return self.len == other.len and
             self.style == other.style and
-            std.mem.eql(u8, self.bytes[0..self.len], other.bytes[0..other.len]);
+            self.bytes == other.bytes;
+    }
+
+    pub fn fromAscii(ch: u8, style: RenderStyle) RenderCell {
+        return .{ .bytes = ch, .len = 1, .style = style };
     }
 
     pub fn fromGlyph(glyph: []const u8, style: RenderStyle) RenderCell {
-        var cell = RenderCell{ .style = style };
-        const len = @min(glyph.len, cell.bytes.len);
-        @memcpy(cell.bytes[0..len], glyph[0..len]);
-        if (len < cell.bytes.len) @memset(cell.bytes[len..], 0);
-        cell.len = @intCast(@max(len, 1));
-        return cell;
+        if (glyph.len == 1) return fromAscii(glyph[0], style);
+        const len = @min(glyph.len, @sizeOf(u32));
+        var bytes: u32 = 0;
+        for (glyph[0..len], 0..) |byte, i| {
+            bytes |= @as(u32, byte) << @intCast(i * 8);
+        }
+        return .{ .bytes = bytes, .len = @intCast(@max(len, 1)), .style = style };
+    }
+
+    pub fn glyphBytes(self: *const RenderCell) []const u8 {
+        return std.mem.asBytes(&self.bytes)[0..self.len];
     }
 };
 
@@ -204,7 +213,7 @@ pub const VirtualScreen = struct {
 
     pub fn set(self: *VirtualScreen, row: usize, col: usize, ch: u8, style: RenderStyle) void {
         if (row >= self.height or col >= self.width) return;
-        self.cells.items[self.index(row, col)] = RenderCell.fromGlyph(&.{ch}, style);
+        self.cells.items[self.index(row, col)] = RenderCell.fromAscii(ch, style);
     }
 
     pub fn setGlyph(self: *VirtualScreen, row: usize, col: usize, glyph: []const u8, style: RenderStyle) void {
@@ -218,11 +227,16 @@ pub const VirtualScreen = struct {
         var i: usize = 0;
         while (i < text.len) {
             if (x >= self.width) break;
-            const len = utf8CellLen(text[i]);
-            const end = @min(i + len, text.len);
-            self.setGlyph(row, x, text[i..end], style);
+            if (text[i] < 0x80) {
+                self.set(row, x, text[i], style);
+                i += 1;
+            } else {
+                const len = utf8CellLen(text[i]);
+                const end = @min(i + len, text.len);
+                self.setGlyph(row, x, text[i..end], style);
+                i = end;
+            }
             x += 1;
-            i = end;
         }
     }
 
@@ -317,7 +331,7 @@ pub const VirtualScreenRenderer = struct {
                         bytes += ansi.len;
                         active_style = run_cell.style;
                     }
-                    try writer.writeAll(run_cell.bytes[0..run_cell.len]);
+                    try writer.writeAll(run_cell.glyphBytes());
                     bytes += run_cell.len;
                     self.previous.cells.items[run_idx] = run_cell;
                 }
@@ -388,8 +402,8 @@ test "virtual screen stores and emits utf8 glyph cells" {
     current.writeText(0, 0, "a", .explorer_zig);
 
     try std.testing.expectEqual(@as(usize, 2), displayCellCount("a"));
-    try std.testing.expectEqualStrings("", current.cells.items[current.index(0, 0)].bytes[0..current.cells.items[current.index(0, 0)].len]);
-    try std.testing.expectEqualStrings("a", current.cells.items[current.index(0, 1)].bytes[0..current.cells.items[current.index(0, 1)].len]);
+    try std.testing.expectEqualStrings("", current.cells.items[current.index(0, 0)].glyphBytes());
+    try std.testing.expectEqualStrings("a", current.cells.items[current.index(0, 1)].glyphBytes());
 
     var renderer = VirtualScreenRenderer.init(allocator);
     defer renderer.deinit();
