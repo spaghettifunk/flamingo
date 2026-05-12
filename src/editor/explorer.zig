@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const logz = @import("logz");
 const terminal = @import("../terminal.zig");
+const render_mod = @import("renderer/virtual_screen.zig");
+const git_status = @import("git_status.zig");
 
 pub const FileNode = struct {
     name: []const u8,
@@ -69,6 +71,7 @@ pub const Explorer = struct {
     search_results: std.ArrayList(SearchResult),
     search_selected_index: usize = 0,
     search_scroll_offset: usize = 0,
+    hidden_count: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, root_path: []const u8) !Explorer {
         if (!builtin.is_test) logz.info().fmt("msg", "initializing explorer at: {s}", .{root_path}).log();
@@ -103,12 +106,12 @@ pub const Explorer = struct {
         }
     }
 
-    fn shouldSkipEntry(name: []const u8) bool {
+    fn shouldHideEntry(name: []const u8) bool {
         return std.mem.eql(u8, name, ".") or
             std.mem.eql(u8, name, "..") or
             std.mem.eql(u8, name, ".git") or
             std.mem.eql(u8, name, ".zig-cache") or
-            std.mem.eql(u8, name, "zig-out");
+            std.mem.eql(u8, name, ".DS_Store");
     }
 
     fn loadDirectory(self: *Explorer, dir_path: []const u8, depth: usize, insert_idx: usize) !void {
@@ -132,7 +135,10 @@ pub const Explorer = struct {
 
         var it = dir.iterate();
         while (try it.next(self.io)) |entry| {
-            if (shouldSkipEntry(entry.name)) continue;
+            if (shouldHideEntry(entry.name)) {
+                self.hidden_count += 1;
+                continue;
+            }
 
             const is_dir = entry.kind == .directory;
             const abs_path = try std.fs.path.join(self.allocator, &[_][]const u8{ dir_path, entry.name });
@@ -265,7 +271,7 @@ pub const Explorer = struct {
 
         var it = dir.iterate();
         while (try it.next(self.io)) |entry| {
-            if (shouldSkipEntry(entry.name)) continue;
+            if (shouldHideEntry(entry.name)) continue;
 
             const is_dir = entry.kind == .directory;
             const abs_path = try std.fs.path.join(self.allocator, &[_][]const u8{ dir_path, entry.name });
@@ -328,6 +334,7 @@ pub const Explorer = struct {
         self.nodes.clearRetainingCapacity();
         self.selected_index = 0;
         self.scroll_offset = 0;
+        self.hidden_count = 0;
         self.cancelSearch();
         try self.loadDirectory(self.root_path, 0, 0);
 
@@ -369,31 +376,29 @@ pub const Explorer = struct {
         return null;
     }
 
-    pub fn render(self: *Explorer, writer: anytype, width: usize, height: usize, is_focused: bool) !void {
-        try self.renderAt(writer, width, height, 1, is_focused);
+    pub fn render(self: *Explorer, writer: anytype, width: usize, height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) !void {
+        try self.renderAt(writer, width, height, 1, is_focused, snapshot);
     }
 
-    pub fn renderAt(self: *Explorer, writer: anytype, width: usize, height: usize, start_row: usize, is_focused: bool) !void {
+    pub fn renderAt(self: *Explorer, writer: anytype, width: usize, height: usize, start_row: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) !void {
         if (width == 0 or height == 0) return;
 
         var clear_row = start_row;
         const clear_end = start_row + height - 1;
         while (clear_row < clear_end) : (clear_row += 1) {
             try terminal.moveCursor(writer, clear_row, 1);
-            try writer.writeAll("\x1b[0m");
+            try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
             for (0..width) |_| try writer.writeAll(" ");
         }
 
         try terminal.moveCursor(writer, start_row, 1);
-        if (is_focused) {
-            try writer.writeAll("\x1b[48;5;204m\x1b[38;5;16m\x1b[1m");
-        } else {
-            try writer.writeAll("\x1b[48;5;236m\x1b[38;5;250m\x1b[1m");
-        }
-        const title = " EXPLORER ";
-        try writer.writeAll(title);
-        const title_pad = width -| title.len;
-        for (0..title_pad) |_| try writer.writeAll(" ");
+        try writer.writeAll(render_mod.RenderStyle.explorer_header.ansi());
+        const root_label = compactRootLabel(self.root_path);
+        try writeClipped(writer, " ", width);
+        const used_icon = @min(render_mod.displayCellCount(" "), width);
+        if (width > used_icon) try writeClipped(writer, root_label, width - used_icon);
+        const title_cells = used_icon + @min(render_mod.displayCellCount(root_label), width -| used_icon);
+        for (0..width -| title_cells) |_| try writer.writeAll(" ");
         try writer.writeAll("\x1b[0m"); // Reset
 
         var content_start_row = start_row + 1;
@@ -421,7 +426,7 @@ pub const Explorer = struct {
 
         if (self.search_active) {
             self.adjustSearchScroll(view_height);
-            try self.renderSearchResults(writer, width, content_start_row, view_height, is_focused);
+            try self.renderSearchResults(writer, width, content_start_row, view_height, is_focused, snapshot);
             return;
         }
 
@@ -432,8 +437,11 @@ pub const Explorer = struct {
             const node = self.nodes.items[i];
             try terminal.moveCursor(writer, row, 1);
 
+            const selected = is_focused and i == self.selected_index;
             if (is_focused and i == self.selected_index) {
-                try writer.writeAll("\x1b[48;5;238m");
+                try writer.writeAll(render_mod.RenderStyle.explorer_selected_focus.ansi());
+            } else {
+                try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
             }
 
             for (0..node.depth) |_| {
@@ -441,27 +449,31 @@ pub const Explorer = struct {
             }
 
             const icon = iconForNode(node.is_dir, node.is_expanded, node.name);
-            const color = colorForNode(node.is_dir, node.name);
-            try writer.writeAll(color);
-            try writer.writeAll(icon);
+            const node_status = snapshotStatus(snapshot, node.absolute_path);
+            const style = styleForNode(node.is_dir, node.name, selected, node_status);
+            try writer.writeAll(style.ansi());
+            try writeClipped(writer, icon, width);
             try writer.writeAll(" ");
 
-            const indent_len = node.depth * 2 + icon.len + 1;
+            const indent_len = node.depth * 2 + render_mod.displayCellCount(icon) + 1;
             const max_name_len = width -| indent_len;
-            if (node.name.len > max_name_len) {
-                try writer.writeAll(node.name[0..max_name_len]);
-            } else {
-                try writer.writeAll(node.name);
-            }
+            try writeClipped(writer, node.name, max_name_len);
 
-            const current_len = indent_len + @min(node.name.len, max_name_len);
-            if (current_len < width) {
-                try writer.writeAll("\x1b[0m");
-                if (is_focused and i == self.selected_index) {
-                    try writer.writeAll("\x1b[48;5;238m");
+            const current_len = indent_len + @min(render_mod.displayCellCount(node.name), max_name_len);
+            if (current_len + 2 < width) {
+                const marker = gitMarker(node_status);
+                if (marker.len > 0) {
+                    const pad = width - current_len - 2;
+                    try writer.writeAll(rowBgStyle(selected).ansi());
+                    for (0..pad) |_| try writer.writeAll(" ");
+                    try writer.writeAll(markerStyle(node_status).ansi());
+                    try writer.writeAll(marker);
+                    try writer.writeAll(rowBgStyle(selected).ansi());
+                    try writer.writeAll(" ");
+                } else {
+                    try writer.writeAll(rowBgStyle(selected).ansi());
+                    for (0..width - current_len) |_| try writer.writeAll(" ");
                 }
-                const pad = width - current_len;
-                for (0..pad) |_| try writer.writeAll(" ");
             }
 
             try writer.writeAll("\x1b[0m");
@@ -469,33 +481,50 @@ pub const Explorer = struct {
             row += 1;
         }
 
+        if (self.hidden_count > 0 and row < content_start_row + view_height) {
+            try terminal.moveCursor(writer, row, 1);
+            try writer.writeAll(render_mod.RenderStyle.explorer_dim.ansi());
+            var buf: [48]u8 = undefined;
+            const text = try std.fmt.bufPrint(&buf, "({d} hidden items)", .{self.hidden_count});
+            try writeClipped(writer, text, width);
+            const cells = @min(render_mod.displayCellCount(text), width);
+            for (0..width -| cells) |_| try writer.writeAll(" ");
+            try writer.writeAll("\x1b[0m");
+            row += 1;
+        }
+
         while (row < content_start_row + view_height) : (row += 1) {
             try terminal.moveCursor(writer, row, 1);
+            try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
             for (0..width) |_| try writer.writeAll(" ");
+            try writer.writeAll("\x1b[0m");
         }
     }
 
-    fn renderSearchResults(self: *Explorer, writer: anytype, width: usize, start_row: usize, view_height: usize, is_focused: bool) !void {
+    fn renderSearchResults(self: *Explorer, writer: anytype, width: usize, start_row: usize, view_height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) !void {
         var row: usize = start_row;
         var i = self.search_scroll_offset;
         while (i < self.search_results.items.len and row < start_row + view_height) : (i += 1) {
             const result = self.search_results.items[i];
             try terminal.moveCursor(writer, row, 1);
 
+            const selected = is_focused and i == self.search_selected_index;
             if (is_focused and i == self.search_selected_index) {
-                try writer.writeAll("\x1b[48;5;238m");
+                try writer.writeAll(render_mod.RenderStyle.explorer_selected_focus.ansi());
+            } else {
+                try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
             }
 
             for (0..result.depth) |_| try writer.writeAll("  ");
 
             const icon = iconForNode(result.is_dir, false, result.name);
-            const color = colorForNode(result.is_dir, result.name);
-            try writer.writeAll(color);
-            try writer.writeAll(icon);
+            const style = styleForNode(result.is_dir, result.name, selected, snapshotStatus(snapshot, result.absolute_path));
+            try writer.writeAll(style.ansi());
+            try writeClipped(writer, icon, width);
             try writer.writeAll(" ");
 
             const context = relativeParentPath(self.root_path, result.absolute_path);
-            const indent_len = result.depth * 2 + icon.len + 1;
+            const indent_len = result.depth * 2 + render_mod.displayCellCount(icon) + 1;
             const context_prefix = "  ";
             const context_len = context_prefix.len + context.len;
             const max_line_len = width -| indent_len;
@@ -511,10 +540,7 @@ pub const Explorer = struct {
 
             var current_len = indent_len + written_name_len;
             if (reserve_context > 0) {
-                try writer.writeAll("\x1b[0m");
-                if (is_focused and i == self.search_selected_index) {
-                    try writer.writeAll("\x1b[48;5;238m");
-                }
+                try writer.writeAll(rowBgStyle(selected).ansi());
                 try writer.writeAll("\x1b[38;5;245m");
                 try writer.writeAll(context_prefix);
                 try writer.writeAll(context);
@@ -522,10 +548,7 @@ pub const Explorer = struct {
             }
 
             if (current_len < width) {
-                try writer.writeAll("\x1b[0m");
-                if (is_focused and i == self.search_selected_index) {
-                    try writer.writeAll("\x1b[48;5;238m");
-                }
+                try writer.writeAll(rowBgStyle(selected).ansi());
                 for (0..width - current_len) |_| try writer.writeAll(" ");
             }
             try writer.writeAll("\x1b[0m");
@@ -534,7 +557,9 @@ pub const Explorer = struct {
 
         while (row < start_row + view_height) : (row += 1) {
             try terminal.moveCursor(writer, row, 1);
+            try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
             for (0..width) |_| try writer.writeAll(" ");
+            try writer.writeAll("\x1b[0m");
         }
     }
 
@@ -615,26 +640,73 @@ fn matchesQuery(haystack: []const u8, query: []const u8) bool {
 }
 
 fn iconForNode(is_dir: bool, is_expanded: bool, name: []const u8) []const u8 {
-    if (is_dir) return if (is_expanded) "▾ " else "▸ ";
+    if (is_dir) return if (is_expanded) " " else " ";
     const ext = std.fs.path.extension(name);
-    if (std.mem.eql(u8, ext, ".zig")) return "◇";
-    if (std.mem.eql(u8, ext, ".toml")) return "⚙";
-    if (std.mem.eql(u8, ext, ".json")) return "{}";
-    if (std.mem.eql(u8, ext, ".xml")) return "<>";
-    if (std.mem.eql(u8, ext, ".md")) return "M";
-    return "·";
+    if (std.mem.eql(u8, ext, ".zig")) return "";
+    if (std.mem.eql(u8, ext, ".toml") or std.mem.eql(u8, ext, ".json") or
+        std.mem.eql(u8, ext, ".zon") or std.mem.eql(u8, ext, ".xml"))
+        return "";
+    if (std.mem.eql(u8, ext, ".md")) return "";
+    if (std.ascii.eqlIgnoreCase(name, "LICENSE")) return "";
+    return "";
 }
 
-fn colorForNode(is_dir: bool, name: []const u8) []const u8 {
-    if (is_dir) return "\x1b[38;5;220m\x1b[1m";
+fn styleForNode(is_dir: bool, name: []const u8, selected: bool, state: ?git_status.FileState) render_mod.RenderStyle {
+    if (selected) return .explorer_selected_focus;
+    if (state == .ignored) return .explorer_dim;
+    if (is_dir) return .explorer_folder;
     const ext = std.fs.path.extension(name);
-    if (std.mem.eql(u8, ext, ".zig")) return "\x1b[38;5;214m";
-    if (std.mem.eql(u8, ext, ".toml")) return "\x1b[38;5;117m";
-    if (std.mem.eql(u8, ext, ".json")) return "\x1b[38;5;121m";
-    if (std.mem.eql(u8, ext, ".xml")) return "\x1b[38;5;204m";
-    if (std.mem.eql(u8, ext, ".md")) return "\x1b[38;5;183m";
-    if (std.mem.eql(u8, ext, ".ziggy")) return "\x1b[38;5;208m";
-    return "\x1b[38;5;250m";
+    if (std.mem.eql(u8, ext, ".zig") or std.mem.eql(u8, ext, ".ziggy")) return .explorer_zig;
+    if (std.mem.eql(u8, ext, ".toml") or std.mem.eql(u8, ext, ".json") or
+        std.mem.eql(u8, ext, ".zon") or std.mem.eql(u8, ext, ".xml"))
+        return .explorer_config;
+    if (std.mem.eql(u8, ext, ".md")) return .explorer_md;
+    if (std.ascii.eqlIgnoreCase(name, "LICENSE")) return .explorer_license;
+    return .explorer_file;
+}
+
+fn rowBgStyle(selected: bool) render_mod.RenderStyle {
+    return if (selected) .explorer_selected_focus else .explorer_bg;
+}
+
+fn markerStyle(state: ?git_status.FileState) render_mod.RenderStyle {
+    return switch (state orelse return .explorer_bg) {
+        .modified, .untracked => .git_modified,
+        .ignored => .git_ignored,
+    };
+}
+
+fn gitMarker(state: ?git_status.FileState) []const u8 {
+    return switch (state orelse return "") {
+        .modified => "●",
+        .untracked => "▣",
+        .ignored => "⊘",
+    };
+}
+
+fn snapshotStatus(snapshot: ?*const git_status.Snapshot, path: []const u8) ?git_status.FileState {
+    return if (snapshot) |s| s.stateForPath(path) else null;
+}
+
+fn compactRootLabel(root_path: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, root_path, "/Users/")) {
+        var rest = root_path["/Users/".len..];
+        if (std.mem.indexOfScalar(u8, rest, '/')) |idx| {
+            rest = rest[idx..];
+            if (std.mem.startsWith(u8, rest, "/")) return rest;
+        }
+    }
+    return root_path;
+}
+
+fn writeClipped(writer: anytype, text: []const u8, max_cells: usize) !void {
+    var cells: usize = 0;
+    var i: usize = 0;
+    while (i < text.len and cells < max_cells) : (cells += 1) {
+        const len = @min(render_mod.utf8CellLen(text[i]), text.len - i);
+        try writer.writeAll(text[i .. i + len]);
+        i += len;
+    }
 }
 
 fn relativeParentPath(root_path: []const u8, absolute_path: []const u8) []const u8 {
@@ -656,9 +728,46 @@ test "explorer query matching is case insensitive" {
     try std.testing.expect(!matchesQuery("src/main.zig", "README"));
 }
 
-test "explorer file color is stable by extension" {
-    try std.testing.expectEqualStrings(colorForNode(false, "a.zig"), colorForNode(false, "b.zig"));
-    try std.testing.expect(!std.mem.eql(u8, colorForNode(false, "a.zig"), colorForNode(false, "a.toml")));
+test "explorer file style is stable by extension" {
+    try std.testing.expectEqual(styleForNode(false, "a.zig", false, null), styleForNode(false, "b.zig", false, null));
+    try std.testing.expect(styleForNode(false, "a.zig", false, null) != styleForNode(false, "a.toml", false, null));
+}
+
+test "explorer render uses nerd icons hidden count and git markers" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(root);
+
+    try tmp.dir.createDirPath(io, "src");
+    try tmp.dir.createDirPath(io, ".zig-cache");
+    try tmp.dir.writeFile(io, .{ .sub_path = "src/main.zig", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "README.md", .data = "" });
+
+    var exp = try Explorer.init(allocator, io, root);
+    defer exp.deinit();
+    try exp.toggleExpand();
+
+    var snapshot = git_status.Snapshot.init(allocator);
+    defer snapshot.deinit();
+    snapshot.root_path = try allocator.dupe(u8, root);
+    try snapshot.put("src/main.zig", .modified);
+
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(allocator);
+    var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    defer aw.deinit();
+
+    try exp.renderAt(&aw.writer, 40, 12, 1, true, &snapshot);
+    const rendered = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "hidden items") != null);
 }
 
 test "explorer search result parent path is relative to root" {

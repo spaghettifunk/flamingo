@@ -440,11 +440,20 @@ pub const Highlighter = struct {
     fn byteToPoint(self: *const Highlighter, byte_offset: usize) buffer.TextPoint {
         if (self.line_starts.items.len == 0) return .{ .row = 0, .col = byte_offset };
 
-        var row: usize = 0;
-        while (row + 1 < self.line_starts.items.len and self.line_starts.items[row + 1] <= byte_offset) : (row += 1) {}
+        var lo: usize = 0;
+        var hi: usize = self.line_starts.items.len;
+        while (lo + 1 < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (self.line_starts.items[mid] <= byte_offset) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+
         return .{
-            .row = row,
-            .col = byte_offset - self.line_starts.items[row],
+            .row = lo,
+            .col = byte_offset - self.line_starts.items[lo],
         };
     }
 
@@ -599,6 +608,53 @@ fn lessThanRun(_: void, lhs: HighlightRun, rhs: HighlightRun) bool {
         return lhs.style.priority() > rhs.style.priority();
     }
     return lhs.start_col < rhs.start_col;
+}
+
+test "byteToPoint handles empty and single-line line starts" {
+    const allocator = std.testing.allocator;
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 7 }, highlighter.byteToPoint(7));
+
+    try highlighter.line_starts.append(allocator, 0);
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 0 }, highlighter.byteToPoint(0));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 12 }, highlighter.byteToPoint(12));
+}
+
+test "byteToPoint maps first middle final and exact line-start offsets" {
+    const allocator = std.testing.allocator;
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+
+    try highlighter.line_starts.appendSlice(allocator, &.{ 0, 6, 12, 19 });
+
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 0 }, highlighter.byteToPoint(0));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 3 }, highlighter.byteToPoint(3));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 5 }, highlighter.byteToPoint(5));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 1, .col = 0 }, highlighter.byteToPoint(6));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 1, .col = 4 }, highlighter.byteToPoint(10));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 2, .col = 0 }, highlighter.byteToPoint(12));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 3, .col = 0 }, highlighter.byteToPoint(19));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 3, .col = 11 }, highlighter.byteToPoint(30));
+}
+
+test "byteToPoint uses binary-search behavior for large line tables" {
+    const allocator = std.testing.allocator;
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+
+    const line_count = 10_000;
+    const stride = 17;
+    try highlighter.line_starts.ensureTotalCapacity(allocator, line_count);
+    for (0..line_count) |i| {
+        highlighter.line_starts.appendAssumeCapacity(i * stride);
+    }
+
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 0, .col = 0 }, highlighter.byteToPoint(0));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 1234, .col = 9 }, highlighter.byteToPoint(1234 * stride + 9));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 9999, .col = 0 }, highlighter.byteToPoint(9999 * stride));
+    try std.testing.expectEqual(buffer.TextPoint{ .row = 9999, .col = 16 }, highlighter.byteToPoint(9999 * stride + 16));
 }
 
 test "languageFromFilename maps supported extensions" {

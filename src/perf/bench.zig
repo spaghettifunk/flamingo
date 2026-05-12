@@ -16,7 +16,7 @@ pub fn main(init: std.process.Init) !void {
     try logger.init(io, allocator, false);
     defer logger.shutdown() catch {};
 
-    var ed = try editor.Editor.init(allocator, io, .{});
+    var ed = try editor.Editor.initWithRuntimeOptions(allocator, io, .{}, .{ .enable_git_worker = false });
     defer ed.deinit();
     ed.width = 120;
     ed.height = 40;
