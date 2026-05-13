@@ -115,9 +115,19 @@ pub const SyntaxParseWorker = struct {
                 request.deinit(self.allocator);
                 continue;
             };
+            const markdown_inline_tree = if (request.language == .markdown)
+                syntax.parseMarkdownInlineTree(self.allocator, request.source, tree) catch |err| {
+                    logz.err().fmt("msg", "markdown inline parse failed: {any}", .{err}).log();
+                    tree.destroy();
+                    request.deinit(self.allocator);
+                    continue;
+                }
+            else
+                null;
 
             if (self.isQuitting()) {
                 tree.destroy();
+                if (markdown_inline_tree) |inline_tree| inline_tree.destroy();
                 request.deinit(self.allocator);
                 continue;
             }
@@ -128,6 +138,7 @@ pub const SyntaxParseWorker = struct {
                 .language = request.language,
                 .source = request.source,
                 .tree = tree,
+                .markdown_inline_tree = markdown_inline_tree,
             };
             request.source = &.{};
 

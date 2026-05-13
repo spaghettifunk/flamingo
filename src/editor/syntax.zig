@@ -7,12 +7,16 @@ extern fn tree_sitter_go() callconv(.c) *const anyopaque;
 extern fn tree_sitter_toml() callconv(.c) *const anyopaque;
 extern fn tree_sitter_yaml() callconv(.c) *const anyopaque;
 extern fn tree_sitter_json() callconv(.c) *const anyopaque;
+extern fn tree_sitter_markdown() callconv(.c) *const anyopaque;
+extern fn tree_sitter_markdown_inline() callconv(.c) *const anyopaque;
 
 const zig_query = @embedFile("queries/zig.scm");
 const go_query = @embedFile("queries/go.scm");
 const toml_query = @embedFile("queries/toml.scm");
 const yaml_query = @embedFile("queries/yaml.scm");
 const json_query = @embedFile("queries/json.scm");
+const markdown_query = @embedFile("queries/markdown.scm");
+const markdown_inline_query = @embedFile("queries/markdown_inline.scm");
 
 pub const LanguageId = enum {
     zig,
@@ -20,6 +24,7 @@ pub const LanguageId = enum {
     toml,
     yaml,
     json,
+    markdown,
 };
 
 pub const Style = enum {
@@ -105,11 +110,16 @@ pub const ParseResult = struct {
     language: LanguageId,
     source: []u8,
     tree: ?*ts.Tree,
+    markdown_inline_tree: ?*ts.Tree = null,
 
     pub fn deinit(self: *ParseResult, allocator: std.mem.Allocator) void {
         if (self.tree) |tree| {
             tree.destroy();
             self.tree = null;
+        }
+        if (self.markdown_inline_tree) |tree| {
+            tree.destroy();
+            self.markdown_inline_tree = null;
         }
         if (self.source.len > 0) {
             allocator.free(self.source);
@@ -125,6 +135,7 @@ pub fn languageFromFilename(filename: []const u8) ?LanguageId {
     if (std.mem.eql(u8, ext, ".toml")) return .toml;
     if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return .yaml;
     if (std.mem.eql(u8, ext, ".json")) return .json;
+    if (std.mem.eql(u8, ext, ".md") or std.mem.eql(u8, ext, ".markdown")) return .markdown;
     return null;
 }
 
@@ -149,7 +160,9 @@ pub const Highlighter = struct {
     language: ?LanguageId = null,
     parser: ?*ts.Parser = null,
     query: ?*ts.Query = null,
+    markdown_inline_query: ?*ts.Query = null,
     tree: ?*ts.Tree = null,
+    markdown_inline_tree: ?*ts.Tree = null,
     source: []u8 = &.{},
     parsed_revision: ?u64 = null,
     spans: std.ArrayList(HighlightSpan) = .empty,
@@ -208,11 +221,14 @@ pub const Highlighter = struct {
 
         const old_source = self.source;
         const old_tree = self.tree;
+        const old_markdown_inline_tree = self.markdown_inline_tree;
 
         self.source = result.source;
         result.source = &.{};
         self.tree = result.tree;
         result.tree = null;
+        self.markdown_inline_tree = result.markdown_inline_tree;
+        result.markdown_inline_tree = null;
         self.parsed_revision = result.revision;
         self.viewport_revision = null;
         self.viewport_first_line = 0;
@@ -223,11 +239,13 @@ pub const Highlighter = struct {
 
         errdefer {
             if (old_tree) |tree| tree.destroy();
+            if (old_markdown_inline_tree) |tree| tree.destroy();
             if (old_source.len > 0) self.allocator.free(old_source);
         }
         try self.rebuildLineStarts();
 
         if (old_tree) |tree| tree.destroy();
+        if (old_markdown_inline_tree) |tree| tree.destroy();
         if (old_source.len > 0) self.allocator.free(old_source);
     }
 
@@ -254,6 +272,7 @@ pub const Highlighter = struct {
         self.spans.clearRetainingCapacity();
         self.clearLineRuns();
         try self.collectSpans(query, tree.rootNode(), start_byte, end_byte);
+        try self.collectMarkdownInlineSpans(start_byte, end_byte);
         self.viewport_revision = parsed_revision;
         self.viewport_first_line = requested_first;
         self.viewport_last_line = requested_last;
@@ -309,7 +328,9 @@ pub const Highlighter = struct {
 
             const old_source = self.source;
             var old_tree = self.tree;
+            const old_markdown_inline_tree = self.markdown_inline_tree;
             var used_incremental = false;
+            self.markdown_inline_tree = null;
 
             if (old_tree) |tree| {
                 if (self.parsed_revision) |parsed_revision| {
@@ -334,6 +355,7 @@ pub const Highlighter = struct {
             const parser = self.parser orelse return;
             const tree = parser.parseString(self.source, old_tree) orelse {
                 if (old_tree) |old| old.destroy();
+                if (old_markdown_inline_tree) |old| old.destroy();
                 if (old_source.len > 0) self.allocator.free(old_source);
                 self.tree = null;
                 self.parsed_revision = null;
@@ -341,10 +363,32 @@ pub const Highlighter = struct {
                 self.spans.clearRetainingCapacity();
                 return;
             };
+            const inline_tree = if (next_language == .markdown)
+                parseMarkdownInlineTree(self.allocator, self.source, tree) catch |err| {
+                    tree.destroy();
+                    if (old_tree) |old| old.destroy();
+                    if (old_markdown_inline_tree) |old| old.destroy();
+                    if (old_source.len > 0) self.allocator.free(old_source);
+                    if (self.source.len > 0) {
+                        self.allocator.free(self.source);
+                        self.source = &.{};
+                    }
+                    self.tree = null;
+                    self.markdown_inline_tree = null;
+                    self.parsed_revision = null;
+                    self.spans.clearRetainingCapacity();
+                    self.line_starts.clearRetainingCapacity();
+                    self.clearLineRuns();
+                    return err;
+                }
+            else
+                null;
 
             if (old_tree) |old| old.destroy();
+            if (old_markdown_inline_tree) |old| old.destroy();
             if (old_source.len > 0) self.allocator.free(old_source);
             self.tree = tree;
+            self.markdown_inline_tree = inline_tree;
             self.parsed_revision = buf.revision;
             if (used_incremental) {
                 self.incremental_reparse_count += 1;
@@ -361,6 +405,7 @@ pub const Highlighter = struct {
         self.spans.clearRetainingCapacity();
         self.clearLineRuns();
         try self.collectSpans(query, tree.rootNode(), start_byte, end_byte);
+        try self.collectMarkdownInlineSpans(start_byte, end_byte);
         self.viewport_revision = buf.revision;
         self.viewport_first_line = requested_first;
         self.viewport_last_line = requested_last;
@@ -522,6 +567,10 @@ pub const Highlighter = struct {
             query.destroy();
             self.query = null;
         }
+        if (self.markdown_inline_query) |query| {
+            query.destroy();
+            self.markdown_inline_query = null;
+        }
         if (self.parser) |parser| {
             parser.destroy();
             self.parser = null;
@@ -542,12 +591,19 @@ pub const Highlighter = struct {
         if (self.query == null) {
             self.query = createQuery(next_language) catch null;
         }
+        if (next_language == .markdown and self.markdown_inline_query == null) {
+            self.markdown_inline_query = createMarkdownInlineQuery() catch null;
+        }
     }
 
     fn clearParsedState(self: *Highlighter) void {
         if (self.tree) |tree| {
             tree.destroy();
             self.tree = null;
+        }
+        if (self.markdown_inline_tree) |tree| {
+            tree.destroy();
+            self.markdown_inline_tree = null;
         }
         if (self.source.len > 0) {
             self.allocator.free(self.source);
@@ -558,6 +614,13 @@ pub const Highlighter = struct {
         self.clearLineRuns();
         self.parsed_revision = null;
         self.viewport_revision = null;
+    }
+
+    fn collectMarkdownInlineSpans(self: *Highlighter, start_byte: usize, end_byte: usize) !void {
+        if (self.language != .markdown) return;
+        const query = self.markdown_inline_query orelse return;
+        const tree = self.markdown_inline_tree orelse return;
+        try self.collectSpans(query, tree.rootNode(), start_byte, end_byte);
     }
 
     fn clearLineRuns(self: *Highlighter) void {
@@ -587,8 +650,13 @@ pub fn languagePtr(language: LanguageId) *const ts.Language {
         .toml => tree_sitter_toml(),
         .yaml => tree_sitter_yaml(),
         .json => tree_sitter_json(),
+        .markdown => tree_sitter_markdown(),
     };
     return @ptrCast(@alignCast(ptr));
+}
+
+fn markdownInlineLanguagePtr() *const ts.Language {
+    return @ptrCast(@alignCast(tree_sitter_markdown_inline()));
 }
 
 fn createQuery(language: LanguageId) ts.Query.Error!*ts.Query {
@@ -603,7 +671,52 @@ fn querySource(language: LanguageId) []const u8 {
         .toml => toml_query,
         .yaml => yaml_query,
         .json => json_query,
+        .markdown => markdown_query,
     };
+}
+
+fn createMarkdownInlineQuery() ts.Query.Error!*ts.Query {
+    var error_offset: u32 = 0;
+    return ts.Query.create(markdownInlineLanguagePtr(), markdown_inline_query, &error_offset);
+}
+
+/// Returns an owned markdown_inline tree for `source`, or null when the block
+/// tree has no inline ranges. The caller owns the returned tree.
+pub fn parseMarkdownInlineTree(allocator: std.mem.Allocator, source: []const u8, block_tree: *ts.Tree) !?*ts.Tree {
+    var ranges = std.ArrayList(ts.Range).empty;
+    defer ranges.deinit(allocator);
+    try collectMarkdownInlineRanges(allocator, &ranges, block_tree.rootNode());
+    if (ranges.items.len == 0) return null;
+
+    const parser = ts.Parser.create();
+    defer parser.destroy();
+    try parser.setLanguage(markdownInlineLanguagePtr());
+    try parser.setIncludedRanges(ranges.items);
+    return parser.parseString(source, null);
+}
+
+fn collectMarkdownInlineRanges(allocator: std.mem.Allocator, ranges: *std.ArrayList(ts.Range), node: ts.Node) !void {
+    if (std.mem.eql(u8, node.kind(), "inline")) {
+        const start = node.startByte();
+        const end = node.endByte();
+        if (start < end) {
+            try ranges.append(allocator, .{
+                .start_point = node.startPoint(),
+                .end_point = node.endPoint(),
+                .start_byte = start,
+                .end_byte = end,
+            });
+        }
+        return;
+    }
+
+    const child_count = node.childCount();
+    var i: u32 = 0;
+    while (i < child_count) : (i += 1) {
+        if (node.child(i)) |child| {
+            try collectMarkdownInlineRanges(allocator, ranges, child);
+        }
+    }
 }
 
 fn styleForCapture(capture: []const u8) ?Style {
@@ -698,7 +811,9 @@ test "languageFromFilename maps supported extensions" {
     try std.testing.expectEqual(LanguageId.yaml, languageFromFilename("config.yaml").?);
     try std.testing.expectEqual(LanguageId.yaml, languageFromFilename("config.yml").?);
     try std.testing.expectEqual(LanguageId.json, languageFromFilename("package.json").?);
-    try std.testing.expect(languageFromFilename("README.md") == null);
+    try std.testing.expectEqual(LanguageId.markdown, languageFromFilename("README.md").?);
+    try std.testing.expectEqual(LanguageId.markdown, languageFromFilename("README.markdown").?);
+    try std.testing.expect(languageFromFilename("component.mdx") == null);
 }
 
 test "highlighter captures supported language styles" {
@@ -714,6 +829,11 @@ test "highlighter captures supported language styles" {
         .{ .filename = "config.toml", .source = "name = \"flamingo\"\n", .style = .string },
         .{ .filename = "config.yaml", .source = "name: flamingo\n", .style = .property },
         .{ .filename = "package.json", .source = "{\"name\":\"flamingo\"}\n", .style = .string },
+        .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .keyword },
+        .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .string },
+        .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .function },
+        .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .comment },
+        .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .punctuation },
     };
 
     for (cases) |case| {
@@ -735,6 +855,33 @@ test "highlighter captures supported language styles" {
         try highlighter.ensureForBuffer(&buf);
         try std.testing.expect(highlighter.hasStyle(case.style));
     }
+}
+
+test "markdown highlighter captures inline styles" {
+    const allocator = std.testing.allocator;
+
+    var buf = try buffer.Buffer.init(allocator);
+    defer buf.deinit();
+    try buf.setFilename("README.md");
+
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const source = "Some **bold** text, some *italic* text, `inline code`, and [a link](https://example.com).\n";
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    var highlighter = Highlighter.init(allocator);
+    defer highlighter.deinit();
+    try highlighter.ensureForBuffer(&buf);
+
+    try std.testing.expect(highlighter.hasStyle(.constant));
+    try std.testing.expect(highlighter.hasStyle(.type));
+    try std.testing.expect(highlighter.hasStyle(.string));
+    try std.testing.expect(highlighter.hasStyle(.function));
 }
 
 test "highlighter skips unchanged buffer revision and reparses changed revision" {
