@@ -38,6 +38,8 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, exe_module, "tree-sitter-toml");
     addTreeSitterGrammar(b, exe_module, "tree-sitter-yaml");
     addTreeSitterGrammar(b, exe_module, "tree-sitter-json");
+    addTreeSitterGrammar(b, exe_module, "tree-sitter-markdown");
+    addTreeSitterGrammar(b, exe_module, "tree-sitter-markdown-inline");
 
     const exe = b.addExecutable(.{
         .name = "flamingo",
@@ -78,6 +80,8 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-toml");
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-yaml");
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-json");
+    addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-markdown");
+    addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-markdown-inline");
 
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
 
@@ -100,6 +104,8 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, perf_module, "tree-sitter-toml");
     addTreeSitterGrammar(b, perf_module, "tree-sitter-yaml");
     addTreeSitterGrammar(b, perf_module, "tree-sitter-json");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-markdown");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-markdown-inline");
 
     const perf_exe = b.addExecutable(.{
         .name = "flamingo-perf",
@@ -119,7 +125,11 @@ fn addTreeSitterGrammar(b: *std.Build, module: *std.Build.Module, comptime name:
         .flags = &.{ "-std=c11", "-Dversion=abi_version", "-DTSFieldMapSlice=TSMapSlice" },
     });
 
-    if (comptime std.mem.eql(u8, name, "tree-sitter-toml") or std.mem.eql(u8, name, "tree-sitter-yaml")) {
+    if (comptime std.mem.eql(u8, name, "tree-sitter-toml") or
+        std.mem.eql(u8, name, "tree-sitter-yaml") or
+        std.mem.eql(u8, name, "tree-sitter-markdown") or
+        std.mem.eql(u8, name, "tree-sitter-markdown-inline"))
+    {
         module.addCSourceFile(.{
             .file = b.path(root ++ "/src/scanner.c"),
             .flags = &.{ "-std=c11", "-Dversion=abi_version", "-DTSFieldMapSlice=TSMapSlice" },

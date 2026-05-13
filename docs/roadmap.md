@@ -37,7 +37,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement jump between matching `() { } [ ]`
 - [ ] implement jump to function definition
 - [x] implement going backwards/forwards like a browser
-- [ ] syntax highlight for Markdown files
+- [x] syntax highlight for Markdown files
 - [ ] Tabs with folder name in a different color
 
 ## Plugins System TODO
