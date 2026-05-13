@@ -143,6 +143,13 @@ const TextSnapshot = struct {
     text: []u8,
 };
 
+const KeypressProfilePosition = struct {
+    row: usize = 0,
+    col: usize = 0,
+    scroll_row: usize = 0,
+    selection_active: bool = false,
+};
+
 pub const Editor = struct {
     config: config.Config,
     keys: ResolvedKeybindings,
@@ -151,6 +158,8 @@ pub const Editor = struct {
     state: state_mod.EditorState,
     runtime: runtime_mod.EditorRuntime,
     renderer: renderer_mod.EditorRenderer,
+    keypress_profiler: perf.KeypressProfiler,
+    active_keypress_trace: ?*perf.KeypressTrace = null,
     width: usize = 0,
     height: usize = 0,
     should_quit: bool = false,
@@ -174,6 +183,7 @@ pub const Editor = struct {
             .state = state_mod.EditorState.init(allocator),
             .runtime = runtime,
             .renderer = renderer_mod.EditorRenderer.init(allocator),
+            .keypress_profiler = perf.KeypressProfiler.initFromEnv(io),
         };
     }
 
@@ -184,6 +194,7 @@ pub const Editor = struct {
         self.runtime.deinit(self.allocator);
         self.state.deinit(self.allocator);
         self.renderer.deinit(self.allocator);
+        self.keypress_profiler.deinit();
     }
 
     pub fn currentTab(self: *Editor) ?*Tab {
@@ -304,14 +315,27 @@ pub const Editor = struct {
             var first_fast_cursor_before: ?CursorMoveState = null;
             var fast_cursor_candidate = true;
             var last_update_end_ns: ?u64 = null;
+            var key_trace_storage = perf.KeypressTrace{};
+            var key_trace: ?*perf.KeypressTrace = null;
+            var key_start_ns: u64 = 0;
+            var key_name_buf: [32]u8 = undefined;
             var input_count: usize = 0;
             while (input_count < 128) : (input_count += 1) {
                 const read_start = perf.nowNs();
                 const event = try terminal.readKey(reader);
-                metrics.add(.input_poll, perf.elapsedNs(read_start));
+                const read_elapsed = perf.elapsedNs(read_start);
+                metrics.add(.input_poll, read_elapsed);
                 if (event.key == .None) break;
                 handled_input = true;
                 metrics.input_events += 1;
+
+                if (self.keypress_profiler.enabled) {
+                    key_start_ns = read_start;
+                    const key_name = formatKeyName(event, &key_name_buf);
+                    key_trace_storage = self.initKeypressTrace(event, key_name);
+                    key_trace_storage.read_ns = read_elapsed;
+                    key_trace = &key_trace_storage;
+                }
 
                 const render_after_event = self.shouldRenderAfterInputEvent(event);
                 if (render_after_event) {
@@ -324,9 +348,18 @@ pub const Editor = struct {
                 }
 
                 const input_handle_start = perf.nowNs();
-                try self.handleRuntimeKey(event);
+                {
+                    const previous_trace = self.active_keypress_trace;
+                    self.active_keypress_trace = key_trace;
+                    defer self.active_keypress_trace = previous_trace;
+                    try self.handleRuntimeKey(event);
+                }
                 const update_elapsed = perf.elapsedNs(input_handle_start);
                 const update_end = perf.nowNs();
+                if (key_trace) |trace| {
+                    trace.dispatch_ns += update_elapsed;
+                    self.updateKeypressTraceAfterDispatch(trace);
+                }
                 metrics.add(.update_state, update_elapsed);
                 metrics.input_to_update_ns += update_end - read_start;
                 last_update_end_ns = update_end;
@@ -350,37 +383,73 @@ pub const Editor = struct {
             }
 
             if (self.state.render_dirty) {
+                if (key_trace) |trace| {
+                    trace.dirty = self.keypressDirtyState();
+                }
                 aw.clearRetainingCapacity();
 
                 var rendered_fast_cursor = false;
+                var fast_cursor_render_before: ?CursorMoveState = null;
+                var fast_reject_reason: ?FastCursorRejectReason = null;
+                const decision_start = if (key_trace != null) perf.nowNs() else 0;
                 if (fast_cursor_candidate) {
                     if (first_fast_cursor_before) |before| {
                         if (self.fastCursorMoveRejectReason(before)) |reason| {
+                            fast_reject_reason = reason;
                             metrics.recordFastCursorReject(reason);
                         } else {
-                            const frame_start = perf.nowNs();
-                            try self.renderFastCursorMove(writer, before);
-                            metrics.add(.build_frame, perf.elapsedNs(frame_start));
-                            metrics.fast_cursor_move = true;
-                            metrics.render_kind = .fast_cursor;
                             rendered_fast_cursor = true;
+                            fast_cursor_render_before = before;
                         }
                     } else if (metrics.cursor_move_events > 0) {
+                        fast_reject_reason = .no_active_tab;
                         metrics.recordFastCursorReject(.no_active_tab);
+                    }
+                }
+                if (key_trace) |trace| {
+                    const decision_elapsed = perf.elapsedNs(decision_start);
+                    trace.decision_ns += decision_elapsed;
+                    trace.can_use_virtual_renderer = self.canUseVirtualRenderer();
+                    if (fast_reject_reason) |reason| {
+                        trace.reject = reason.name();
+                    } else {
+                        trace.reject = "none";
+                    }
+                }
+
+                if (rendered_fast_cursor) {
+                    const frame_start = perf.nowNs();
+                    try self.renderFastCursorMove(writer, fast_cursor_render_before.?);
+                    const render_elapsed = perf.elapsedNs(frame_start);
+                    metrics.add(.build_frame, render_elapsed);
+                    metrics.fast_cursor_move = true;
+                    metrics.render_kind = .fast_cursor;
+                    if (key_trace) |trace| {
+                        trace.render = .fast_cursor;
+                        trace.render_ns += render_elapsed;
                     }
                 }
 
                 if (!rendered_fast_cursor) {
                     const frame_start = perf.nowNs();
                     try terminal.hideCursor(writer);
-                    if (self.canUseVirtualRenderer()) {
+                    const use_virtual_renderer = self.canUseVirtualRenderer();
+                    if (key_trace) |trace| {
+                        trace.can_use_virtual_renderer = use_virtual_renderer;
+                        trace.render = if (use_virtual_renderer) .virtual else .legacy;
+                    }
+                    if (use_virtual_renderer) {
                         try self.renderVirtual(writer, &metrics);
                     } else {
                         try self.render(writer);
                         try self.renderCompletionMenu(writer);
                     }
                     try terminal.showCursor(writer);
-                    metrics.add(.build_frame, perf.elapsedNs(frame_start));
+                    const render_elapsed = perf.elapsedNs(frame_start);
+                    metrics.add(.build_frame, render_elapsed);
+                    if (key_trace) |trace| {
+                        trace.render_ns += render_elapsed;
+                    }
                     metrics.render_kind = if (self.state.force_full_render) .full else .partial;
                 }
 
@@ -390,11 +459,17 @@ pub const Editor = struct {
                 }
                 const bytes = aw.written().len;
                 try raw_writer.writeAll(aw.written());
-                metrics.add(.flush_output, perf.elapsedNs(flush_start));
+                const write_elapsed = perf.elapsedNs(flush_start);
+                metrics.add(.flush_output, write_elapsed);
                 self.runtime.updateFrameCapacityFps(metrics.get(.build_frame) + metrics.get(.flush_output));
                 metrics.rendered = true;
                 metrics.bytes_emitted = bytes;
                 metrics.write_count = 1;
+                if (key_trace) |trace| {
+                    trace.write_ns += write_elapsed;
+                    trace.bytes_emitted = bytes;
+                    trace.total_ns = perf.elapsedNs(key_start_ns);
+                }
                 self.state.render_dirty = false;
                 if (!rendered_fast_cursor) {
                     self.state.force_full_render = false;
@@ -415,6 +490,15 @@ pub const Editor = struct {
 
             metrics.add(.total_loop, perf.elapsedNs(loop_start));
             self.runtime.perf_sampler.observe(metrics);
+
+            if (handled_input) {
+                if (key_trace) |trace| {
+                    if (trace.total_ns == 0 and key_start_ns != 0) {
+                        trace.total_ns = perf.elapsedNs(key_start_ns);
+                    }
+                    self.keypress_profiler.observe(trace.*);
+                }
+            }
 
             if (!self.state.render_dirty and !handled_input) {
                 perf.sleepNs(1 * std.time.ns_per_ms);
@@ -520,6 +604,117 @@ pub const Editor = struct {
                 .none => {},
             }
         }
+    }
+
+    pub fn noteKeypressMovementHandled(self: *Editor, handled: bool) void {
+        if (!handled) return;
+        if (self.active_keypress_trace) |trace| {
+            trace.movement_handled = true;
+        }
+    }
+
+    fn captureKeypressProfilePosition(self: *Editor) KeypressProfilePosition {
+        const tab = self.currentTab() orelse return .{};
+        if (tab.cursors.items.len == 0) return .{ .scroll_row = tab.scroll_row };
+        const mc = tab.mainCursor();
+        return .{
+            .row = mc.row,
+            .col = mc.col,
+            .scroll_row = tab.scroll_row,
+            .selection_active = mc.selection_start != null,
+        };
+    }
+
+    fn initKeypressTrace(self: *Editor, event: terminal.KeyEvent, key_name: []const u8) perf.KeypressTrace {
+        const pos = self.captureKeypressProfilePosition();
+        return .{
+            .key = key_name,
+            .mode = @tagName(self.state.mode),
+            .before_row = pos.row,
+            .before_col = pos.col,
+            .after_row = pos.row,
+            .after_col = pos.col,
+            .before_scroll_row = pos.scroll_row,
+            .after_scroll_row = pos.scroll_row,
+            .dirty = self.keypressDirtyState(),
+            .can_use_virtual_renderer = self.canUseVirtualRenderer(),
+            .explorer_visible = self.state.explorer_visible,
+            .explorer_focused = self.state.explorer_focused,
+            .completion_active = self.state.lsp_ui.completion_active,
+            .search_active = self.state.search_buffer.items.len > 0,
+            .selection_active = pos.selection_active or event.shift,
+        };
+    }
+
+    fn updateKeypressTraceAfterDispatch(self: *Editor, trace: *perf.KeypressTrace) void {
+        const pos = self.captureKeypressProfilePosition();
+        trace.after_row = pos.row;
+        trace.after_col = pos.col;
+        trace.after_scroll_row = pos.scroll_row;
+        trace.cursor_moved = trace.before_row != pos.row or trace.before_col != pos.col;
+        trace.viewport_scrolled = trace.viewport_scrolled or trace.before_scroll_row != pos.scroll_row;
+        trace.can_use_virtual_renderer = self.canUseVirtualRenderer();
+        trace.explorer_visible = self.state.explorer_visible;
+        trace.explorer_focused = self.state.explorer_focused;
+        trace.completion_active = self.state.lsp_ui.completion_active;
+        trace.search_active = self.state.search_buffer.items.len > 0;
+        trace.selection_active = trace.selection_active or pos.selection_active;
+    }
+
+    fn keypressDirtyState(self: *const Editor) perf.KeypressDirtyState {
+        if (!self.state.render_dirty) return .clean;
+        if (self.state.force_full_render) return .full;
+        return .partial;
+    }
+
+    fn formatKeyName(event: terminal.KeyEvent, buf: *[32]u8) []const u8 {
+        var idx: usize = 0;
+        idx = appendKeyPart(buf, idx, event.ctrl, "Ctrl+");
+        idx = appendKeyPart(buf, idx, event.alt, "Alt+");
+        idx = appendKeyPart(buf, idx, event.shift, "Shift+");
+
+        const base = switch (event.key) {
+            .None => "None",
+            .Backspace => "Backspace",
+            .Enter => "Enter",
+            .Esc => "Esc",
+            .Up => "Up",
+            .Down => "Down",
+            .Right => "Right",
+            .Left => "Left",
+            .Delete => "Delete",
+            .Home => "Home",
+            .End => "End",
+            .PageUp => "PageUp",
+            .PageDown => "PageDown",
+            .Char => blk: {
+                if (event.char == '\t') break :blk "Tab";
+                if (event.char == ' ') break :blk "Space";
+                if (event.char >= 0x21 and event.char <= 0x7e and idx + 1 <= buf.len) {
+                    buf[idx] = event.char;
+                    return buf[0 .. idx + 1];
+                }
+                break :blk "Char";
+            },
+        };
+
+        idx = appendKeyBytes(buf, idx, base);
+        return buf[0..idx];
+    }
+
+    fn appendKeyPart(buf: *[32]u8, idx: usize, enabled: bool, text: []const u8) usize {
+        if (!enabled) return idx;
+        return appendKeyBytes(buf, idx, text);
+    }
+
+    fn appendKeyBytes(buf: *[32]u8, start: usize, text: []const u8) usize {
+        var idx = start;
+        for (text) |ch| {
+            if (idx >= buf.len) break;
+            buf[idx] = ch;
+            idx += 1;
+        }
+        return idx;
     }
 
     fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
@@ -1254,6 +1449,7 @@ pub const Editor = struct {
     pub fn clampScroll(self: *Editor) void {
         const tab = self.currentTab() orelse return;
         const mc = tab.mainCursor();
+        const before_scroll_row = tab.scroll_row;
         const top_reserved = 2; // tabs + separator
         const bot_reserved = 1; // status bar
         const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 1;
@@ -1261,6 +1457,9 @@ pub const Editor = struct {
             tab.scroll_row = mc.row;
         } else if (mc.row >= tab.scroll_row + visible_rows) {
             tab.scroll_row = mc.row - visible_rows + 1;
+        }
+        if (self.active_keypress_trace) |trace| {
+            trace.viewport_scrolled = trace.viewport_scrolled or before_scroll_row != tab.scroll_row;
         }
     }
 

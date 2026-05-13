@@ -32,6 +32,36 @@ pub const RenderKind = enum {
     full,
 };
 
+pub const KeypressRenderKind = enum {
+    none,
+    fast_cursor,
+    virtual,
+    legacy,
+
+    pub fn name(self: KeypressRenderKind) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .fast_cursor => "fast_cursor",
+            .virtual => "virtual",
+            .legacy => "legacy",
+        };
+    }
+};
+
+pub const KeypressDirtyState = enum {
+    clean,
+    partial,
+    full,
+
+    pub fn name(self: KeypressDirtyState) []const u8 {
+        return switch (self) {
+            .clean => "clean",
+            .partial => "partial",
+            .full => "full",
+        };
+    }
+};
+
 pub const FastCursorRejectReason = enum {
     mode,
     selection_active,
@@ -67,6 +97,133 @@ pub const FastCursorRejectReason = enum {
 };
 
 pub const FastCursorRejectReasonCount = @typeInfo(FastCursorRejectReason).@"enum".fields.len;
+
+pub const KeypressTrace = struct {
+    key: []const u8 = "Unknown",
+    mode: []const u8 = "Unknown",
+    before_row: usize = 0,
+    before_col: usize = 0,
+    after_row: usize = 0,
+    after_col: usize = 0,
+    before_scroll_row: usize = 0,
+    after_scroll_row: usize = 0,
+    movement_handled: bool = false,
+    cursor_moved: bool = false,
+    viewport_scrolled: bool = false,
+    dirty: KeypressDirtyState = .clean,
+    render: KeypressRenderKind = .none,
+    reject: []const u8 = "none",
+    can_use_virtual_renderer: bool = false,
+    explorer_visible: bool = false,
+    explorer_focused: bool = false,
+    completion_active: bool = false,
+    search_active: bool = false,
+    selection_active: bool = false,
+    bytes_emitted: usize = 0,
+    read_ns: u64 = 0,
+    dispatch_ns: u64 = 0,
+    decision_ns: u64 = 0,
+    render_ns: u64 = 0,
+    write_ns: u64 = 0,
+    total_ns: u64 = 0,
+};
+
+pub const KeypressProfiler = struct {
+    const log_path = "/tmp/flamingo-perf-keys.log";
+
+    io: std.Io,
+    enabled: bool = false,
+    file: ?std.Io.File = null,
+
+    pub fn initFromEnv(io: std.Io) KeypressProfiler {
+        var profiler = KeypressProfiler{ .io = io };
+        if (std.c.getenv("FLAMINGO_PERF_KEYS")) |value_z| {
+            const value = std.mem.span(value_z);
+            profiler.enabled = value.len == 0 or
+                std.mem.eql(u8, value, "1") or
+                std.mem.eql(u8, value, "true") or
+                std.mem.eql(u8, value, "yes");
+        }
+        return profiler;
+    }
+
+    pub fn deinit(self: *KeypressProfiler) void {
+        if (self.file) |file| {
+            file.close(self.io);
+            self.file = null;
+        }
+    }
+
+    pub fn observe(self: *KeypressProfiler, trace: KeypressTrace) void {
+        if (!self.enabled) return;
+        const file = self.ensureFile() orelse return;
+
+        var buf: [2048]u8 = undefined;
+        const line = std.fmt.bufPrint(
+            &buf,
+            "key={s} mode={s} before={d}:{d} after={d}:{d} scroll={d}:0->{d}:0 handled={d} moved={d} scrolled={d} dirty={s} render={s} reject={s} virtual={d} explorer=visible:{d}/focused:{d} completion={d} search={d} selection={d} bytes={d} read_us={d} dispatch_us={d} decision_us={d} render_us={d} write_us={d} total_us={d}\n",
+            .{
+                trace.key,
+                trace.mode,
+                trace.before_row,
+                trace.before_col,
+                trace.after_row,
+                trace.after_col,
+                trace.before_scroll_row,
+                trace.after_scroll_row,
+                boolBit(trace.movement_handled),
+                boolBit(trace.cursor_moved),
+                boolBit(trace.viewport_scrolled),
+                trace.dirty.name(),
+                trace.render.name(),
+                trace.reject,
+                boolBit(trace.can_use_virtual_renderer),
+                boolBit(trace.explorer_visible),
+                boolBit(trace.explorer_focused),
+                boolBit(trace.completion_active),
+                boolBit(trace.search_active),
+                boolBit(trace.selection_active),
+                trace.bytes_emitted,
+                nsToUs(trace.read_ns),
+                nsToUs(trace.dispatch_ns),
+                nsToUs(trace.decision_ns),
+                nsToUs(trace.render_ns),
+                nsToUs(trace.write_ns),
+                nsToUs(trace.total_ns),
+            },
+        ) catch return;
+
+        file.writeStreamingAll(self.io, line) catch {
+            self.disable();
+        };
+    }
+
+    fn ensureFile(self: *KeypressProfiler) ?std.Io.File {
+        if (self.file) |file| return file;
+        const file = std.Io.Dir.createFileAbsolute(self.io, log_path, .{ .truncate = true }) catch {
+            self.disable();
+            return null;
+        };
+        self.file = file;
+        return file;
+    }
+
+    fn disable(self: *KeypressProfiler) void {
+        if (self.file) |file| {
+            file.close(self.io);
+            self.file = null;
+        }
+        self.enabled = false;
+    }
+};
+
+fn boolBit(value: bool) u8 {
+    return if (value) 1 else 0;
+}
+
+fn nsToUs(ns: u64) u64 {
+    return ns / std.time.ns_per_us;
+}
 
 pub const FrameMetrics = struct {
     phases_ns: [PhaseCount]u64 = [_]u64{0} ** PhaseCount,

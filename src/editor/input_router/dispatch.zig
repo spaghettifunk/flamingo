@@ -925,6 +925,7 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
         }
     }
 
+    ed.noteKeypressMovementHandled(handled);
     if (handled) ed.clampScroll();
     return handled;
 }
