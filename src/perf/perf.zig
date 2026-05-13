@@ -101,17 +101,23 @@ pub const FastCursorRejectReasonCount = @typeInfo(FastCursorRejectReason).@"enum
 pub const KeypressTrace = struct {
     key: []const u8 = "Unknown",
     mode: []const u8 = "Unknown",
+    batch_count: usize = 1,
+    coalesced: bool = false,
+    pending_key_stored: bool = false,
+    coalesce_stop_reason: []const u8 = "not_eligible",
     before_row: usize = 0,
     before_col: usize = 0,
     after_row: usize = 0,
     after_col: usize = 0,
     before_scroll_row: usize = 0,
     after_scroll_row: usize = 0,
+    scroll_delta: i64 = 0,
     movement_handled: bool = false,
     cursor_moved: bool = false,
     viewport_scrolled: bool = false,
     dirty: KeypressDirtyState = .clean,
     render: KeypressRenderKind = .none,
+    render_path_reason: []const u8 = "none",
     reject: []const u8 = "none",
     can_use_virtual_renderer: bool = false,
     explorer_visible: bool = false,
@@ -120,9 +126,23 @@ pub const KeypressTrace = struct {
     search_active: bool = false,
     selection_active: bool = false,
     bytes_emitted: usize = 0,
+    direct_write_bytes: usize = 0,
+    virtual_emit_bytes: usize = 0,
+    tab_separator_bytes: usize = 0,
+    visible_rows: usize = 0,
+    visible_chars: usize = 0,
+    line_byte_reads: usize = 0,
+    line_slice_calls: usize = 0,
+    syntax_cache: []const u8 = "unknown",
     read_ns: u64 = 0,
     dispatch_ns: u64 = 0,
     decision_ns: u64 = 0,
+    highlight_ns: u64 = 0,
+    tabs_ns: u64 = 0,
+    visible_lines_ns: u64 = 0,
+    status_ns: u64 = 0,
+    popup_ns: u64 = 0,
+    virtual_emit_ns: u64 = 0,
     render_ns: u64 = 0,
     write_ns: u64 = 0,
     total_ns: u64 = 0,
@@ -159,9 +179,9 @@ pub const KeypressProfiler = struct {
         const file = self.ensureFile() orelse return;
 
         var buf: [2048]u8 = undefined;
-        const line = std.fmt.bufPrint(
+        const part1 = std.fmt.bufPrint(
             &buf,
-            "key={s} mode={s} before={d}:{d} after={d}:{d} scroll={d}:0->{d}:0 handled={d} moved={d} scrolled={d} dirty={s} render={s} reject={s} virtual={d} explorer=visible:{d}/focused:{d} completion={d} search={d} selection={d} bytes={d} read_us={d} dispatch_us={d} decision_us={d} render_us={d} write_us={d} total_us={d}\n",
+            "key={s} mode={s} before={d}:{d} after={d}:{d} scroll={d}:0->{d}:0 handled={d} moved={d} scrolled={d} viewport_scrolled={d} scroll_delta={d} batch_count={d} coalesced={d} pending_key_stored={d} coalesce_stop_reason={s} dirty={s} render={s} render_path={s} reason={s} reject={s} virtual={d} explorer=visible:{d}/focused:{d} completion={d} search={d} selection={d} ",
             .{
                 trace.key,
                 trace.mode,
@@ -174,8 +194,16 @@ pub const KeypressProfiler = struct {
                 boolBit(trace.movement_handled),
                 boolBit(trace.cursor_moved),
                 boolBit(trace.viewport_scrolled),
+                boolBit(trace.viewport_scrolled),
+                trace.scroll_delta,
+                trace.batch_count,
+                boolBit(trace.coalesced),
+                boolBit(trace.pending_key_stored),
+                trace.coalesce_stop_reason,
                 trace.dirty.name(),
                 trace.render.name(),
+                trace.render.name(),
+                trace.render_path_reason,
                 trace.reject,
                 boolBit(trace.can_use_virtual_renderer),
                 boolBit(trace.explorer_visible),
@@ -183,7 +211,36 @@ pub const KeypressProfiler = struct {
                 boolBit(trace.completion_active),
                 boolBit(trace.search_active),
                 boolBit(trace.selection_active),
+            },
+        ) catch return;
+        if (!self.writeLogPart(file, part1)) return;
+
+        const part2 = std.fmt.bufPrint(
+            &buf,
+            "bytes={d} direct_write_bytes={d} tab_separator_bytes={d} visible_rows={d} visible_chars={d} line_byte_reads={d} line_slice_calls={d} syntax_cache={s} highlight_us={d} tabs_us={d} visible_lines_us={d} status_us={d} popup_us={d} virtual_emit_us={d} ",
+            .{
                 trace.bytes_emitted,
+                trace.direct_write_bytes,
+                trace.tab_separator_bytes,
+                trace.visible_rows,
+                trace.visible_chars,
+                trace.line_byte_reads,
+                trace.line_slice_calls,
+                trace.syntax_cache,
+                nsToUs(trace.highlight_ns),
+                nsToUs(trace.tabs_ns),
+                nsToUs(trace.visible_lines_ns),
+                nsToUs(trace.status_ns),
+                nsToUs(trace.popup_ns),
+                nsToUs(trace.virtual_emit_ns),
+            },
+        ) catch return;
+        if (!self.writeLogPart(file, part2)) return;
+
+        const part3 = std.fmt.bufPrint(
+            &buf,
+            "read_us={d} dispatch_us={d} decision_us={d} render_us={d} write_us={d} total_us={d}\n",
+            .{
                 nsToUs(trace.read_ns),
                 nsToUs(trace.dispatch_ns),
                 nsToUs(trace.decision_ns),
@@ -192,10 +249,15 @@ pub const KeypressProfiler = struct {
                 nsToUs(trace.total_ns),
             },
         ) catch return;
+        _ = self.writeLogPart(file, part3);
+    }
 
-        file.writeStreamingAll(self.io, line) catch {
+    fn writeLogPart(self: *KeypressProfiler, file: std.Io.File, text: []const u8) bool {
+        file.writeStreamingAll(self.io, text) catch {
             self.disable();
+            return false;
         };
+        return true;
     }
 
     fn ensureFile(self: *KeypressProfiler) ?std.Io.File {

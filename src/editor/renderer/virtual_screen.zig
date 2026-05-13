@@ -317,7 +317,7 @@ pub const VirtualScreenRenderer = struct {
                 }
 
                 try terminal.moveCursor(writer, row + 1, col + 1);
-                bytes += 16;
+                bytes += cursorMoveBytes(row + 1, col + 1);
 
                 while (col < current.width) : (col += 1) {
                     const run_idx = current.index(row, col);
@@ -348,6 +348,19 @@ pub const VirtualScreenRenderer = struct {
         return bytes;
     }
 };
+
+fn cursorMoveBytes(row: usize, col: usize) usize {
+    return "\x1b[".len + decimalDigits(row) + ";".len + decimalDigits(col) + "H".len;
+}
+
+fn decimalDigits(value: usize) usize {
+    var n = value;
+    var digits: usize = 1;
+    while (n >= 10) : (digits += 1) {
+        n /= 10;
+    }
+    return digits;
+}
 
 test "virtual screen unchanged frame emits no content changes" {
     const allocator = std.testing.allocator;

@@ -128,6 +128,22 @@ pub fn languageFromFilename(filename: []const u8) ?LanguageId {
     return null;
 }
 
+pub const ViewportCacheStatus = enum {
+    none,
+    hit,
+    miss,
+    unknown,
+
+    pub fn name(self: ViewportCacheStatus) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .hit => "hit",
+            .miss => "miss",
+            .unknown => "unknown",
+        };
+    }
+};
+
 pub const Highlighter = struct {
     allocator: std.mem.Allocator,
     language: ?LanguageId = null,
@@ -241,6 +257,24 @@ pub const Highlighter = struct {
         self.viewport_revision = parsed_revision;
         self.viewport_first_line = requested_first;
         self.viewport_last_line = requested_last;
+    }
+
+    pub fn viewportCacheStatusFromCommitted(self: *const Highlighter, first_line: usize, last_line: usize, margin: usize) ViewportCacheStatus {
+        const parsed_revision = self.parsed_revision orelse return .none;
+        if (self.query == null or self.tree == null or self.line_starts.items.len == 0) return .none;
+
+        const line_count = self.line_starts.items.len;
+        const requested_first = if (first_line > margin) first_line - margin else 0;
+        const requested_last = @min(line_count, last_line + margin);
+
+        if (self.viewport_revision == parsed_revision and
+            requested_first >= self.viewport_first_line and
+            requested_last <= self.viewport_last_line)
+        {
+            return .hit;
+        }
+
+        return .miss;
     }
 
     pub fn ensureForViewport(self: *Highlighter, buf: *const buffer.Buffer, first_line: usize, last_line: usize, margin: usize) !void {
