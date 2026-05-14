@@ -25,4 +25,5 @@ test {
     _ = @import("src/editor/runtime/event_queue.zig");
     _ = @import("src/perf/perf.zig");
     _ = @import("src/editor/renderer/virtual_screen.zig");
+    _ = @import("src/editor/terminal_panel.zig");
 }

@@ -1176,14 +1176,93 @@ test "configured toggle_explorer key is used" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.toggle_explorer = "ctrl+t";
+    ed.config.keybindings.toggle_explorer = "ctrl+g";
     ed.refreshKeybindings();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(!ed.state.explorer_visible);
 
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('g')});
     try std.testing.expect(ed.state.explorer_visible);
+}
+
+test "Ctrl+T toggles terminal panel and enters Terminal mode" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try std.testing.expect(!ed.terminal_panel.visible);
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+
+    try std.testing.expect(ed.terminal_panel.visible);
+    try std.testing.expect(ed.terminal_panel.focused);
+    try std.testing.expectEqual(editor_mod.EditorMode.Terminal, ed.state.mode);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try std.testing.expect(!ed.terminal_panel.visible);
+    try std.testing.expect(!ed.terminal_panel.focused);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+}
+
+test "configured toggle_terminal key is used" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.toggle_terminal = "ctrl+g";
+    ed.refreshKeybindings();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try std.testing.expect(!ed.terminal_panel.visible);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('g')});
+    try std.testing.expect(ed.terminal_panel.visible);
+    try std.testing.expect(ed.terminal_panel.focused);
+    try std.testing.expectEqual(editor_mod.EditorMode.Terminal, ed.state.mode);
+}
+
+test "Terminal mode Esc blurs terminal but keeps panel visible" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+
+    try std.testing.expect(ed.terminal_panel.visible);
+    try std.testing.expect(!ed.terminal_panel.focused);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+}
+
+test "Ctrl+E cycles focus between editor explorer and terminal" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
+    try std.testing.expect(ed.state.explorer_visible);
+    try std.testing.expect(ed.state.explorer_focused);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try std.testing.expect(ed.terminal_panel.visible);
+    try std.testing.expect(ed.terminal_panel.focused);
+    try std.testing.expect(!ed.state.explorer_focused);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try std.testing.expect(!ed.terminal_panel.focused);
+    try std.testing.expect(!ed.state.explorer_focused);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try std.testing.expect(ed.state.explorer_focused);
+    try std.testing.expect(!ed.terminal_panel.focused);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('e')});
+    try std.testing.expect(!ed.state.explorer_focused);
+    try std.testing.expect(ed.terminal_panel.focused);
+    try std.testing.expectEqual(editor_mod.EditorMode.Terminal, ed.state.mode);
 }
 
 test "Ctrl+W closes current tab" {

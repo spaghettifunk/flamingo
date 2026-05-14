@@ -24,6 +24,7 @@ pub const EditorMode = enum {
     Prompt,
     Search,
     GlobalSearch,
+    Terminal,
 };
 
 pub const EditorState = struct {
