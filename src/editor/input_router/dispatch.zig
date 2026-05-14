@@ -315,7 +315,8 @@ fn enterNormalFromTerminal(ed: *editor.Editor) void {
 
 fn showAndFocusTerminal(ed: *editor.Editor) !void {
     try ed.terminal_panel.show();
-    try ed.terminal_panel.ensureStarted(ed.runtime.event_queue);
+    const panel_rows = ed.terminalPanelHeight() -| 1;
+    try ed.terminal_panel.ensureStarted(ed.runtime.event_queue, ed.width, panel_rows);
     ed.terminal_panel.focus();
     ed.state.explorer_focused = false;
     ed.state.mode = .Terminal;

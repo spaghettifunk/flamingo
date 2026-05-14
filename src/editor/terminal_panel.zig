@@ -124,6 +124,7 @@ pub const TerminalPanel = struct {
     current_line: TerminalLine = .{},
     scroll_offset: usize = 0,
     cursor_col: usize = 0,
+    saved_cursor_col: usize = 0,
     escape_state: EscapeState = .none,
     csi_buf: [64]u8 = undefined,
     csi_len: usize = 0,
@@ -170,7 +171,7 @@ pub const TerminalPanel = struct {
         self.focused = false;
     }
 
-    pub fn ensureStarted(self: *TerminalPanel, queue: *event_queue.EventQueue) !void {
+    pub fn ensureStarted(self: *TerminalPanel, queue: *event_queue.EventQueue, cols: usize, rows: usize) !void {
         if (self.backend.isStarted()) return;
         if (!self.backend_enabled) return;
         if (!supports_pty) {
@@ -180,11 +181,15 @@ pub const TerminalPanel = struct {
             }
             return;
         }
-        self.backend.start(self.allocator, queue) catch |err| {
+        self.backend.start(self.allocator, queue, cols, rows) catch |err| {
             try self.appendOutput("Failed to start integrated terminal: ");
             try self.appendOutput(@errorName(err));
             try self.appendOutput("\n");
         };
+    }
+
+    pub fn resizePty(self: *TerminalPanel, cols: usize, rows: usize) void {
+        self.backend.resize(cols, rows);
     }
 
     pub fn markExited(self: *TerminalPanel, code: ?i32) !void {
@@ -253,6 +258,7 @@ pub const TerminalPanel = struct {
         self.output_lines = .empty;
         self.current_line.clearRetainingCapacity();
         self.cursor_col = 0;
+        self.saved_cursor_col = 0;
         self.scroll_offset = 0;
         self.escape_state = .none;
         self.csi_len = 0;
@@ -269,6 +275,14 @@ pub const TerminalPanel = struct {
                         break :blk .csi;
                     },
                     ']' => .osc,
+                    '7' => blk: {
+                        self.saved_cursor_col = self.cursor_col;
+                        break :blk .none;
+                    },
+                    '8' => blk: {
+                        self.cursor_col = self.saved_cursor_col;
+                        break :blk .none;
+                    },
                     else => .none,
                 };
                 return;
@@ -318,7 +332,6 @@ pub const TerminalPanel = struct {
     fn backspaceCurrentLine(self: *TerminalPanel) void {
         if (self.cursor_col == 0) return;
         self.cursor_col -= 1;
-        self.current_line.removeBefore(self.cursor_col + 1);
     }
 
     fn commitCurrentLine(self: *TerminalPanel) !void {
@@ -360,6 +373,8 @@ pub const TerminalPanel = struct {
             'D' => self.cursor_col -|= if (first > 0) first else 1,
             'A' => {},
             'B' => {},
+            's' => self.saved_cursor_col = self.cursor_col,
+            'u' => self.cursor_col = self.saved_cursor_col,
             'J' => {
                 if (first == 2 or first == 3) self.clearOutput();
             },
@@ -471,12 +486,14 @@ const Backend = struct {
     reader_thread: ?std.Thread = null,
     quit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     started: bool = false,
+    cols: usize = 0,
+    rows: usize = 0,
 
     fn isStarted(self: *const Backend) bool {
         return self.started;
     }
 
-    fn start(self: *Backend, allocator: std.mem.Allocator, queue: *event_queue.EventQueue) !void {
+    fn start(self: *Backend, allocator: std.mem.Allocator, queue: *event_queue.EventQueue, cols: usize, rows: usize) !void {
         if (!supports_pty) return TerminalError.UnsupportedPlatform;
         if (self.started) return;
 
@@ -485,16 +502,32 @@ const Backend = struct {
         self.quit.store(false, .seq_cst);
 
         var master_fd: PtyFd = -1;
-        const child_pid = c.forkpty(&master_fd, null, null, null);
+        var win_size = makeWinSize(cols, rows);
+        const child_pid = c.forkpty(&master_fd, null, null, &win_size);
         if (child_pid < 0) return TerminalError.PtySpawnFailed;
         if (child_pid == 0) childExecShell();
 
         self.master_fd = master_fd;
         self.pid = child_pid;
         self.started = true;
+        self.cols = @max(cols, 1);
+        self.rows = @max(rows, 1);
         errdefer self.stop();
 
         self.reader_thread = try std.Thread.spawn(.{}, readerLoop, .{self});
+    }
+
+    fn resize(self: *Backend, cols: usize, rows: usize) void {
+        if (!supports_pty or !self.started) return;
+        const fd = self.master_fd orelse return;
+        const normalized_cols = @max(cols, @as(usize, 1));
+        const normalized_rows = @max(rows, @as(usize, 1));
+        if (self.cols == normalized_cols and self.rows == normalized_rows) return;
+
+        var win_size = makeWinSize(normalized_cols, normalized_rows);
+        _ = std.posix.system.ioctl(fd, tiocswinsz(), @intFromPtr(&win_size));
+        self.cols = normalized_cols;
+        self.rows = normalized_rows;
     }
 
     fn stop(self: *Backend) void {
@@ -523,6 +556,8 @@ const Backend = struct {
         self.started = false;
         self.allocator = null;
         self.queue = null;
+        self.cols = 0;
+        self.rows = 0;
     }
 
     fn markExited(self: *Backend) void {
@@ -544,6 +579,8 @@ const Backend = struct {
             self.started = false;
             self.allocator = null;
             self.queue = null;
+            self.cols = 0;
+            self.rows = 0;
         }
     }
 
@@ -582,6 +619,23 @@ const Backend = struct {
         }
     }
 };
+
+fn makeWinSize(cols: usize, rows: usize) std.posix.winsize {
+    return .{
+        .row = @intCast(@min(@max(rows, @as(usize, 1)), std.math.maxInt(u16))),
+        .col = @intCast(@min(@max(cols, @as(usize, 1)), std.math.maxInt(u16))),
+        .xpixel = 0,
+        .ypixel = 0,
+    };
+}
+
+fn tiocswinsz() c_int {
+    return switch (builtin.os.tag) {
+        .linux => @bitCast(@as(u32, std.posix.T.IOCSWINSZ)),
+        .macos => @bitCast(@as(u32, 0x80087467)),
+        else => 0,
+    };
+}
 
 fn signalProcessGroup(pid: PtyPid, sig: std.posix.SIG) void {
     if (!supports_pty or pid <= 0) return;
@@ -686,6 +740,32 @@ test "TerminalPanel handles cursor movement and clear line escapes" {
 
     try expectLineText(&panel.current_line, "XY");
     try std.testing.expectEqual(@as(usize, 2), panel.cursor_col);
+}
+
+test "TerminalPanel preserves right prompt cells while typing at restored cursor" {
+    var panel = TerminalPanel.init(std.testing.allocator);
+    defer panel.deinit();
+
+    try panel.appendOutput("prompt ");
+    try panel.appendOutput("\x1b[s\x1b[20G[fc4e3b5]\x1b[u");
+    try panel.appendOutput("echo");
+
+    try std.testing.expectEqual(@as(usize, 11), panel.cursor_col);
+    try expectLineText(&panel.current_line, "prompt echo        [fc4e3b5]");
+}
+
+test "TerminalPanel backspace does not shift right prompt cells left" {
+    var panel = TerminalPanel.init(std.testing.allocator);
+    defer panel.deinit();
+
+    try panel.appendOutput("prompt abc");
+    try panel.appendOutput("\x1b[s\x1b[20G[fc4e3b5]\x1b[u");
+    panel.backspaceCurrentLine();
+    try panel.appendOutput(" ");
+    panel.backspaceCurrentLine();
+
+    try std.testing.expectEqual(@as(usize, 9), panel.cursor_col);
+    try expectLineText(&panel.current_line, "prompt ab          [fc4e3b5]");
 }
 
 test "TerminalPanel handles basic SGR color and reset" {

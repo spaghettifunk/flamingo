@@ -2461,6 +2461,7 @@ pub const Editor = struct {
         }
 
         const body_height = panel_height -| 1;
+        self.terminal_panel.resizePty(self.width, body_height);
         self.terminal_panel.clampScroll(body_height);
         const total_lines = self.terminal_panel.renderLineCount();
         const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
@@ -2976,6 +2977,7 @@ pub const Editor = struct {
         const body_height = panel_height -| 1;
         if (body_height == 0) return;
 
+        self.terminal_panel.resizePty(self.width, body_height);
         self.terminal_panel.clampScroll(body_height);
         const total_lines = self.terminal_panel.renderLineCount();
         const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
