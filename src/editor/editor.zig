@@ -1145,6 +1145,23 @@ pub const Editor = struct {
         return if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
     }
 
+    fn terminalCursorScreenPosition(self: *Editor) struct { row: usize, col: usize } {
+        const panel_height = self.terminalPanelHeight();
+        if (panel_height <= 1 or self.height == 0 or self.width == 0) return .{ .row = self.height, .col = self.width };
+        const body_height = panel_height - 1;
+        self.terminal_panel.clampScroll(body_height);
+        const total_lines = self.terminal_panel.renderLineCount();
+        const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
+        const shown = @min(body_height, end);
+        const first = end - shown;
+        const cursor_index = self.terminal_panel.cursorRenderIndex();
+        if (cursor_index < first or cursor_index >= first + shown) return .{ .row = self.height, .col = self.width };
+
+        const row = self.height - panel_height + 2 + (cursor_index - first);
+        const col = @min(self.terminal_panel.cursor_col + 1, self.width);
+        return .{ .row = row, .col = col };
+    }
+
     fn buildRenderContext(self: *Editor, status_buf: *[160]u8) RenderContext {
         const tab = self.currentTab();
         const viewport = self.bufferViewportGeometry();
@@ -2395,6 +2412,30 @@ pub const Editor = struct {
         try writer.writeAll("╯\x1b[0m");
     }
 
+    fn terminalCellStyle(cell: terminal_panel_mod.TerminalCell) render_mod.RenderStyle {
+        if (cell.style.fg) |fg| {
+            return switch (fg) {
+                .black => .terminal_black,
+                .red => if (cell.style.bold) .terminal_bright_red else .terminal_red,
+                .green => if (cell.style.bold) .terminal_bright_green else .terminal_green,
+                .yellow => if (cell.style.bold) .terminal_bright_yellow else .terminal_yellow,
+                .blue => if (cell.style.bold) .terminal_bright_blue else .terminal_blue,
+                .magenta => if (cell.style.bold) .terminal_bright_magenta else .terminal_magenta,
+                .cyan => if (cell.style.bold) .terminal_bright_cyan else .terminal_cyan,
+                .white => if (cell.style.bold) .terminal_bright_white else .terminal_white,
+                .bright_black => .terminal_bright_black,
+                .bright_red => .terminal_bright_red,
+                .bright_green => .terminal_bright_green,
+                .bright_yellow => .terminal_bright_yellow,
+                .bright_blue => .terminal_bright_blue,
+                .bright_magenta => .terminal_bright_magenta,
+                .bright_cyan => .terminal_bright_cyan,
+                .bright_white => .terminal_bright_white,
+            };
+        }
+        return if (cell.style.bold) .terminal_bright_white else .terminal_bg;
+    }
+
     fn renderTerminalPanelLegacy(self: *Editor, writer: anytype) !void {
         const panel_height = self.terminalPanelHeight();
         if (panel_height == 0 or self.width == 0) return;
@@ -2420,6 +2461,7 @@ pub const Editor = struct {
         }
 
         const body_height = panel_height -| 1;
+        self.terminal_panel.clampScroll(body_height);
         const total_lines = self.terminal_panel.renderLineCount();
         const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
         const shown = @min(body_height, end);
@@ -2430,10 +2472,24 @@ pub const Editor = struct {
             try terminal.moveCursor(writer, row, 1);
             try writer.writeAll(render_mod.RenderStyle.terminal_bg.ansi());
             if (offset < shown) {
-                const line = self.terminal_panel.renderLineAt(first + offset) orelse "";
-                const clipped = line[0..@min(line.len, self.width)];
-                try writer.writeAll(clipped);
-                for (clipped.len..self.width) |_| try writer.writeByte(' ');
+                const line = self.terminal_panel.renderLineAt(first + offset) orelse continue;
+                var x: usize = 0;
+                for (line.cells.items[0..@min(line.cells.items.len, self.width)]) |cell| {
+                    try writer.writeAll(terminalCellStyle(cell).ansi());
+                    try writer.writeByte(cell.ch);
+                    x += 1;
+                }
+                if (self.terminal_panel.focused and first + offset == self.terminal_panel.cursorRenderIndex() and self.terminal_panel.cursor_col < self.width) {
+                    while (x < self.terminal_panel.cursor_col and x < self.width) : (x += 1) try writer.writeByte(' ');
+                    if (x < self.width) {
+                        const ch = if (self.terminal_panel.cursor_col < line.cells.items.len) line.cells.items[self.terminal_panel.cursor_col].ch else ' ';
+                        try writer.writeAll(render_mod.RenderStyle.terminal_cursor.ansi());
+                        try writer.writeByte(ch);
+                        x += 1;
+                    }
+                }
+                try writer.writeAll(render_mod.RenderStyle.terminal_bg.ansi());
+                for (x..self.width) |_| try writer.writeByte(' ');
             } else {
                 for (0..self.width) |_| try writer.writeByte(' ');
             }
@@ -2621,7 +2677,8 @@ pub const Editor = struct {
         } else if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null) {
             try terminal.moveCursor(writer, self.statusTerminalRow(), self.width);
         } else if (self.state.mode == .Terminal) {
-            try terminal.moveCursor(writer, self.height, self.width);
+            const pos = self.terminalCursorScreenPosition();
+            try terminal.moveCursor(writer, pos.row, pos.col);
         } else if (tab) |t| {
             // Offset cursor past the line-number gutter
             const content_width = buf_width -| gutter_width;
@@ -2919,6 +2976,7 @@ pub const Editor = struct {
         const body_height = panel_height -| 1;
         if (body_height == 0) return;
 
+        self.terminal_panel.clampScroll(body_height);
         const total_lines = self.terminal_panel.renderLineCount();
         const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
         const shown = @min(body_height, end);
@@ -2926,8 +2984,14 @@ pub const Editor = struct {
         for (0..shown) |offset| {
             const row = start_row + 1 + offset;
             const line = self.terminal_panel.renderLineAt(first + offset) orelse continue;
-            if (self.width > 2) {
-                self.renderer.screen.writeText(row, 1, line[0..@min(line.len, self.width - 2)], .terminal_bg);
+            const max_cols = self.width;
+            for (line.cells.items[0..@min(line.cells.items.len, max_cols)], 0..) |cell, col| {
+                self.renderer.screen.set(row, col, cell.ch, terminalCellStyle(cell));
+            }
+            if (self.terminal_panel.focused and first + offset == self.terminal_panel.cursorRenderIndex()) {
+                const cursor_col = @min(self.terminal_panel.cursor_col, max_cols -| 1);
+                const ch = if (cursor_col < line.cells.items.len) line.cells.items[cursor_col].ch else ' ';
+                self.renderer.screen.set(row, cursor_col, ch, .terminal_cursor);
             }
         }
     }
@@ -3074,7 +3138,8 @@ pub const Editor = struct {
             return;
         }
         if (self.state.mode == .Terminal) {
-            try terminal.moveCursor(writer, self.height, self.width);
+            const pos = self.terminalCursorScreenPosition();
+            try terminal.moveCursor(writer, pos.row, pos.col);
             return;
         }
 

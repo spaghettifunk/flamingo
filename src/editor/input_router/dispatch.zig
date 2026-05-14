@@ -375,8 +375,28 @@ fn handleTerminalInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
+    const body_height = ed.terminalPanelHeight() -| 1;
+    if (event.key == .PageUp and !event.ctrl and !event.alt) {
+        ed.terminal_panel.scrollUp(if (body_height > 0) body_height else 1, body_height);
+        ed.markDirty(.partial);
+        return;
+    }
+    if (event.key == .PageDown and !event.ctrl and !event.alt) {
+        ed.terminal_panel.scrollDown(if (body_height > 0) body_height else 1, body_height);
+        ed.markDirty(.partial);
+        return;
+    }
+    if (event.key == .End and event.shift and !event.ctrl and !event.alt) {
+        ed.terminal_panel.scrollToBottom();
+        ed.markDirty(.partial);
+        return;
+    }
+
     var scratch: [16]u8 = undefined;
     const bytes = terminal_panel.keyEventToInput(event, &scratch) orelse return;
+    ed.terminal_panel.scrollToBottom();
+    // PTYs normally echo typed bytes. Keep the terminal model output-only here
+    // so local input never races with or duplicates shell echo.
     ed.terminal_panel.writeInput(bytes) catch |err| {
         try ed.terminal_panel.appendOutput("\n[terminal input failed: ");
         try ed.terminal_panel.appendOutput(@errorName(err));

@@ -25,6 +25,90 @@ const EscapeState = enum {
     osc,
 };
 
+pub const AnsiColor = enum(u8) {
+    black,
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white,
+    bright_black,
+    bright_red,
+    bright_green,
+    bright_yellow,
+    bright_blue,
+    bright_magenta,
+    bright_cyan,
+    bright_white,
+};
+
+pub const TerminalStyle = struct {
+    fg: ?AnsiColor = null,
+    bg: ?AnsiColor = null,
+    bold: bool = false,
+
+    pub fn eql(self: TerminalStyle, other: TerminalStyle) bool {
+        return self.fg == other.fg and self.bg == other.bg and self.bold == other.bold;
+    }
+};
+
+pub const TerminalCell = struct {
+    ch: u8 = ' ',
+    style: TerminalStyle = .{},
+};
+
+pub const TerminalLine = struct {
+    cells: std.ArrayListUnmanaged(TerminalCell) = .empty,
+
+    fn deinit(self: *TerminalLine, allocator: std.mem.Allocator) void {
+        self.cells.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn clearRetainingCapacity(self: *TerminalLine) void {
+        self.cells.clearRetainingCapacity();
+    }
+
+    fn len(self: *const TerminalLine) usize {
+        return self.cells.items.len;
+    }
+
+    fn put(self: *TerminalLine, allocator: std.mem.Allocator, col: usize, cell: TerminalCell) !void {
+        while (self.cells.items.len < col) {
+            try self.cells.append(allocator, .{});
+        }
+        if (col < self.cells.items.len) {
+            self.cells.items[col] = cell;
+        } else {
+            try self.cells.append(allocator, cell);
+        }
+    }
+
+    fn truncateFrom(self: *TerminalLine, col: usize) void {
+        if (col < self.cells.items.len) {
+            self.cells.shrinkRetainingCapacity(col);
+        }
+    }
+
+    fn removeBefore(self: *TerminalLine, col: usize) void {
+        if (col == 0 or col > self.cells.items.len) return;
+        std.mem.copyForwards(TerminalCell, self.cells.items[col - 1 .. self.cells.items.len - 1], self.cells.items[col..]);
+        self.cells.shrinkRetainingCapacity(self.cells.items.len - 1);
+    }
+
+    fn toOwned(self: *TerminalLine, allocator: std.mem.Allocator) !TerminalLine {
+        return .{ .cells = .{ .items = try allocator.dupe(TerminalCell, self.cells.items), .capacity = self.cells.items.len } };
+    }
+
+    pub fn plainText(self: *const TerminalLine, allocator: std.mem.Allocator) ![]u8 {
+        const out = try allocator.alloc(u8, self.cells.items.len);
+        for (self.cells.items, 0..) |cell, i| out[i] = cell.ch;
+        return out;
+    }
+};
+
 pub const TerminalError = error{
     UnsupportedPlatform,
     PtySpawnFailed,
@@ -36,11 +120,14 @@ pub const TerminalPanel = struct {
     allocator: std.mem.Allocator,
     visible: bool = false,
     focused: bool = false,
-    output_lines: std.ArrayListUnmanaged([]u8) = .empty,
-    current_line: std.ArrayListUnmanaged(u8) = .empty,
+    output_lines: std.ArrayListUnmanaged(TerminalLine) = .empty,
+    current_line: TerminalLine = .{},
     scroll_offset: usize = 0,
     cursor_col: usize = 0,
     escape_state: EscapeState = .none,
+    csi_buf: [64]u8 = undefined,
+    csi_len: usize = 0,
+    current_style: TerminalStyle = .{},
     unsupported_reported: bool = false,
     backend_enabled: bool = !builtin.is_test,
     backend: Backend = .{},
@@ -122,18 +209,45 @@ pub const TerminalPanel = struct {
     }
 
     pub fn renderLineCount(self: *const TerminalPanel) usize {
-        return self.output_lines.items.len + if (self.current_line.items.len > 0) @as(usize, 1) else 0;
+        return self.output_lines.items.len + 1;
     }
 
-    pub fn renderLineAt(self: *const TerminalPanel, index: usize) ?[]const u8 {
-        if (index < self.output_lines.items.len) return self.output_lines.items[index];
-        if (index == self.output_lines.items.len and self.current_line.items.len > 0) return self.current_line.items;
+    pub fn renderLineAt(self: *const TerminalPanel, index: usize) ?*const TerminalLine {
+        if (index < self.output_lines.items.len) return &self.output_lines.items[index];
+        if (index == self.output_lines.items.len) return &self.current_line;
         return null;
     }
 
+    pub fn cursorRenderIndex(self: *const TerminalPanel) usize {
+        return self.output_lines.items.len;
+    }
+
+    pub fn clampScroll(self: *TerminalPanel, body_height: usize) void {
+        const max_offset = self.maxScrollOffset(body_height);
+        if (self.scroll_offset > max_offset) self.scroll_offset = max_offset;
+    }
+
+    pub fn scrollUp(self: *TerminalPanel, amount: usize, body_height: usize) void {
+        self.scroll_offset = @min(self.scroll_offset + amount, self.maxScrollOffset(body_height));
+    }
+
+    pub fn scrollDown(self: *TerminalPanel, amount: usize, body_height: usize) void {
+        self.scroll_offset -|= amount;
+        self.clampScroll(body_height);
+    }
+
+    pub fn scrollToBottom(self: *TerminalPanel) void {
+        self.scroll_offset = 0;
+    }
+
+    fn maxScrollOffset(self: *const TerminalPanel, body_height: usize) usize {
+        const total = self.renderLineCount();
+        return total -| @max(body_height, @as(usize, 1));
+    }
+
     fn clearOutput(self: *TerminalPanel) void {
-        for (self.output_lines.items) |line| {
-            self.allocator.free(line);
+        for (self.output_lines.items) |*line| {
+            line.deinit(self.allocator);
         }
         self.output_lines.deinit(self.allocator);
         self.output_lines = .empty;
@@ -141,6 +255,8 @@ pub const TerminalPanel = struct {
         self.cursor_col = 0;
         self.scroll_offset = 0;
         self.escape_state = .none;
+        self.csi_len = 0;
+        self.current_style = .{};
     }
 
     fn appendOutputByte(self: *TerminalPanel, byte: u8) !void {
@@ -148,14 +264,26 @@ pub const TerminalPanel = struct {
             .none => {},
             .esc => {
                 self.escape_state = switch (byte) {
-                    '[' => .csi,
+                    '[' => blk: {
+                        self.csi_len = 0;
+                        break :blk .csi;
+                    },
                     ']' => .osc,
                     else => .none,
                 };
                 return;
             },
             .csi => {
-                if (byte >= 0x40 and byte <= 0x7e) self.escape_state = .none;
+                if (byte >= 0x40 and byte <= 0x7e) {
+                    try self.applyCsi(byte, self.csi_buf[0..self.csi_len]);
+                    self.escape_state = .none;
+                    self.csi_len = 0;
+                } else {
+                    if (self.csi_len < self.csi_buf.len) {
+                        self.csi_buf[self.csi_len] = byte;
+                        self.csi_len += 1;
+                    }
+                }
                 return;
             },
             .osc => {
@@ -183,29 +311,22 @@ pub const TerminalPanel = struct {
     }
 
     fn putCurrentByte(self: *TerminalPanel, byte: u8) !void {
-        if (self.cursor_col < self.current_line.items.len) {
-            self.current_line.items[self.cursor_col] = byte;
-        } else {
-            while (self.cursor_col > self.current_line.items.len) {
-                try self.current_line.append(self.allocator, ' ');
-            }
-            try self.current_line.append(self.allocator, byte);
-        }
+        try self.current_line.put(self.allocator, self.cursor_col, .{ .ch = byte, .style = self.current_style });
         self.cursor_col += 1;
     }
 
     fn backspaceCurrentLine(self: *TerminalPanel) void {
         if (self.cursor_col == 0) return;
         self.cursor_col -= 1;
-        if (self.cursor_col >= self.current_line.items.len) return;
-        const len = self.current_line.items.len;
-        std.mem.copyForwards(u8, self.current_line.items[self.cursor_col .. len - 1], self.current_line.items[self.cursor_col + 1 .. len]);
-        self.current_line.shrinkRetainingCapacity(len - 1);
+        self.current_line.removeBefore(self.cursor_col + 1);
     }
 
     fn commitCurrentLine(self: *TerminalPanel) !void {
-        const owned = try self.allocator.dupe(u8, self.current_line.items);
-        errdefer self.allocator.free(owned);
+        const owned = try self.current_line.toOwned(self.allocator);
+        errdefer {
+            var line = owned;
+            line.deinit(self.allocator);
+        }
         try self.output_lines.append(self.allocator, owned);
         self.current_line.clearRetainingCapacity();
         self.cursor_col = 0;
@@ -214,12 +335,90 @@ pub const TerminalPanel = struct {
 
     fn enforceScrollbackLimit(self: *TerminalPanel) !void {
         while (self.output_lines.items.len > max_scrollback_lines) {
-            const old = self.output_lines.orderedRemove(0);
-            self.allocator.free(old);
+            var old = self.output_lines.orderedRemove(0);
+            old.deinit(self.allocator);
             if (self.scroll_offset > 0) self.scroll_offset -= 1;
         }
     }
+
+    fn applyCsi(self: *TerminalPanel, final: u8, raw_params: []const u8) !void {
+        var params_buf: [16]usize = undefined;
+        const params = parseCsiParams(raw_params, &params_buf);
+        const first = if (params.len > 0) params[0] else 0;
+
+        switch (final) {
+            'm' => self.applySgr(raw_params, params),
+            'K' => {
+                if (first == 0) self.current_line.truncateFrom(self.cursor_col);
+                if (first == 2) {
+                    self.current_line.clearRetainingCapacity();
+                    self.cursor_col = 0;
+                }
+            },
+            'G' => self.cursor_col = if (first > 0) first - 1 else 0,
+            'C' => self.cursor_col += if (first > 0) first else 1,
+            'D' => self.cursor_col -|= if (first > 0) first else 1,
+            'A' => {},
+            'B' => {},
+            'J' => {
+                if (first == 2 or first == 3) self.clearOutput();
+            },
+            else => {},
+        }
+    }
+
+    fn applySgr(self: *TerminalPanel, raw_params: []const u8, params: []const usize) void {
+        if (raw_params.len == 0) {
+            self.current_style = .{};
+            return;
+        }
+        for (params) |param| {
+            switch (param) {
+                0 => self.current_style = .{},
+                1 => self.current_style.bold = true,
+                22 => self.current_style.bold = false,
+                30...37 => self.current_style.fg = @enumFromInt(param - 30),
+                90...97 => self.current_style.fg = @enumFromInt(param - 90 + 8),
+                39 => self.current_style.fg = null,
+                40...47 => self.current_style.bg = @enumFromInt(param - 40),
+                100...107 => self.current_style.bg = @enumFromInt(param - 100 + 8),
+                49 => self.current_style.bg = null,
+                else => {},
+            }
+        }
+    }
 };
+
+fn parseCsiParams(raw: []const u8, out: *[16]usize) []const usize {
+    var count: usize = 0;
+    var value: usize = 0;
+    var saw_digit = false;
+    for (raw) |byte| {
+        switch (byte) {
+            '0'...'9' => {
+                saw_digit = true;
+                value = value * 10 + (byte - '0');
+            },
+            ';' => {
+                if (count < out.len) {
+                    out[count] = if (saw_digit) value else 0;
+                    count += 1;
+                }
+                value = 0;
+                saw_digit = false;
+            },
+            '?', '>', '=' => {},
+            else => {},
+        }
+    }
+    if (saw_digit or raw.len == 0 or (raw.len > 0 and raw[raw.len - 1] == ';')) {
+        if (count < out.len) {
+            out[count] = if (saw_digit) value else 0;
+            count += 1;
+        }
+    }
+    return out[0..count];
+}
 
 pub fn panelHeight(screen_height: usize) usize {
     if (screen_height < 6) return 0;
@@ -460,6 +659,12 @@ test "terminal panel height reserves bounded bottom space" {
     try std.testing.expectEqual(@as(usize, 3), panelHeight(9));
 }
 
+fn expectLineText(line: *const TerminalLine, expected: []const u8) !void {
+    const text = try line.plainText(std.testing.allocator);
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings(expected, text);
+}
+
 test "TerminalPanel sanitizes output and tracks current line" {
     var panel = TerminalPanel.init(std.testing.allocator);
     defer panel.deinit();
@@ -467,9 +672,45 @@ test "TerminalPanel sanitizes output and tracks current line" {
     try panel.appendOutput("hello\nwor\x1b[31mld\rWORLD\x08!\nnext");
 
     try std.testing.expectEqual(@as(usize, 2), panel.output_lines.items.len);
-    try std.testing.expectEqualStrings("hello", panel.output_lines.items[0]);
-    try std.testing.expectEqualStrings("WORL!", panel.output_lines.items[1]);
-    try std.testing.expectEqualStrings("next", panel.current_line.items);
+    try expectLineText(&panel.output_lines.items[0], "hello");
+    try expectLineText(&panel.output_lines.items[1], "WORL!");
+    try expectLineText(&panel.current_line, "next");
+    try std.testing.expectEqual(AnsiColor.red, panel.output_lines.items[1].cells.items[3].style.fg.?);
+}
+
+test "TerminalPanel handles cursor movement and clear line escapes" {
+    var panel = TerminalPanel.init(std.testing.allocator);
+    defer panel.deinit();
+
+    try panel.appendOutput("abcdef\rXY\x1b[K");
+
+    try expectLineText(&panel.current_line, "XY");
+    try std.testing.expectEqual(@as(usize, 2), panel.cursor_col);
+}
+
+test "TerminalPanel handles basic SGR color and reset" {
+    var panel = TerminalPanel.init(std.testing.allocator);
+    defer panel.deinit();
+
+    try panel.appendOutput("\x1b[31mred\x1b[0m normal");
+
+    try expectLineText(&panel.current_line, "red normal");
+    try std.testing.expectEqual(AnsiColor.red, panel.current_line.cells.items[0].style.fg.?);
+    try std.testing.expect(panel.current_line.cells.items[0].style.fg == panel.current_line.cells.items[2].style.fg);
+    try std.testing.expect(panel.current_line.cells.items[4].style.fg == null);
+}
+
+test "TerminalPanel clamps and updates scrollback offset" {
+    var panel = TerminalPanel.init(std.testing.allocator);
+    defer panel.deinit();
+
+    try panel.appendOutput("one\ntwo\nthree\nfour\n");
+    panel.scrollUp(10, 2);
+    try std.testing.expectEqual(@as(usize, 3), panel.scroll_offset);
+    panel.scrollDown(1, 2);
+    try std.testing.expectEqual(@as(usize, 2), panel.scroll_offset);
+    panel.scrollToBottom();
+    try std.testing.expectEqual(@as(usize, 0), panel.scroll_offset);
 }
 
 test "TerminalPanel caps scrollback at max lines" {
