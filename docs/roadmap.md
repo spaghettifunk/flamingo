@@ -7,7 +7,7 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] write a proper README.md with contributions, runnign the project, etc
 - [ ] CI pipeline for running tests and binary creation (GitHub actions as a start)
 - [ ] `homebrew` formula for installation
-- [ ] find a way to place the configuration file in a specific path like `~/.flamingo/config.toml` or similar at startup time
+- [ ] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
 - [x] UI overhaul using nerdfonts
 
@@ -41,6 +41,8 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement going backwards/forwards like a browser
 - [x] syntax highlight for Markdown files
 - [ ] Tabs with folder name in a different color
+- [ ] implement folding/unfolding feature for when `{}` are found (add also keybinding)
+- [ ] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
 
 ## Plugins System TODO
 
@@ -50,7 +52,6 @@ A set of todos without order or priority. Simply grouped by category
 ## New Features
 
 - [ ] implement a "Help" popup like LazyVim by doing `:help` showing what the editor can do
-- [ ] implement the ability to create a new Pane and store the layout in the `~/.flamingo/config.toml`. Something like tmux
 - [ ] enable the terminal in the editor. It can be a toggle to show/hide the terminal
 - [x] implement a multi-key sequences
 - [x] implement global search
@@ -58,3 +59,4 @@ A set of todos without order or priority. Simply grouped by category
   - [ ] Async/background indexing
   - [ ] Persistent search index
   - [x] Preview pane
+
