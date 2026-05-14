@@ -11,6 +11,7 @@ const navigation = @import("../navigation.zig");
 const filesystem_picker = @import("../filesystem_picker.zig");
 const fs_ops = @import("../filesystem_ops.zig");
 const prompt_popup = @import("../prompt_popup.zig");
+const terminal_panel = @import("../terminal_panel.zig");
 
 fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     if (event.eql(expected)) return true;
@@ -307,12 +308,120 @@ fn applyPrompt(ed: *editor.Editor) !void {
     }
 }
 
+fn enterNormalFromTerminal(ed: *editor.Editor) void {
+    ed.terminal_panel.blur();
+    ed.state.mode = .Normal;
+}
+
+fn showAndFocusTerminal(ed: *editor.Editor) !void {
+    try ed.terminal_panel.show();
+    const panel_rows = ed.terminalPanelHeight() -| 1;
+    try ed.terminal_panel.ensureStarted(ed.runtime.event_queue, ed.width, panel_rows);
+    ed.terminal_panel.focus();
+    ed.state.explorer_focused = false;
+    ed.state.mode = .Terminal;
+    ed.markDirty(.full);
+}
+
+fn hideTerminal(ed: *editor.Editor) void {
+    ed.terminal_panel.hide();
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn cyclePanelFocus(ed: *editor.Editor) !bool {
+    const explorer_available = ed.state.explorer_visible;
+    const terminal_available = ed.terminal_panel.visible;
+    if (!explorer_available and !terminal_available) return false;
+
+    if (explorer_available and terminal_available) {
+        if (!ed.state.explorer_focused and !ed.terminal_panel.focused) {
+            ed.state.explorer_focused = true;
+            ed.terminal_panel.blur();
+            if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
+        } else if (ed.state.explorer_focused) {
+            ed.state.explorer_focused = false;
+            try showAndFocusTerminal(ed);
+        } else {
+            enterNormalFromTerminal(ed);
+        }
+        ed.markDirty(.full);
+        return true;
+    }
+
+    if (terminal_available) {
+        if (ed.terminal_panel.focused) {
+            enterNormalFromTerminal(ed);
+        } else {
+            try showAndFocusTerminal(ed);
+        }
+        ed.markDirty(.full);
+        return true;
+    }
+
+    if (explorer_available) {
+        ed.state.explorer_focused = !ed.state.explorer_focused;
+        ed.markDirty(.full);
+        return true;
+    }
+
+    return false;
+}
+
+fn handleTerminalInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (matches(event, ed.keys.normal_mode)) {
+        clearPendingNormalSequence(ed);
+        enterNormalFromTerminal(ed);
+        ed.markDirty(.full);
+        return;
+    }
+
+    const body_height = ed.terminalPanelHeight() -| 1;
+    if (event.key == .PageUp and !event.ctrl and !event.alt) {
+        ed.terminal_panel.scrollUp(if (body_height > 0) body_height else 1, body_height);
+        ed.markDirty(.partial);
+        return;
+    }
+    if (event.key == .PageDown and !event.ctrl and !event.alt) {
+        ed.terminal_panel.scrollDown(if (body_height > 0) body_height else 1, body_height);
+        ed.markDirty(.partial);
+        return;
+    }
+    if (event.key == .End and event.shift and !event.ctrl and !event.alt) {
+        ed.terminal_panel.scrollToBottom();
+        ed.markDirty(.partial);
+        return;
+    }
+
+    var scratch: [16]u8 = undefined;
+    const bytes = terminal_panel.keyEventToInput(event, &scratch) orelse return;
+    ed.terminal_panel.scrollToBottom();
+    // PTYs normally echo typed bytes. Keep the terminal model output-only here
+    // so local input never races with or duplicates shell echo.
+    ed.terminal_panel.writeInput(bytes) catch |err| {
+        try ed.terminal_panel.appendOutput("\n[terminal input failed: ");
+        try ed.terminal_panel.appendOutput(@errorName(err));
+        try ed.terminal_panel.appendOutput("]\n");
+        ed.markDirty(.partial);
+    };
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
     }
 
     const keys = ed.keys;
+
+    if (matches(event, keys.toggle_terminal)) {
+        clearPendingNormalSequence(ed);
+        if (ed.terminal_panel.visible) {
+            hideTerminal(ed);
+        } else {
+            try showAndFocusTerminal(ed);
+        }
+        return;
+    }
 
     if (matches(event, keys.toggle_explorer)) {
         clearPendingNormalSequence(ed);
@@ -322,6 +431,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         ed.state.explorer_visible = !ed.state.explorer_visible;
         if (ed.state.explorer_visible) {
             ed.state.explorer_focused = true;
+            ed.terminal_panel.blur();
+            if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
         } else {
             ed.state.explorer_focused = false;
         }
@@ -329,18 +440,20 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
+    if (matches(event, keys.switch_focus)) {
+        clearPendingNormalSequence(ed);
+        if (try cyclePanelFocus(ed)) return;
+    }
+
+    if (ed.state.mode == .Terminal) {
+        try handleTerminalInput(ed, event);
+        return;
+    }
+
     if (matches(event, keys.close_tab)) {
         clearPendingNormalSequence(ed);
         if (ed.state.mode != .Dashboard) {
             ed.closeTab();
-        }
-        return;
-    }
-
-    if (matches(event, keys.switch_focus)) {
-        clearPendingNormalSequence(ed);
-        if (ed.state.explorer_visible) {
-            ed.state.explorer_focused = !ed.state.explorer_focused;
         }
         return;
     }
@@ -847,15 +960,16 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 ed.markDirty(.full);
             }
         },
+        .Terminal => {
+            try handleTerminalInput(ed, event);
+        },
     }
 }
 
 pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
     const keys = ed.keys;
-    const top_reserved = 2;
-    const bot_reserved = 1;
-    const page_rows = if (ed.height > top_reserved + bot_reserved) ed.height - (top_reserved + bot_reserved) else 1;
+    const page_rows = @max(ed.editorVisibleRows(), 1);
 
     // Multi-cursor support: apply movement to all cursors
     var handled = false;

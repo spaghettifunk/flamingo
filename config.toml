@@ -9,6 +9,7 @@ settings = "ctrl+p"
 quit = "ctrl+q"
 
 toggle_explorer = "ctrl+b"
+toggle_terminal = "ctrl+t"
 switch_focus = "ctrl+e"
 close_tab = "ctrl+w"
 next_tab = "alt+["

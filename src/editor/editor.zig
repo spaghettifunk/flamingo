@@ -18,6 +18,7 @@ const renderer_mod = @import("renderer/renderer.zig");
 const keybindings = @import("input_router/keybindings.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
 const prompt_popup = @import("prompt_popup.zig");
+const terminal_panel_mod = @import("terminal_panel.zig");
 
 const max_fifo_events_per_idle_tick = 8;
 const syntax_parse_idle_delay_ns = 50 * std.time.ns_per_ms;
@@ -227,6 +228,7 @@ pub const Editor = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     state: state_mod.EditorState,
+    terminal_panel: terminal_panel_mod.TerminalPanel,
     runtime: runtime_mod.EditorRuntime,
     renderer: renderer_mod.EditorRenderer,
     keypress_profiler: perf.KeypressProfiler,
@@ -254,6 +256,7 @@ pub const Editor = struct {
             .config = cfg,
             .keys = ResolvedKeybindings.init(cfg.keybindings),
             .state = state_mod.EditorState.init(allocator),
+            .terminal_panel = terminal_panel_mod.TerminalPanel.init(allocator),
             .runtime = runtime,
             .renderer = renderer_mod.EditorRenderer.init(allocator),
             .keypress_profiler = perf.KeypressProfiler.initFromEnv(io),
@@ -264,6 +267,7 @@ pub const Editor = struct {
         if (self.is_deinitialized) return;
         self.is_deinitialized = true;
 
+        self.terminal_panel.deinit();
         self.runtime.deinit(self.allocator);
         self.state.deinit(self.allocator);
         self.renderer.deinit(self.allocator);
@@ -835,6 +839,19 @@ pub const Editor = struct {
                     self.state.git_snapshot = snapshot;
                     self.markDirty(.partial);
                 },
+                .terminal_output => |output| {
+                    defer self.allocator.free(output.bytes);
+                    self.terminal_panel.appendOutput(output.bytes) catch |err| {
+                        logz.err().fmt("msg", "failed to append terminal output: {any}", .{err}).log();
+                    };
+                    if (self.terminal_panel.visible) self.markDirty(.partial);
+                },
+                .terminal_exit => |exit| {
+                    self.terminal_panel.markExited(exit.code) catch |err| {
+                        logz.err().fmt("msg", "failed to record terminal exit: {any}", .{err}).log();
+                    };
+                    if (self.terminal_panel.visible) self.markDirty(.partial);
+                },
                 .syntax_parse_result => unreachable,
             }
         }
@@ -1071,9 +1088,7 @@ pub const Editor = struct {
         const tab = self.currentTab() orelse return null;
         if (tab.cursors.items.len == 0) return null;
         const mc = tab.mainCursor();
-        const top_reserved = 2;
-        const bot_reserved = 1;
-        const visible_rows = if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
+        const visible_rows = self.editorVisibleRows();
         const viewport = self.bufferViewportGeometry();
         return .{
             .row = mc.row,
@@ -1109,6 +1124,44 @@ pub const Editor = struct {
         return .{ .start_col = buf_start_col, .width = buf_width };
     }
 
+    pub fn terminalPanelHeight(self: *const Editor) usize {
+        if (!self.terminal_panel.visible) return 0;
+        return terminal_panel_mod.panelHeight(self.height);
+    }
+
+    fn statusRowIndex(self: *const Editor) usize {
+        const panel_height = self.terminalPanelHeight();
+        if (self.height == 0) return 0;
+        return self.height - panel_height - 1;
+    }
+
+    fn statusTerminalRow(self: *const Editor) usize {
+        return self.statusRowIndex() + 1;
+    }
+
+    pub fn editorVisibleRows(self: *const Editor) usize {
+        const top_reserved = 2;
+        const bot_reserved = 1 + self.terminalPanelHeight();
+        return if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
+    }
+
+    fn terminalCursorScreenPosition(self: *Editor) struct { row: usize, col: usize } {
+        const panel_height = self.terminalPanelHeight();
+        if (panel_height <= 1 or self.height == 0 or self.width == 0) return .{ .row = self.height, .col = self.width };
+        const body_height = panel_height - 1;
+        self.terminal_panel.clampScroll(body_height);
+        const total_lines = self.terminal_panel.renderLineCount();
+        const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
+        const shown = @min(body_height, end);
+        const first = end - shown;
+        const cursor_index = self.terminal_panel.cursorRenderIndex();
+        if (cursor_index < first or cursor_index >= first + shown) return .{ .row = self.height, .col = self.width };
+
+        const row = self.height - panel_height + 2 + (cursor_index - first);
+        const col = @min(self.terminal_panel.cursor_col + 1, self.width);
+        return .{ .row = row, .col = col };
+    }
+
     fn buildRenderContext(self: *Editor, status_buf: *[160]u8) RenderContext {
         const tab = self.currentTab();
         const viewport = self.bufferViewportGeometry();
@@ -1116,9 +1169,7 @@ pub const Editor = struct {
             self.calculateGutterWidth(t.buf.lines.items.len)
         else
             0;
-        const top_reserved = 2;
-        const bot_reserved = 1;
-        const visible_rows = if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
+        const visible_rows = self.editorVisibleRows();
 
         _ = status_buf;
 
@@ -1152,6 +1203,7 @@ pub const Editor = struct {
             .Prompt => "PROMPT",
             .Insert => "INSERT",
             .Search => "SEARCH",
+            .Terminal => "TERMINAL",
             else => "NORMAL",
         };
         if (tab) |t| {
@@ -1251,7 +1303,7 @@ pub const Editor = struct {
 
     fn writeFastStatusField(self: *Editor, writer: anytype, field: StatusFieldCache, text: []const u8) !void {
         if (!field.valid or field.width == 0 or field.terminal_col == 0) return;
-        try terminal.moveCursor(writer, self.height, field.terminal_col);
+        try terminal.moveCursor(writer, self.statusTerminalRow(), field.terminal_col);
         try writer.writeAll(render_mod.RenderStyle.status_right.ansi());
 
         var written: usize = 0;
@@ -1292,7 +1344,7 @@ pub const Editor = struct {
 
     fn renderStatusLineLegacyStyle(self: *Editor, writer: anytype, tab: ?*Tab) !void {
         if (self.height == 0) return;
-        try terminal.moveCursor(writer, self.height, 1);
+        try terminal.moveCursor(writer, self.statusTerminalRow(), 1);
         try terminal.clearLine(writer);
 
         var right_buf: [192]u8 = undefined;
@@ -1315,6 +1367,7 @@ pub const Editor = struct {
             .GlobalSearch => "GLOBAL",
             .FilesystemPicker => "FILES",
             .Prompt => "PROMPT",
+            .Terminal => "TERM",
             else => "NORMAL",
         };
     }
@@ -1322,7 +1375,7 @@ pub const Editor = struct {
     fn statusModeStyle(self: *const Editor) render_mod.RenderStyle {
         return switch (self.state.mode) {
             .Insert => .status_mode_insert,
-            .Command, .FilesystemPicker, .Prompt => .status_mode_command,
+            .Command, .FilesystemPicker, .Prompt, .Terminal => .status_mode_command,
             .Search, .GlobalSearch => .status_mode_search,
             else => .status_mode_normal,
         };
@@ -1331,7 +1384,7 @@ pub const Editor = struct {
     fn statusModeSepStyle(self: *const Editor) render_mod.RenderStyle {
         return switch (self.state.mode) {
             .Insert => .status_sep_insert,
-            .Command, .FilesystemPicker, .Prompt => .status_sep_command,
+            .Command, .FilesystemPicker, .Prompt, .Terminal => .status_sep_command,
             .Search, .GlobalSearch => .status_sep_search,
             else => .status_sep_normal,
         };
@@ -1368,6 +1421,7 @@ pub const Editor = struct {
         if (self.state.mode == .Command) return "command";
         if (self.state.mode == .Search) return "search";
         if (self.state.mode == .GlobalSearch) return "global_search";
+        if (self.terminal_panel.visible) return if (self.terminal_panel.focused) "terminal focused" else "terminal";
         return null;
     }
 
@@ -1782,9 +1836,7 @@ pub const Editor = struct {
         const tab = self.currentTab() orelse return;
         const mc = tab.mainCursor();
         const before_scroll_row = tab.scroll_row;
-        const top_reserved = 2; // tabs + separator
-        const bot_reserved = 1; // status bar
-        const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 1;
+        const visible_rows = @max(self.editorVisibleRows(), 1);
         if (mc.row < tab.scroll_row) {
             tab.scroll_row = mc.row;
         } else if (mc.row >= tab.scroll_row + visible_rows) {
@@ -2360,6 +2412,92 @@ pub const Editor = struct {
         try writer.writeAll("╯\x1b[0m");
     }
 
+    fn terminalCellStyle(cell: terminal_panel_mod.TerminalCell) render_mod.RenderStyle {
+        if (cell.style.fg) |fg| {
+            return switch (fg) {
+                .black => .terminal_black,
+                .red => if (cell.style.bold) .terminal_bright_red else .terminal_red,
+                .green => if (cell.style.bold) .terminal_bright_green else .terminal_green,
+                .yellow => if (cell.style.bold) .terminal_bright_yellow else .terminal_yellow,
+                .blue => if (cell.style.bold) .terminal_bright_blue else .terminal_blue,
+                .magenta => if (cell.style.bold) .terminal_bright_magenta else .terminal_magenta,
+                .cyan => if (cell.style.bold) .terminal_bright_cyan else .terminal_cyan,
+                .white => if (cell.style.bold) .terminal_bright_white else .terminal_white,
+                .bright_black => .terminal_bright_black,
+                .bright_red => .terminal_bright_red,
+                .bright_green => .terminal_bright_green,
+                .bright_yellow => .terminal_bright_yellow,
+                .bright_blue => .terminal_bright_blue,
+                .bright_magenta => .terminal_bright_magenta,
+                .bright_cyan => .terminal_bright_cyan,
+                .bright_white => .terminal_bright_white,
+            };
+        }
+        return if (cell.style.bold) .terminal_bright_white else .terminal_bg;
+    }
+
+    fn renderTerminalPanelLegacy(self: *Editor, writer: anytype) !void {
+        const panel_height = self.terminalPanelHeight();
+        if (panel_height == 0 or self.width == 0) return;
+
+        const start_row = self.height - panel_height + 1;
+        const title = if (self.terminal_panel.focused) " Terminal [focused] " else " Terminal ";
+        const title_style: render_mod.RenderStyle = if (self.terminal_panel.focused) .terminal_focus else .terminal_title;
+
+        try terminal.moveCursor(writer, start_row, 1);
+        try writer.writeAll(render_mod.RenderStyle.terminal_border.ansi());
+        var title_written = false;
+        var col: usize = 0;
+        while (col < self.width) : (col += 1) {
+            if (!title_written and col == 1 and self.width > title.len + 1) {
+                try writer.writeAll(title_style.ansi());
+                try writer.writeAll(title);
+                try writer.writeAll(render_mod.RenderStyle.terminal_border.ansi());
+                col += title.len - 1;
+                title_written = true;
+            } else {
+                try writer.writeByte('-');
+            }
+        }
+
+        const body_height = panel_height -| 1;
+        self.terminal_panel.resizePty(self.width, body_height);
+        self.terminal_panel.clampScroll(body_height);
+        const total_lines = self.terminal_panel.renderLineCount();
+        const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
+        const shown = @min(body_height, end);
+        const first = end - shown;
+
+        for (0..body_height) |offset| {
+            const row = start_row + 1 + offset;
+            try terminal.moveCursor(writer, row, 1);
+            try writer.writeAll(render_mod.RenderStyle.terminal_bg.ansi());
+            if (offset < shown) {
+                const line = self.terminal_panel.renderLineAt(first + offset) orelse continue;
+                var x: usize = 0;
+                for (line.cells.items[0..@min(line.cells.items.len, self.width)]) |cell| {
+                    try writer.writeAll(terminalCellStyle(cell).ansi());
+                    try writer.writeByte(cell.ch);
+                    x += 1;
+                }
+                if (self.terminal_panel.focused and first + offset == self.terminal_panel.cursorRenderIndex() and self.terminal_panel.cursor_col < self.width) {
+                    while (x < self.terminal_panel.cursor_col and x < self.width) : (x += 1) try writer.writeByte(' ');
+                    if (x < self.width) {
+                        const ch = if (self.terminal_panel.cursor_col < line.cells.items.len) line.cells.items[self.terminal_panel.cursor_col].ch else ' ';
+                        try writer.writeAll(render_mod.RenderStyle.terminal_cursor.ansi());
+                        try writer.writeByte(ch);
+                        x += 1;
+                    }
+                }
+                try writer.writeAll(render_mod.RenderStyle.terminal_bg.ansi());
+                for (x..self.width) |_| try writer.writeByte(' ');
+            } else {
+                for (0..self.width) |_| try writer.writeByte(' ');
+            }
+        }
+        try writer.writeAll(render_mod.RenderStyle.normal.ansi());
+    }
+
     fn render(self: *Editor, writer: anytype) !void {
         if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt or self.state.mode == .FilesystemPicker) {
             try self.state.dash.render(writer, self.width, self.height);
@@ -2367,12 +2505,12 @@ pub const Editor = struct {
             if (self.state.mode == .FilesystemPicker) {
                 try self.renderFilesystemPickerPopup(writer);
             } else if (self.state.mode == .OpenFilePrompt) {
-                try terminal.moveCursor(writer, self.height, 1);
+                try terminal.moveCursor(writer, self.statusTerminalRow(), 1);
                 try terminal.clearLine(writer);
                 try writer.print("Open file: {s}", .{self.state.command_buffer.items});
-                try terminal.moveCursor(writer, self.height, 12 + self.state.command_buffer.items.len);
+                try terminal.moveCursor(writer, self.statusTerminalRow(), 12 + self.state.command_buffer.items.len);
             } else if (self.state.error_message) |err_msg| {
-                try terminal.moveCursor(writer, self.height, 1);
+                try terminal.moveCursor(writer, self.statusTerminalRow(), 1);
                 try terminal.clearLine(writer);
                 try writer.writeAll("\x1b[31;1m"); // Red, Bold
                 try writer.print("{s}", .{err_msg});
@@ -2418,9 +2556,7 @@ pub const Editor = struct {
         else
             0;
 
-        const top_reserved = 2; // tabs + separator
-        const bot_reserved = 1; // status bar
-        const visible_rows = if (self.height > (top_reserved + bot_reserved)) self.height - (top_reserved + bot_reserved) else 0;
+        const visible_rows = self.editorVisibleRows();
         if (tab) |t| {
             const highlight_start = perf.nowNs();
             self.prepareSyntaxForViewport(t, t.scroll_row, t.scroll_row + visible_rows, 20) catch {
@@ -2511,6 +2647,8 @@ pub const Editor = struct {
         try self.renderStatusLineLegacyStyle(writer, tab);
         if (self.active_keypress_trace) |trace| trace.status_ns += perf.elapsedNs(status_start);
 
+        try self.renderTerminalPanelLegacy(writer);
+
         const popup_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
         try self.renderCommandPopup(writer);
         try self.renderGlobalSearchPopup(writer);
@@ -2532,13 +2670,16 @@ pub const Editor = struct {
                 try terminal.moveCursor(writer, geom.row + 2, geom.col + 5 + cursor_col);
             }
         } else if (self.state.mode == .Search) {
-            try terminal.moveCursor(writer, self.height, 2 + self.state.search_buffer.items.len);
+            try terminal.moveCursor(writer, self.statusTerminalRow(), 2 + self.state.search_buffer.items.len);
         } else if (self.state.mode == .FilesystemPicker and self.state.filesystem_picker.phase == .entering_name) {
-            try terminal.moveCursor(writer, self.height, self.width);
+            try terminal.moveCursor(writer, self.statusTerminalRow(), self.width);
         } else if (self.state.mode == .Prompt) {
-            try terminal.moveCursor(writer, self.height, self.width);
+            try terminal.moveCursor(writer, self.statusTerminalRow(), self.width);
         } else if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null) {
-            try terminal.moveCursor(writer, self.height, self.width);
+            try terminal.moveCursor(writer, self.statusTerminalRow(), self.width);
+        } else if (self.state.mode == .Terminal) {
+            const pos = self.terminalCursorScreenPosition();
+            try terminal.moveCursor(writer, pos.row, pos.col);
         } else if (tab) |t| {
             // Offset cursor past the line-number gutter
             const content_width = buf_width -| gutter_width;
@@ -2625,6 +2766,7 @@ pub const Editor = struct {
         const status_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
         self.renderVirtualStatus(ctx);
         if (self.active_keypress_trace) |trace| trace.status_ns += perf.elapsedNs(status_start);
+        self.renderVirtualTerminalPanel();
         const emit_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
         const emit_bytes = try self.renderer.screen_renderer.emit(writer, &self.renderer.screen);
         if (self.active_keypress_trace) |trace| {
@@ -2816,6 +2958,46 @@ pub const Editor = struct {
         self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .global_search_popup_border);
     }
 
+    fn renderVirtualTerminalPanel(self: *Editor) void {
+        const panel_height = self.terminalPanelHeight();
+        if (panel_height == 0 or self.width == 0) return;
+
+        const start_row = self.height - panel_height;
+        for (start_row..self.height) |row| {
+            self.renderer.screen.fillRow(row, ' ', .terminal_bg);
+        }
+
+        self.renderer.screen.fillRow(start_row, '-', .terminal_border);
+        const title = if (self.terminal_panel.focused) " Terminal [focused] " else " Terminal ";
+        const title_style: render_mod.RenderStyle = if (self.terminal_panel.focused) .terminal_focus else .terminal_title;
+        if (self.width > 2) {
+            self.renderer.screen.writeText(start_row, 1, title[0..@min(title.len, self.width - 1)], title_style);
+        }
+
+        const body_height = panel_height -| 1;
+        if (body_height == 0) return;
+
+        self.terminal_panel.resizePty(self.width, body_height);
+        self.terminal_panel.clampScroll(body_height);
+        const total_lines = self.terminal_panel.renderLineCount();
+        const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
+        const shown = @min(body_height, end);
+        const first = end - shown;
+        for (0..shown) |offset| {
+            const row = start_row + 1 + offset;
+            const line = self.terminal_panel.renderLineAt(first + offset) orelse continue;
+            const max_cols = self.width;
+            for (line.cells.items[0..@min(line.cells.items.len, max_cols)], 0..) |cell, col| {
+                self.renderer.screen.set(row, col, cell.ch, terminalCellStyle(cell));
+            }
+            if (self.terminal_panel.focused and first + offset == self.terminal_panel.cursorRenderIndex()) {
+                const cursor_col = @min(self.terminal_panel.cursor_col, max_cols -| 1);
+                const ch = if (cursor_col < line.cells.items.len) line.cells.items[cursor_col].ch else ' ';
+                self.renderer.screen.set(row, cursor_col, ch, .terminal_cursor);
+            }
+        }
+    }
+
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, gutter_width: usize) void {
         const trace = self.active_keypress_trace;
         if (trace) |keypress_trace| keypress_trace.visible_rows += 1;
@@ -2874,7 +3056,7 @@ pub const Editor = struct {
 
     fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
         if (self.height == 0) return;
-        const row = self.height - 1;
+        const row = self.statusRowIndex();
         self.renderer.screen.fillRow(row, ' ', .status_bg);
 
         var col: usize = 0;
@@ -2954,7 +3136,12 @@ pub const Editor = struct {
             return;
         }
         if (self.state.mode == .Search) {
-            try terminal.moveCursor(writer, self.height, 2 + self.state.search_buffer.items.len);
+            try terminal.moveCursor(writer, self.statusTerminalRow(), 2 + self.state.search_buffer.items.len);
+            return;
+        }
+        if (self.state.mode == .Terminal) {
+            const pos = self.terminalCursorScreenPosition();
+            try terminal.moveCursor(writer, pos.row, pos.col);
             return;
         }
 
@@ -3634,6 +3821,7 @@ test "movement coalescing rejects prompt and overlay modes" {
         .Prompt,
         .Search,
         .GlobalSearch,
+        .Terminal,
     };
 
     for (rejected_modes) |mode| {
@@ -3762,7 +3950,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Terminal };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());

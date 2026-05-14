@@ -21,6 +21,15 @@ pub const Event = union(enum) {
 
     /// Owned git status snapshot. Whoever consumes or discards this event must deinit it.
     git_status_snapshot: git_status.Snapshot,
+
+    /// Owned PTY output bytes. Whoever consumes or discards this event must free them.
+    terminal_output: struct {
+        bytes: []u8,
+    },
+
+    terminal_exit: struct {
+        code: ?i32,
+    },
 };
 
 pub const EventQueue = struct {
@@ -79,7 +88,7 @@ pub const EventQueue = struct {
 
     pub fn push(self: *EventQueue, event: Event) !void {
         switch (event) {
-            .lsp_message, .git_status_snapshot => try self.pushFifo(event),
+            .lsp_message, .git_status_snapshot, .terminal_output, .terminal_exit => try self.pushFifo(event),
             .syntax_parse_result => |result| try self.pushSyntaxResult(result),
         }
     }
@@ -211,6 +220,10 @@ pub const EventQueue = struct {
             .git_status_snapshot => |*snapshot| {
                 snapshot.deinit();
             },
+            .terminal_output => |output| {
+                self.allocator.free(output.bytes);
+            },
+            .terminal_exit => {},
         }
     }
 };
