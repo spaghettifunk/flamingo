@@ -144,7 +144,10 @@ pub const EditorState = struct {
     }
 
     pub fn closeTab(self: *EditorState, allocator: std.mem.Allocator) void {
-        if (self.tabs.items.len == 0) return;
+        if (self.tabs.items.len == 0) {
+            self.mode = .Dashboard;
+            return;
+        }
         var tab = self.tabs.orderedRemove(self.active_tab_index);
         tab.deinit(allocator);
 

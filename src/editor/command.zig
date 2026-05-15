@@ -118,6 +118,7 @@ pub fn execute(ed: *editor.Editor) !void {
         const col = if (ed.currentTab()) |tab| tab.mainCursor().col else 0;
         _ = try navigation.jumpTo(ed, row, col, .{ .record_history = true });
         ed.state.mode = .Normal;
+        ed.state.explorer_focused = false;
         return;
     }
 

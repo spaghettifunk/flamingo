@@ -1889,7 +1889,7 @@ pub const Editor = struct {
         if (popup_width < 16) return null;
 
         const row: usize = 2;
-        const available_suggestions = self.height - row - 4;
+        const available_suggestions = self.height - row - 5;
         const suggestion_count = if (show_items)
             @min(item_count, @min(max_visible_items, available_suggestions))
         else
@@ -2261,45 +2261,33 @@ pub const Editor = struct {
         const geom = self.commandPopupGeometry() orelse return;
         const popup = &self.state.command_popup;
         const inner_width = geom.width - 2;
-        const title_col = if (geom.width > command_popup_title.len)
-            geom.col + (geom.width - command_popup_title.len) / 2
-        else
-            geom.col;
 
-        self.renderer.screen.set(geom.row, geom.col, '+', .command_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(geom.row, geom.col + i, horizontal_line, .command_popup_border);
-        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .command_popup_border);
-        if (command_popup_title.len + 2 < geom.width) {
-            self.renderer.screen.writeText(geom.row, title_col, command_popup_title, .command_popup_border);
-        }
+        self.drawVirtualPopupTop(geom, command_popup_title, .command_popup_border);
 
         const input_row = geom.row + 1;
-        self.renderer.screen.set(input_row, geom.col, '|', .command_popup_border);
-        self.renderer.screen.set(input_row, geom.col + geom.width - 1, '|', .command_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.set(input_row, geom.col + i, ' ', .command_popup);
+        self.drawVirtualPopupRow(input_row, geom.col, geom.width, .command_popup_border, .command_popup);
         self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
         const input_space = inner_width -| 3;
         const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
         self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
 
+        const separator_row = geom.row + 2;
+        self.drawVirtualPopupSeparator(separator_row, geom.col, geom.width, .command_popup_border);
+
         for (0..geom.suggestion_count) |i| {
-            const row = geom.row + 2 + i;
+            const row = geom.row + 3 + i;
             const style: render_mod.RenderStyle = if (popup.selected_index != null and popup.selected_index.? == i)
                 .command_popup_selected
             else
                 .command_popup;
-            self.renderer.screen.set(row, geom.col, '|', .command_popup_border);
-            self.renderer.screen.set(row, geom.col + geom.width - 1, '|', .command_popup_border);
-            for (1..geom.width - 1) |col_offset| self.renderer.screen.set(row, geom.col + col_offset, ' ', style);
+            self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, style);
             const suggestion = popup.suggestions.items[i].name();
             const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
             self.renderer.screen.writeText(row, geom.col + 2, shown, style);
         }
 
-        const bottom_row = geom.row + 2 + geom.suggestion_count;
-        self.renderer.screen.set(bottom_row, geom.col, '+', .command_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(bottom_row, geom.col + i, horizontal_line, .command_popup_border);
-        self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .command_popup_border);
+        const bottom_row = geom.row + 3 + geom.suggestion_count;
+        self.drawVirtualPopupBottom(bottom_row, geom.col, geom.width, .command_popup_border);
     }
 
     fn writeVirtualTruncated(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle) void {
@@ -2344,32 +2332,24 @@ pub const Editor = struct {
         const geom = self.globalSearchPopupGeometry() orelse return;
         const popup = &self.state.global_search;
         const inner_width = geom.width - 2;
-        const title_col = if (geom.width > global_search_popup_title.len)
-            geom.col + (geom.width - global_search_popup_title.len) / 2
-        else
-            geom.col;
 
-        self.renderer.screen.set(geom.row, geom.col, '+', .global_search_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(geom.row, geom.col + i, horizontal_line, .global_search_popup_border);
-        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', .global_search_popup_border);
-        if (global_search_popup_title.len + 2 < geom.width) {
-            self.renderer.screen.writeText(geom.row, title_col, global_search_popup_title, .global_search_popup_border);
-        }
+        self.drawVirtualPopupTop(geom, global_search_popup_title, .global_search_popup_border);
 
         const input_row = geom.row + 1;
-        self.renderer.screen.set(input_row, geom.col, '|', .global_search_popup_border);
-        self.renderer.screen.set(input_row, geom.col + geom.width - 1, '|', .global_search_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.set(input_row, geom.col + i, ' ', .command_popup);
+        self.drawVirtualPopupRow(input_row, geom.col, geom.width, .global_search_popup_border, .command_popup);
         self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
         const input_space = inner_width -| 3;
         const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
         self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
 
+        const separator_row = geom.row + 2;
+        self.drawVirtualPopupSeparator(separator_row, geom.col, geom.width, .global_search_popup_border);
+
         self.adjustGlobalSearchRenderScroll(geom.suggestion_count);
         for (0..geom.suggestion_count) |offset| {
             const render_row_index = self.state.global_search.scroll_offset + offset;
             const render_row = globalSearchRenderRowAt(popup.results.items, render_row_index) orelse break;
-            const row = geom.row + 2 + offset;
+            const row = geom.row + 3 + offset;
             const selected = switch (render_row) {
                 .path => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
                 .content => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
@@ -2379,16 +2359,12 @@ pub const Editor = struct {
                 .command_popup_selected
             else
                 .command_popup;
-            self.renderer.screen.set(row, geom.col, '|', .global_search_popup_border);
-            self.renderer.screen.set(row, geom.col + geom.width - 1, '|', .global_search_popup_border);
-            for (1..geom.width - 1) |col_offset| self.renderer.screen.set(row, geom.col + col_offset, ' ', style);
+            self.drawVirtualPopupRow(row, geom.col, geom.width, .global_search_popup_border, style);
             self.renderVirtualGlobalSearchRowText(row, geom.col + 2, geom.col + geom.width - 1, render_row, popup.results.items, selected);
         }
 
-        const bottom_row = geom.row + 2 + geom.suggestion_count;
-        self.renderer.screen.set(bottom_row, geom.col, '+', .global_search_popup_border);
-        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(bottom_row, geom.col + i, horizontal_line, .global_search_popup_border);
-        self.renderer.screen.set(bottom_row, geom.col + geom.width - 1, '+', .global_search_popup_border);
+        const bottom_row = geom.row + 3 + geom.suggestion_count;
+        self.drawVirtualPopupBottom(bottom_row, geom.col, geom.width, .global_search_popup_border);
     }
 
     fn renderVirtualFilesystemPickerPopup(self: *Editor) void {
@@ -2504,9 +2480,7 @@ pub const Editor = struct {
         const popup = &self.state.prompt_popup;
         const geom = self.popupGeometry(true, 4, true, 4) orelse return;
         const inner_width = geom.width - 2;
-        const title_col = if (geom.width > popup.title.len) geom.col + (geom.width - popup.title.len) / 2 else geom.col;
-
-        self.drawVirtualPopupTop(geom, popup.title, title_col, .command_popup_border);
+        self.drawVirtualPopupTop(geom, popup.title, .command_popup_border);
 
         const body_row = geom.row + 1;
         self.drawVirtualPopupRow(body_row, geom.col, geom.width, .command_popup_border, .command_popup);
@@ -2530,6 +2504,10 @@ pub const Editor = struct {
             self.renderer.screen.writeText(row, geom.col + 2, msg[0..@min(msg.len, inner_width -| 2)], .popup_error);
             row_offset += 1;
         }
+
+        const separator_row = geom.row + row_offset;
+        self.drawVirtualPopupSeparator(separator_row, geom.col, geom.width, .command_popup_border);
+        row_offset += 1;
 
         const footer_row = geom.row + row_offset;
         self.drawVirtualPopupRow(footer_row, geom.col, geom.width, .command_popup_border, .popup_footer);
@@ -2593,23 +2571,31 @@ pub const Editor = struct {
         }
     }
 
-    fn drawVirtualPopupTop(self: *Editor, geom: CommandPopupGeometry, title: []const u8, title_col: usize, style: render_mod.RenderStyle) void {
-        self.renderer.screen.set(geom.row, geom.col, '+', style);
+    fn drawVirtualPopupTop(self: *Editor, geom: CommandPopupGeometry, title: []const u8, style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(geom.row, geom.col, "╭", style);
         for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(geom.row, geom.col + i, horizontal_line, style);
-        self.renderer.screen.set(geom.row, geom.col + geom.width - 1, '+', style);
-        if (title.len + 2 < geom.width) self.renderer.screen.writeText(geom.row, title_col, title, style);
+        self.renderer.screen.setGlyph(geom.row, geom.col + geom.width - 1, "╮", style);
+        if (render_mod.displayCellCount(title) + 4 < geom.width) {
+            self.renderer.screen.writeText(geom.row, geom.col + 2, title, style);
+        }
     }
 
     fn drawVirtualPopupRow(self: *Editor, row: usize, col: usize, width: usize, border_style: render_mod.RenderStyle, fill_style: render_mod.RenderStyle) void {
-        self.renderer.screen.set(row, col, '|', border_style);
-        self.renderer.screen.set(row, col + width - 1, '|', border_style);
+        self.renderer.screen.setGlyph(row, col, "│", border_style);
+        self.renderer.screen.setGlyph(row, col + width - 1, "│", border_style);
         for (1..width - 1) |i| self.renderer.screen.set(row, col + i, ' ', fill_style);
     }
 
-    fn drawVirtualPopupBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        self.renderer.screen.set(row, col, '+', style);
+    fn drawVirtualPopupSeparator(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(row, col, "├", style);
         for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
-        self.renderer.screen.set(row, col + width - 1, '+', style);
+        self.renderer.screen.setGlyph(row, col + width - 1, "┤", style);
+    }
+
+    fn drawVirtualPopupBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(row, col, "╰", style);
+        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
+        self.renderer.screen.setGlyph(row, col + width - 1, "╯", style);
     }
 
     fn drawPickerTop(self: *Editor, geom: FilesystemPickerGeometry, title: []const u8, style: render_mod.RenderStyle) void {

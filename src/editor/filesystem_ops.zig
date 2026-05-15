@@ -205,6 +205,7 @@ pub fn openFileInEditor(ed: *editor.Editor, path: []const u8) !void {
     errdefer b.deinit();
     try ed.addTab(b);
     ed.state.mode = .Normal;
+    ed.state.explorer_focused = false;
 }
 
 pub fn createFileAndOpen(ed: *editor.Editor, path: []const u8, create_parents: bool) !void {

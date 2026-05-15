@@ -158,6 +158,7 @@ fn acceptGlobalSearchResult(ed: *editor.Editor) !void {
 
     ed.state.global_search.close(ed.allocator);
     ed.state.mode = .Normal;
+    ed.state.explorer_focused = false;
 
     const open_path = switch (action) {
         .path => |path| path,
@@ -172,7 +173,9 @@ fn acceptGlobalSearchResult(ed: *editor.Editor) !void {
         try ed.addTab(b);
         consumed = true;
         switch (action) {
-            .path => {},
+            .path => {
+                _ = try navigation.jumpTo(ed, 0, 0, .{ .record_history = false });
+            },
             .content => |content| {
                 _ = try navigation.jumpTo(ed, content.row, content.col, .{ .record_history = false });
             },
@@ -647,6 +650,13 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     switch (ed.state.mode) {
         .Dashboard => {
+            if (matches(event, keys.command_mode)) {
+                clearPendingNormalSequence(ed);
+                ed.state.mode = .Command;
+                ed.state.command_buffer.clearRetainingCapacity();
+                try ed.state.command_popup.open(ed.allocator);
+                return;
+            }
             const action =
                 if (matches(event, keys.new_file))
                     .NewFile
@@ -808,6 +818,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                         try ed.addTab(b);
                         clearPendingNormalSequence(ed);
                         ed.state.mode = .Normal;
+                        ed.state.explorer_focused = false;
                     } else |_| {
                         ed.state.error_message = "Could not open file";
                         clearPendingNormalSequence(ed);

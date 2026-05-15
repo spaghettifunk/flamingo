@@ -1,86 +1,151 @@
-# Flamingo Keybindings Reference
+# Flamingo Keybindings & Commands Reference
 
-This document lists all the keybindings and operations available in the Flamingo Text Editor.
+Flamingo is a modal text editor. This document provides a comprehensive reference of all available keybindings and commands.
 
 ## Modes
 
-Flamingo is a modal editor. You can switch between modes using the following keys:
-
-- `i`: Enter **Insert Mode** (from Normal Mode)
-- `Esc`: Enter **Normal Mode** (from Insert Mode)
-- `:`: Enter **Command Mode** (from Normal Mode)
-- `/`: Enter **Search Mode** (from Normal Mode)
+- `i`: **Insert Mode** - Direct text entry.
+- `Esc`: **Normal Mode** - Navigation and command execution.
+- `:`: **Command Mode** - Execute colon commands (available in Normal and Dashboard modes).
+- `/`: **Search Mode** - Incremental search within the current buffer.
 
 ---
 
-## General Operations (Normal & Insert Mode)
+## Navigation & Movement (Normal Mode)
 
-| Action                  | Keybinding              |
-| :---------------------- | :---------------------- |
-| **Save File**           | `CTRL + S`              |
-| **Quit**                | `CTRL + Q`              |
-| **Select All**          | `CTRL + A`              |
-| **Copy**                | `CTRL + C`              |
-| **Cut**                 | `CTRL + X`              |
-| **Paste**               | `CTRL + V`              |
-| **Duplicate Line**      | `CTRL + D`              |
-| **Delete Line**         | `CTRL + Shift + K`      |
-| **Move Line Up**        | `Option + Up`           |
-| **Move Line Down**      | `Option + Down`         |
-| **Duplicate Line Down** | `Option + Shift + Down` |
-| **Add Cursor Above**    | `CTRL + Option + Up`    |
-| **Add Cursor Below**    | `CTRL + Option + Down`  |
-| **Clear Multi-cursors** | `Esc`                   |
-| **Extend Selection**    | `Shift + Arrows`        |
+| Action | Keybinding |
+| :--- | :--- |
+| **Move Cursor** | `Arrows` |
+| **Word Jump Left** | `Option + Left` |
+| **Word Jump Right** | `Option + Right` |
+| **Start of Line** | `Option + Down` |
+| **End of Line** | `Option + Up` |
+| **Jump to Top of File** | `gg` |
+| **Jump to Bottom of File** | `G` |
+| **Jump to Matching Bracket** | `%` |
+| **Jump to Definition (LSP)** | `f` |
+| **Next Tab** | `Option + ]` |
+| **Previous Tab** | `Option + [` |
+| **Jump Back (History)** | `Option + O` |
+| **Jump Forward (History)** | `Option + P` |
 
 ---
 
-## Navigation
+## Editing & General Operations
 
-| Action              | Keybinding                |
-| :------------------ | :------------------------ |
-| **Move Cursor**     | `Arrows`                  |
-| **Word Jump Left**  | `Option + Left`           |
-| **Word Jump Right** | `Option + Right`          |
-| **Start of Line**   | `Option + Down`           |
-| **End of Line**     | `Option + Up`             |
-| **Next Tab**        | `Option + ]`              |
-| **Previous Tab**    | `Option + [`              |
-| **Close Tab**       | `CTRL + W`                |
-| **Toggle Explorer** | `CTRL + B`                |
-| **Toggle Terminal** | `CTRL + T`                |
-| **Switch Focus**    | `CTRL + E` (configurable) |
-| **Scroll Left**     | `zh` / `zH`               |
-| **Scroll Right**    | `zl` / `zL`               |
-| **Cursor To Left**  | `zs`                      |
-| **Cursor To Right** | `ze`                      |
+| Action | Keybinding |
+| :--- | :--- |
+| **Save File** | `CTRL + S` |
+| **Quit** | `CTRL + Q` |
+| **Undo** | `CTRL + Z` |
+| **Redo** | `CTRL + Y` |
+| **Select All** | `CTRL + A` |
+| **Copy** | `CTRL + C` |
+| **Cut** | `CTRL + X` |
+| **Paste** | `CTRL + V` |
+| **Duplicate Line** | `CTRL + D` |
+| **Delete Line** | `CTRL + Shift + K` |
+| **Delete Word Back** | `Option + Backspace` |
+| **Indent** | `Tab` (Inserts 4 spaces in Insert mode) |
 
 ---
 
-## File Explorer
+## Multi-Cursor & Selection
 
-| Action                   | Keybinding  |
-| :----------------------- | :---------- |
-| **Move Up/Down**         | `Up / Down` |
-| **Open File/Toggle Dir** | `Enter`     |
-
----
-
-## Search Mode
-
-| Action             | Keybinding    |
-| :----------------- | :------------ |
-| **Next Match**     | `Down`        |
-| **Previous Match** | `Up`          |
-| **Confirm / Exit** | `Enter / Esc` |
+| Action | Keybinding |
+| :--- | :--- |
+| **Add Cursor Above** | `CTRL + Option + Up` |
+| **Add Cursor Below** | `CTRL + Option + Down` |
+| **Extend Selection** | `Shift + Arrows` (works with word jumps too) |
+| **Clear Selections** | `Esc` |
 
 ---
 
-## Dashboard (Initial Screen)
+## Scrolling (Normal Mode)
 
-| Action          | Keybinding |
-| :-------------- | :--------- |
-| **New File**    | `n`        |
-| **Open File**   | `o`        |
-| **Open Folder** | `f`        |
-| **Quit**        | `q`        |
+| Action | Keybinding |
+| :--- | :--- |
+| **Scroll Page Up** | `PageUp` |
+| **Scroll Page Down** | `PageDown` |
+| **Scroll Left (Small)** | `zh` |
+| **Scroll Left (Half Page)** | `zH` |
+| **Scroll Right (Small)** | `zl` |
+| **Scroll Right (Half Page)** | `zL` |
+| **Scroll View to Cursor Start** | `zs` |
+| **Scroll View to Cursor End** | `ze` |
+
+---
+
+## Command Mode Commands (`:`)
+
+Execute these by pressing `:` and typing the command followed by `Enter`.
+
+| Command | Alias | Description |
+| :--- | :--- | :--- |
+| `:q` | | Quit current tab / Dashboard |
+| `:q!` | | Force quit (discard unsaved changes) |
+| `:w [path]` | | Write (Save) current buffer to [path] or its original file |
+| `:wq [path]` | | Save and Quit |
+| `:newFile <path>` | `:nf` | Create a new file at `<path>` and open it |
+| `:renameFile <old> <new>` | `:rf` | Rename file from `<old>` to `<new>` |
+| `:deleteFile <path>` | `:df` | Delete file at `<path>` |
+| `:search` | | Open project-wide Global Search |
+| `:<number>` | | Jump to line `<number>` |
+| `:goto <number>` | | Jump to line `<number>` |
+| `:line <number>` | | Jump to line `<number>` |
+
+---
+
+## Panels & Tools
+
+### File Explorer
+| Action | Keybinding |
+| :--- | :--- |
+| **Toggle Explorer** | `CTRL + B` |
+| **Switch Focus** | `CTRL + E` (between Editor, Explorer, and Terminal) |
+| **Move Selection** | `Up / Down` |
+| **Open File / Toggle Dir** | `Enter` |
+| **New File in Dir** | `Option + N` |
+| **Rename Node** | `Option + R` |
+| **Delete Node** | `Option + Delete` |
+| **Search (Fuzzy)** | `/` |
+
+### Integrated Terminal
+| Action | Keybinding |
+| :--- | :--- |
+| **Toggle Terminal** | `CTRL + T` |
+| **Scroll Output** | `PageUp / PageDown` |
+| **Scroll to Bottom** | `Shift + End` |
+| **Return to Editor** | `Esc` |
+
+### LSP Completion
+| Action | Keybinding |
+| :--- | :--- |
+| **Trigger Completion** | `CTRL + Space` or `.` |
+| **Next Item** | `Down` |
+| **Previous Item** | `Up` |
+| **Accept Selection** | `Enter` |
+| **Cancel Completion** | `Esc` |
+
+### Global Search
+| Action | Keybinding |
+| :--- | :--- |
+| **Next Result** | `Down` or `Tab` |
+| **Previous Result** | `Up` |
+| **Accept Result** | `Enter` |
+| **Cancel Search** | `Esc` |
+
+---
+
+## Dashboard (Landing Page)
+
+| Action | Keybinding |
+| :--- | :--- |
+| **New File** | `CTRL + N` |
+| **Open File** | `CTRL + O` |
+| **Open Folder** | `CTRL + F` |
+| **Settings** | `CTRL + P` |
+| **Quit Flamingo** | `CTRL + Q` |
+| **Command Prompt** | `:` |
+| **Navigate Options** | `Up / Down` |
+| **Select Option** | `Enter` |
