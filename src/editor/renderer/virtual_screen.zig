@@ -1,6 +1,11 @@
 const std = @import("std");
 const terminal = @import("../../terminal.zig");
 
+const editor_bg_ansi = "\x1b[48;2;30;32;48m";
+const editor_fg_ansi = "\x1b[38;2;204;211;245m";
+const explorer_fg_ansi = "\x1b[38;2;148;156;184m";
+const reset_ansi = "\x1b[0m";
+
 pub const RenderInvalidation = enum {
     none,
     partial,
@@ -103,54 +108,54 @@ pub const RenderStyle = enum {
 
     pub fn ansi(self: RenderStyle) []const u8 {
         return switch (self) {
-            .normal => "\x1b[0m",
-            .editor_bg => "\x1b[48;2;30;32;48m\x1b[38;2;204;211;245m",
-            .dim => "\x1b[2;37m",
-            .gutter_current => "\x1b[33;1m",
-            .keyword => "\x1b[38;5;177m",
-            .string => "\x1b[38;5;150m",
-            .comment => "\x1b[38;5;244m",
-            .number => "\x1b[38;5;216m",
-            .constant => "\x1b[38;5;203m",
-            .type_name => "\x1b[38;5;116m",
-            .function_name => "\x1b[38;5;111m",
-            .property => "\x1b[38;5;180m",
-            .operator => "\x1b[38;5;250m",
-            .punctuation => "\x1b[38;5;245m",
-            .selection => "\x1b[48;5;239m",
+            .normal => editor_bg_ansi ++ editor_fg_ansi,
+            .editor_bg => editor_bg_ansi ++ editor_fg_ansi,
+            .dim => editor_bg_ansi ++ "\x1b[38;2;148;156;184m\x1b[2m",
+            .gutter_current => editor_bg_ansi ++ "\x1b[33;1m",
+            .keyword => editor_bg_ansi ++ "\x1b[38;5;177m",
+            .string => editor_bg_ansi ++ "\x1b[38;5;150m",
+            .comment => editor_bg_ansi ++ "\x1b[38;5;244m",
+            .number => editor_bg_ansi ++ "\x1b[38;5;216m",
+            .constant => editor_bg_ansi ++ "\x1b[38;5;203m",
+            .type_name => editor_bg_ansi ++ "\x1b[38;5;116m",
+            .function_name => editor_bg_ansi ++ "\x1b[38;5;111m",
+            .property => editor_bg_ansi ++ "\x1b[38;5;180m",
+            .operator => editor_bg_ansi ++ "\x1b[38;5;250m",
+            .punctuation => editor_bg_ansi ++ "\x1b[38;5;245m",
+            .selection => "\x1b[48;5;239m" ++ editor_fg_ansi,
             .search_match => "\x1b[48;5;228m\x1b[30m",
             .search_active => "\x1b[48;5;214m\x1b[30m",
             .status_normal => "\x1b[48;5;121m\x1b[30m",
             .status_insert => "\x1b[48;5;117m\x1b[30m",
             .status_command => "\x1b[48;5;220m\x1b[30m",
             .search_status => "\x1b[48;5;228m\x1b[30m",
-            .error_style => "\x1b[31;1m",
-            .completion => "\x1b[48;5;236m\x1b[38;5;250m",
+            .error_style => editor_bg_ansi ++ "\x1b[31;1m",
+            .completion => editor_bg_ansi ++ "\x1b[38;5;250m",
             .completion_selected => "\x1b[48;5;25m\x1b[38;5;255m",
-            .command_popup => "\x1b[48;5;235m\x1b[38;5;255m",
-            .command_popup_border => "\x1b[48;5;235m\x1b[38;5;121m",
-            .global_search_popup_border => "\x1b[48;5;235m\x1b[38;5;220m",
-            .command_popup_title => "\x1b[48;5;235m\x1b[38;5;250m",
-            .command_popup_prompt => "\x1b[48;5;235m\x1b[38;5;250m",
+            .command_popup => editor_bg_ansi ++ "\x1b[38;5;255m",
+            .command_popup_border => editor_bg_ansi ++ "\x1b[38;5;121m",
+            .global_search_popup_border => editor_bg_ansi ++ "\x1b[38;5;220m",
+            .command_popup_title => editor_bg_ansi ++ "\x1b[38;5;250m",
+            .command_popup_prompt => editor_bg_ansi ++ "\x1b[38;5;250m",
             .command_popup_selected => "\x1b[48;5;238m\x1b[38;5;255m",
             .completion_detail => "\x1b[48;5;238m\x1b[38;5;252m",
-            .global_search_file => "\x1b[48;5;235m\x1b[38;5;220m",
+            .global_search_file => editor_bg_ansi ++ "\x1b[38;5;220m",
             .global_search_file_selected => "\x1b[48;5;238m\x1b[38;5;220m",
-            .global_search_result => "\x1b[48;5;235m\x1b[38;5;121m",
+            .global_search_result => editor_bg_ansi ++ "\x1b[38;5;121m",
             .global_search_result_selected => "\x1b[48;5;238m\x1b[38;5;121m",
-            .dashboard_logo => "\x1b[38;5;204m",
-            .dashboard_selected => "\x1b[7m",
-            .popup_footer => "\x1b[48;5;235m\x1b[38;5;245m",
-            .popup_error => "\x1b[48;5;235m\x1b[38;5;203m",
-            .explorer_bg => "\x1b[48;2;30;32;48m\x1b[38;2;148;156;184m",
-            .explorer_header => "\x1b[48;2;30;32;48m\x1b[38;2;116;158;231m\x1b[1m",
-            .explorer_folder => "\x1b[48;2;30;32;48m\x1b[38;2;116;158;231m\x1b[1m",
-            .explorer_zig => "\x1b[48;2;30;32;48m\x1b[38;2;255;139;97m",
-            .explorer_config => "\x1b[48;2;30;32;48m\x1b[38;2;255;139;97m",
-            .explorer_md => "\x1b[48;2;30;32;48m\x1b[38;2;166;183;255m",
-            .explorer_license => "\x1b[48;2;30;32;48m\x1b[38;2;125;224;167m",
-            .explorer_file => "\x1b[48;2;30;32;48m\x1b[38;2;185;193;224m",
-            .explorer_dim => "\x1b[48;2;30;32;48m\x1b[38;2;91;98;125m\x1b[2m",
+            .dashboard_logo => editor_bg_ansi ++ "\x1b[38;5;204m",
+            .dashboard_selected => editor_bg_ansi ++ "\x1b[38;5;204m\x1b[1m",
+            .popup_footer => editor_bg_ansi ++ "\x1b[38;5;245m",
+            .popup_error => editor_bg_ansi ++ "\x1b[38;5;203m",
+            .explorer_bg => editor_bg_ansi ++ explorer_fg_ansi,
+            .explorer_header => editor_bg_ansi ++ "\x1b[38;2;116;158;231m\x1b[1m",
+            .explorer_folder => editor_bg_ansi ++ "\x1b[38;2;116;158;231m\x1b[1m",
+            .explorer_zig => editor_bg_ansi ++ "\x1b[38;2;255;139;97m",
+            .explorer_config => editor_bg_ansi ++ "\x1b[38;2;255;139;97m",
+            .explorer_md => editor_bg_ansi ++ "\x1b[38;2;166;183;255m",
+            .explorer_license => editor_bg_ansi ++ "\x1b[38;2;125;224;167m",
+            .explorer_file => editor_bg_ansi ++ "\x1b[38;2;185;193;224m",
+            .explorer_dim => editor_bg_ansi ++ "\x1b[38;2;91;98;125m\x1b[2m",
             .explorer_selected => "\x1b[48;2;48;52;78m\x1b[38;2;204;211;245m",
             .explorer_selected_focus => "\x1b[48;2;58;63;94m\x1b[38;2;222;226;255m",
             .terminal_bg => "\x1b[48;2;17;19;31m\x1b[38;2;204;211;245m",
@@ -174,9 +179,9 @@ pub const RenderStyle = enum {
             .terminal_bright_magenta => "\x1b[48;2;17;19;31m\x1b[38;5;13m",
             .terminal_bright_cyan => "\x1b[48;2;17;19;31m\x1b[38;5;14m",
             .terminal_bright_white => "\x1b[48;2;17;19;31m\x1b[38;5;15m",
-            .git_modified => "\x1b[48;2;30;32;48m\x1b[38;2;255;139;97m",
-            .git_ignored => "\x1b[48;2;30;32;48m\x1b[38;2;91;98;125m",
-            .status_bg => "\x1b[48;2;30;32;48m\x1b[38;2;148;156;184m",
+            .git_modified => editor_bg_ansi ++ "\x1b[38;2;255;139;97m",
+            .git_ignored => editor_bg_ansi ++ "\x1b[38;2;91;98;125m",
+            .status_bg => editor_bg_ansi ++ explorer_fg_ansi,
             .status_mode_normal => "\x1b[48;2;116;158;231m\x1b[38;2;17;19;31m\x1b[1m",
             .status_mode_insert => "\x1b[48;2;125;224;167m\x1b[38;2;17;19;31m\x1b[1m",
             .status_mode_command => "\x1b[48;2;238;212;159m\x1b[38;2;17;19;31m\x1b[1m",
@@ -192,8 +197,8 @@ pub const RenderStyle = enum {
             .status_sep_search => "\x1b[48;2;43;47;70m\x1b[38;2;137;180;250m",
             .status_sep_branch => "\x1b[48;2;35;38;58m\x1b[38;2;43;47;70m",
             .status_sep_file => "\x1b[48;2;35;38;58m\x1b[38;2;35;38;58m",
-            .status_sep_context => "\x1b[48;2;30;32;48m\x1b[38;2;35;38;58m",
-            .status_sep_right => "\x1b[48;2;30;32;48m\x1b[38;2;43;47;70m",
+            .status_sep_context => editor_bg_ansi ++ "\x1b[38;2;35;38;58m",
+            .status_sep_right => editor_bg_ansi ++ "\x1b[38;2;43;47;70m",
             .status_sep_error => "\x1b[48;2;35;38;58m\x1b[38;2;243;139;168m",
         };
     }
@@ -259,7 +264,7 @@ pub const VirtualScreen = struct {
     }
 
     pub fn clear(self: *VirtualScreen) void {
-        @memset(self.cells.items, RenderCell{});
+        @memset(self.cells.items, RenderCell.fromAscii(' ', .explorer_bg));
     }
 
     pub fn hideCursor(self: *VirtualScreen) void {
@@ -278,7 +283,7 @@ pub const VirtualScreen = struct {
 
     pub fn set(self: *VirtualScreen, row: usize, col: usize, ch: u8, style: RenderStyle) void {
         if (row >= self.height or col >= self.width) return;
-        self.cells.items[self.index(row, col)] = RenderCell.fromAscii(ch, style);
+        self.cells.items[self.index(row, col)] = RenderCell.fromAscii(displayByte(ch), style);
     }
 
     pub fn setGlyph(self: *VirtualScreen, row: usize, col: usize, glyph: []const u8, style: RenderStyle) void {
@@ -319,6 +324,13 @@ pub const VirtualScreen = struct {
         }
     }
 };
+
+fn displayByte(ch: u8) u8 {
+    return switch (ch) {
+        '\t', '\r', '\n' => ' ',
+        else => ch,
+    };
+}
 
 pub fn utf8CellLen(first: u8) usize {
     return if (first & 0xe0 == 0xc0)
@@ -376,7 +388,7 @@ pub const VirtualScreenRenderer = struct {
             _ = try self.previous.resize(current.width, current.height);
         }
 
-        var active_style: RenderStyle = .normal;
+        var active_style: ?RenderStyle = null;
         var wrote_cells = false;
         for (0..current.height) |row| {
             var col: usize = 0;
@@ -398,19 +410,15 @@ pub const VirtualScreenRenderer = struct {
                     const run_prev = self.previous.cells.items[run_idx];
                     if (!full and run_cell.eql(run_prev)) break;
 
-                    if (run_cell.style != active_style) {
-                        if (active_style != .normal) {
-                            const reset = RenderStyle.normal.ansi();
-                            try writer.writeAll(reset);
-                            bytes += reset.len;
-                            active_style = .normal;
+                    if (active_style == null or active_style.? != run_cell.style) {
+                        if (active_style != null) {
+                            try writer.writeAll(reset_ansi);
+                            bytes += reset_ansi.len;
                         }
-                        if (run_cell.style != .normal) {
-                            const ansi = run_cell.style.ansi();
-                            try writer.writeAll(ansi);
-                            bytes += ansi.len;
-                            active_style = run_cell.style;
-                        }
+                        const ansi = run_cell.style.ansi();
+                        try writer.writeAll(ansi);
+                        bytes += ansi.len;
+                        active_style = run_cell.style;
                     }
                     try writer.writeAll(run_cell.glyphBytes());
                     bytes += run_cell.len;
@@ -420,10 +428,9 @@ pub const VirtualScreenRenderer = struct {
             }
         }
 
-        if (active_style != .normal) {
-            const reset = RenderStyle.normal.ansi();
-            try writer.writeAll(reset);
-            bytes += reset.len;
+        if (active_style != null) {
+            try writer.writeAll(reset_ansi);
+            bytes += reset_ansi.len;
         }
 
         const cursor_changed = self.previous.cursor_row != current.cursor_row or
@@ -573,7 +580,10 @@ test "virtual screen resets style attributes between styled runs" {
     defer aw.deinit();
 
     _ = try renderer.emit(&aw.writer, &current);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[2;37m-\x1b[0m\x1b[33;1m>") != null);
+    const rendered = aw.written();
+    const reset_idx = std.mem.indexOf(u8, rendered, "\x1b[0m") orelse return error.TestUnexpectedResult;
+    const gutter_idx = std.mem.indexOf(u8, rendered, RenderStyle.gutter_current.ansi()) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(reset_idx < gutter_idx);
 }
 
 test "virtual screen can hide final cursor" {
@@ -594,6 +604,26 @@ test "virtual screen can hide final cursor" {
     _ = try renderer.emit(&aw.writer, &current);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?25l") != null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?25h") == null);
+}
+
+test "virtual screen paints tab as styled space cell" {
+    const allocator = std.testing.allocator;
+    var current = VirtualScreen.init(allocator);
+    defer current.deinit();
+    _ = try current.resize(1, 1);
+    current.set(0, 0, '\t', .normal);
+
+    var renderer = VirtualScreenRenderer.init(allocator);
+    defer renderer.deinit();
+
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(allocator);
+    var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    defer aw.deinit();
+
+    _ = try renderer.emit(&aw.writer, &current);
+    try std.testing.expect(std.mem.indexOfScalar(u8, aw.written(), '\t') == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, aw.written(), ' ') != null);
 }
 
 test "virtual screen resize forces full redraw" {

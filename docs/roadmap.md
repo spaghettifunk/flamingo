@@ -18,7 +18,7 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] implement piece-table to improve editing performance
 - [x] find a way to bring FPS to at least 100
 - [x] increase scrolling speed
-- [ ] remove legacy renderer
+- [x] remove legacy renderer
 
 ## Initial Page TODO
 
