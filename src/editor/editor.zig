@@ -1811,7 +1811,9 @@ pub const Editor = struct {
 
     fn tabLabelWidth(tabs: []const Tab, tab: *const Tab) usize {
         const label = getTabLabel(tabs, tab);
-        return tab_prefix_width + label.len + tab_separator.len;
+        var width = tab_prefix_width + label.len + tab_separator.len;
+        if (tab.buf.is_dirty) width += 2;
+        return width;
     }
 
     fn totalTabBarWidth(tabs: []const Tab) usize {
@@ -1932,6 +1934,11 @@ pub const Editor = struct {
 
         self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, label.basename, basename_style);
         col += label.basename.len;
+
+        if (tab.buf.is_dirty) {
+            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, " ●", .terminal_green);
+            col += 2;
+        }
 
         self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, tab_separator, .dim);
     }
