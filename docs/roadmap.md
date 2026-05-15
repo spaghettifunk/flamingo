@@ -41,7 +41,9 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement jump to function definition with keybinding `f`
 - [x] implement going backwards/forwards like a browser
 - [x] syntax highlight for Markdown files
-- [ ] Tabs with folder name in a different color
+- [x] Tabs with folder name in a different color
+- [ ] implement `:qall` close all buffers/tabs and exit the editor if no unsaved changes, otherwise ask
+- [ ] implement `:wall` save all buffers/tabs
 - [ ] implement folding/unfolding feature for when `{}` are found (add also keybinding)
 - [x] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
 - [x] BUG: cannot scroll the tabs

@@ -24,7 +24,6 @@ const terminal_panel_mod = @import("terminal_panel.zig");
 
 const max_fifo_events_per_idle_tick = 8;
 const syntax_parse_idle_delay_ns = 50 * std.time.ns_per_ms;
-const max_tab_name_width = 15;
 const tab_prefix_width = 2;
 const tab_separator = " | ";
 
@@ -1746,30 +1745,49 @@ pub const Editor = struct {
         }
     }
 
-    fn tabBasename(tab: *const Tab) []const u8 {
+    const TabLabel = struct {
+        parent: ?[]const u8,
+        basename: []const u8,
+        len: usize,
+    };
+
+    fn getTabLabel(tabs: []const Tab, tab: *const Tab) TabLabel {
         const filename = tab.buf.filename orelse "unsaved";
-        return std.fs.path.basename(filename);
+        const basename = std.fs.path.basename(filename);
+        var has_duplicate = false;
+        for (tabs) |*other_tab| {
+            if (other_tab == tab) continue;
+            const other_filename = other_tab.buf.filename orelse "unsaved";
+            if (std.mem.eql(u8, std.fs.path.basename(other_filename), basename)) {
+                has_duplicate = true;
+                break;
+            }
+        }
+        var parent: ?[]const u8 = null;
+        var len = basename.len;
+        if (has_duplicate and tab.buf.filename != null) {
+            if (std.fs.path.dirname(filename)) |dir| {
+                parent = std.fs.path.basename(dir);
+                len += parent.?.len + 1; // +1 for the separator '/'
+            }
+        }
+        return .{ .parent = parent, .basename = basename, .len = len };
     }
 
-    fn tabNameLen(basename: []const u8) usize {
-        return @min(basename.len, max_tab_name_width);
-    }
-
-    fn tabLabelWidth(tab: *const Tab) usize {
-        const basename = tabBasename(tab);
-        const name_len = tabNameLen(basename);
-        return tab_prefix_width + name_len + (if (basename.len > name_len) @as(usize, 3) else @as(usize, 0)) + tab_separator.len;
+    fn tabLabelWidth(tabs: []const Tab, tab: *const Tab) usize {
+        const label = getTabLabel(tabs, tab);
+        return tab_prefix_width + label.len + tab_separator.len;
     }
 
     fn totalTabBarWidth(tabs: []const Tab) usize {
         var total: usize = 0;
-        for (tabs) |*tab| total += tabLabelWidth(tab);
+        for (tabs) |*tab| total += tabLabelWidth(tabs, tab);
         return total;
     }
 
     fn tabStartCol(tabs: []const Tab, index: usize) usize {
         var start: usize = 0;
-        for (tabs[0..index]) |*tab| start += tabLabelWidth(tab);
+        for (tabs[0..index]) |*tab| start += tabLabelWidth(tabs, tab);
         return start;
     }
 
@@ -1791,7 +1809,7 @@ pub const Editor = struct {
         clampTabBarScroll(scroll_col, total_width, available_width);
 
         const active_start = tabStartCol(tabs, active_index);
-        const active_end = active_start + tabLabelWidth(&tabs[active_index]);
+        const active_end = active_start + tabLabelWidth(tabs, &tabs[active_index]);
         if (active_start < scroll_col.*) {
             scroll_col.* = active_start;
         } else if (active_end > scroll_col.* + available_width) {
@@ -1860,20 +1878,26 @@ pub const Editor = struct {
     }
 
     fn writeVirtualClippedTabLabel(self: *Editor, row: usize, dest_base_col: usize, label_start_col: usize, viewport_start: usize, viewport_end: usize, tab: *const Tab, active: bool) void {
-        const style: render_mod.RenderStyle = if (active) .gutter_current else .dim;
+        const basename_style: render_mod.RenderStyle = if (active) .gutter_current else .dim;
+        const prefix_style: render_mod.RenderStyle = .dim;
+
         const prefix = if (active) "> " else "  ";
-        const basename = tabBasename(tab);
-        const name_len = tabNameLen(basename);
+        const label = getTabLabel(self.state.tabs.items, tab);
         var col = label_start_col;
 
-        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, prefix, style);
+        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, prefix, basename_style);
         col += prefix.len;
-        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, basename[0..name_len], style);
-        col += name_len;
-        if (basename.len > name_len) {
-            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, "...", style);
-            col += 3;
+
+        if (label.parent) |parent| {
+            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, parent, prefix_style);
+            col += parent.len;
+            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, "/", prefix_style);
+            col += 1;
         }
+
+        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, label.basename, basename_style);
+        col += label.basename.len;
+
         self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, tab_separator, .dim);
     }
 
@@ -2243,7 +2267,7 @@ pub const Editor = struct {
             const viewport_end = viewport_start + layout.content_width;
             var label_start: usize = 0;
             for (self.state.tabs.items, 0..) |*tab, i| {
-                const label_width = tabLabelWidth(tab);
+                const label_width = tabLabelWidth(self.state.tabs.items, tab);
                 if (label_start >= viewport_end) break;
                 if (label_start + label_width > viewport_start) {
                     self.writeVirtualClippedTabLabel(0, start_col + layout.content_start_col, label_start, viewport_start, viewport_end, tab, i == self.state.active_tab_index);
@@ -3146,7 +3170,7 @@ test "tab bar scroll follows active tab with variable label widths" {
     state.active_tab_index = 3;
     Editor.ensureActiveTabVisible(state.tabs.items, state.active_tab_index, 20, &state.tab_bar_scroll_col);
     const active_start = Editor.tabStartCol(state.tabs.items, state.active_tab_index);
-    const active_end = active_start + Editor.tabLabelWidth(&state.tabs.items[state.active_tab_index]);
+    const active_end = active_start + Editor.tabLabelWidth(state.tabs.items, &state.tabs.items[state.active_tab_index]);
     try std.testing.expect(state.tab_bar_scroll_col < active_end);
     try std.testing.expect(active_start < state.tab_bar_scroll_col + 20);
     try std.testing.expect(active_end <= state.tab_bar_scroll_col + 20);
