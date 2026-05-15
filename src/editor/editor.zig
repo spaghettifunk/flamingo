@@ -2805,7 +2805,7 @@ pub const Editor = struct {
     }
 
     fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
-        if (self.height == 0) return;
+        if (self.height == 0 or (self.state.mode == .Dashboard and self.state.error_message == null)) return;
         const row = self.statusRowIndex();
         self.renderer.screen.fillRow(row, ' ', .status_bg);
 
