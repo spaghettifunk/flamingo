@@ -12,8 +12,8 @@ pub const KeybindingsConfig = struct {
     toggle_terminal: []const u8 = "ctrl+t",
     switch_focus: []const u8 = "ctrl+e",
     close_tab: []const u8 = "ctrl+w",
-    next_tab: []const u8 = "alt+[",
-    previous_tab: []const u8 = "alt+]",
+    next_tab: []const u8 = "alt+]",
+    previous_tab: []const u8 = "alt+[",
     jump_back: []const u8 = "alt+o",
     jump_forward: []const u8 = "alt+p",
 
