@@ -99,6 +99,12 @@ fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalComma
                 }
             }
         },
+        .scroll_left_small => ed.applyHorizontalScrollCommand(.left_small),
+        .scroll_right_small => ed.applyHorizontalScrollCommand(.right_small),
+        .scroll_left_half => ed.applyHorizontalScrollCommand(.left_half),
+        .scroll_right_half => ed.applyHorizontalScrollCommand(.right_half),
+        .scroll_cursor_start => ed.applyHorizontalScrollCommand(.cursor_start),
+        .scroll_cursor_end => ed.applyHorizontalScrollCommand(.cursor_end),
     }
 }
 

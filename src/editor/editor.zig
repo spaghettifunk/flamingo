@@ -101,10 +101,20 @@ const RuntimeKeyDispatch = struct {
     movement_handled: bool,
 };
 
+pub const HorizontalScrollCommand = enum {
+    left_small,
+    right_small,
+    left_half,
+    right_half,
+    cursor_start,
+    cursor_end,
+};
+
 const CursorMoveState = struct {
     row: usize,
     col: usize,
     scroll_row: usize,
+    scroll_col: usize,
     mode: EditorMode,
     cursor_count: usize,
     had_selection: bool,
@@ -525,6 +535,8 @@ pub const Editor = struct {
                 metrics.add(.update_state, perf.elapsedNs(update_start));
             }
 
+            self.refreshTerminalSize();
+
             if (self.state.render_dirty) {
                 if (key_trace) |trace| {
                     trace.dirty = self.keypressDirtyState();
@@ -685,6 +697,15 @@ pub const Editor = struct {
             .read_start_ns = read_start,
             .read_elapsed_ns = read_elapsed,
         };
+    }
+
+    fn refreshTerminalSize(self: *Editor) void {
+        const size = terminal.getSize() catch return;
+        if (self.width == size.cols and self.height == size.rows) return;
+        self.width = size.cols;
+        self.height = size.rows;
+        self.clampScroll();
+        self.markDirty(.full);
     }
 
     fn dispatchRuntimeKeyForLoop(
@@ -1094,6 +1115,7 @@ pub const Editor = struct {
             .row = mc.row,
             .col = mc.col,
             .scroll_row = tab.scroll_row,
+            .scroll_col = tab.scroll_col,
             .mode = self.state.mode,
             .cursor_count = tab.cursors.items.len,
             .had_selection = mc.selection_start != null,
@@ -1238,6 +1260,7 @@ pub const Editor = struct {
         const tab = self.currentTab() orelse return .no_active_tab;
         if (&tab.buf != before.buffer_ptr) return .tab_changed;
         if (tab.scroll_row != before.scroll_row) return .viewport_scrolled;
+        if (tab.scroll_col != before.scroll_col) return .viewport_scrolled;
         if (tab.cursors.items.len != 1) return .multiple_cursors;
         if (tab.main_cursor_idx != 0) return .multiple_cursors;
 
@@ -1266,7 +1289,7 @@ pub const Editor = struct {
         try self.renderFastStatusRightLegacy(writer, tab);
 
         const content_width = before.buf_width -| before.gutter_width;
-        const vis_col = if (mc.col > content_width) content_width else mc.col;
+        const vis_col = visibleCursorCol(mc.col, before.scroll_col, content_width);
         const vis_row = mc.row - tab.scroll_row + 3;
         try terminal.moveCursor(writer, vis_row, before.buf_start_col + before.gutter_width + vis_col);
     }
@@ -1641,6 +1664,7 @@ pub const Editor = struct {
         }
 
         try input.handleInput(self, event);
+        self.clampScroll();
         self.markDirty(.partial);
 
         if (self.currentTab()) |tab| {
@@ -1831,19 +1855,84 @@ pub const Editor = struct {
         }
     }
 
-    /// Adjust scroll_row so cursor_row is always within the visible viewport.
+    fn textViewportWidthForTab(self: *const Editor, tab: *const Tab) usize {
+        const viewport = self.bufferViewportGeometry();
+        const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
+        return viewport.width -| gutter_width;
+    }
+
+    fn horizontalScrollForCursor(cursor_col: usize, scroll_col: usize, visible_width: usize) usize {
+        if (visible_width == 0) return scroll_col;
+        if (cursor_col < scroll_col) return cursor_col;
+        if (cursor_col >= scroll_col +| visible_width) return cursor_col - visible_width + 1;
+        return scroll_col;
+    }
+
+    fn visibleCursorCol(cursor_col: usize, scroll_col: usize, visible_width: usize) usize {
+        if (visible_width == 0 or cursor_col <= scroll_col) return 0;
+        return @min(cursor_col - scroll_col, visible_width - 1);
+    }
+
+    fn maxVisibleLineLen(tab: *const Tab, visible_rows: usize) usize {
+        const mc = tab.cursors.items[tab.main_cursor_idx];
+        var max_len: usize = if (mc.row < tab.buf.lines.items.len) tab.buf.lines.items[mc.row].len() else 0;
+        const end = @min(tab.buf.lines.items.len, tab.scroll_row + visible_rows);
+        var row = tab.scroll_row;
+        while (row < end) : (row += 1) {
+            max_len = @max(max_len, tab.buf.lines.items[row].len());
+        }
+        return max_len;
+    }
+
+    fn clampHorizontalScrollToVisibleLines(self: *Editor, tab: *Tab, visible_width: usize) void {
+        const visible_rows = @max(self.editorVisibleRows(), 1);
+        const max_len = maxVisibleLineLen(tab, visible_rows);
+        if (visible_width == 0) {
+            tab.scroll_col = @min(tab.scroll_col, max_len);
+            return;
+        }
+        const max_scroll = max_len -| (visible_width - 1);
+        tab.scroll_col = @min(tab.scroll_col, max_scroll);
+    }
+
+    pub fn applyHorizontalScrollCommand(self: *Editor, command: HorizontalScrollCommand) void {
+        const tab = self.currentTab() orelse return;
+        const mc = tab.mainCursor();
+        const visible_width = self.textViewportWidthForTab(tab);
+        if (visible_width == 0) return;
+
+        const small_step = @max(@as(usize, 1), visible_width / 8);
+        const half_step = @max(@as(usize, 1), visible_width / 2);
+        switch (command) {
+            .left_small => tab.scroll_col -|= small_step,
+            .right_small => tab.scroll_col +|= small_step,
+            .left_half => tab.scroll_col -|= half_step,
+            .right_half => tab.scroll_col +|= half_step,
+            .cursor_start => tab.scroll_col = mc.col,
+            .cursor_end => tab.scroll_col = mc.col -| (visible_width - 1),
+        }
+        self.clampHorizontalScrollToVisibleLines(tab, visible_width);
+    }
+
+    /// Adjust scroll state so the main cursor is always within the visible viewport.
     pub fn clampScroll(self: *Editor) void {
         const tab = self.currentTab() orelse return;
         const mc = tab.mainCursor();
         const before_scroll_row = tab.scroll_row;
+        const before_scroll_col = tab.scroll_col;
         const visible_rows = @max(self.editorVisibleRows(), 1);
         if (mc.row < tab.scroll_row) {
             tab.scroll_row = mc.row;
         } else if (mc.row >= tab.scroll_row + visible_rows) {
             tab.scroll_row = mc.row - visible_rows + 1;
         }
+        const visible_width = self.textViewportWidthForTab(tab);
+        tab.scroll_col = horizontalScrollForCursor(mc.col, tab.scroll_col, visible_width);
+        self.clampHorizontalScrollToVisibleLines(tab, visible_width);
         if (self.active_keypress_trace) |trace| {
-            trace.viewport_scrolled = trace.viewport_scrolled or before_scroll_row != tab.scroll_row;
+            trace.viewport_scrolled = trace.viewport_scrolled or
+                before_scroll_row != tab.scroll_row or
+                before_scroll_col != tab.scroll_col;
         }
     }
 
@@ -2606,9 +2695,13 @@ pub const Editor = struct {
                     var selection_storage: [64]SelectionRange = undefined;
                     var line_state = self.buildLineRenderState(t, buffer_line_idx, content_width, &selection_storage);
 
-                    var char_idx: usize = 0;
+                    var char_idx: usize = t.scroll_col;
                     var m_idx: usize = 0;
-                    while (char_idx < line_len and char_idx < content_width) : (char_idx += 1) {
+                    if (line_state.search_match) |m| {
+                        while (m_idx < m.indices.len and m.indices[m_idx] < t.scroll_col) : (m_idx += 1) {}
+                    }
+                    const end_col = @min(line_len, t.scroll_col +| content_width);
+                    while (char_idx < end_col) : (char_idx += 1) {
                         if (line_state.syntaxStyleAt(char_idx)) |style| {
                             try writer.writeAll(style.ansi());
                         }
@@ -2686,7 +2779,7 @@ pub const Editor = struct {
 
             // Draw all cursors
             for (t.cursors.items, 0..) |cursor, i| {
-                const vis_col = if (cursor.col > content_width) content_width else cursor.col;
+                const vis_col = visibleCursorCol(cursor.col, t.scroll_col, content_width);
                 if (cursor.row >= t.scroll_row and cursor.row < t.scroll_row + visible_rows) {
                     const vis_row = cursor.row - t.scroll_row + 3;
                     try terminal.moveCursor(writer, vis_row, buf_start_col + gutter_width + vis_col);
@@ -2703,7 +2796,7 @@ pub const Editor = struct {
 
             // Finally move hardware cursor to main cursor position
             const mc = t.mainCursor();
-            const vis_col = if (mc.col > content_width) content_width else mc.col;
+            const vis_col = visibleCursorCol(mc.col, t.scroll_col, content_width);
             const vis_row = if (mc.row >= t.scroll_row)
                 mc.row - t.scroll_row + 3
             else
@@ -3023,9 +3116,13 @@ pub const Editor = struct {
         var selection_storage: [64]SelectionRange = undefined;
         var line_state = self.buildLineRenderState(tab, buffer_line_idx, content_width, &selection_storage);
 
-        var char_idx: usize = 0;
+        var char_idx: usize = tab.scroll_col;
         var m_idx: usize = 0;
-        while (char_idx < line_len and char_idx < content_width) : (char_idx += 1) {
+        if (line_state.search_match) |m| {
+            while (m_idx < m.indices.len and m.indices[m_idx] < tab.scroll_col) : (m_idx += 1) {}
+        }
+        const end_col = @min(line_len, tab.scroll_col +| content_width);
+        while (char_idx < end_col) : (char_idx += 1) {
             const ch = line.byteAt(char_idx) orelse ' ';
             if (trace) |keypress_trace| {
                 keypress_trace.visible_chars += 1;
@@ -3050,7 +3147,7 @@ pub const Editor = struct {
                 m_idx += 1;
             }
 
-            self.renderer.screen.set(row, content_col + char_idx, ch, style);
+            self.renderer.screen.set(row, content_col + (char_idx - tab.scroll_col), ch, style);
         }
     }
 
@@ -3148,7 +3245,7 @@ pub const Editor = struct {
         const t = tab orelse return;
         const content_width = self.width -| gutter_width;
         const mc = t.mainCursor();
-        const vis_col = if (mc.col > content_width) content_width else mc.col;
+        const vis_col = visibleCursorCol(mc.col, t.scroll_col, content_width);
         const vis_row = if (mc.row >= t.scroll_row and mc.row < t.scroll_row + visible_rows)
             mc.row - t.scroll_row + 3
         else
@@ -3224,12 +3321,13 @@ pub const Editor = struct {
         const tab = self.currentTab() orelse return;
         const mc = tab.mainCursor();
 
-        const explorer_width = if (self.state.explorer_visible) self.width / 5 else 0;
+        const viewport = self.bufferViewportGeometry();
         const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
+        const content_width = viewport.width -| gutter_width;
 
         // Relative row in viewport
         const rel_row = mc.row - tab.scroll_row;
-        const col = explorer_width + gutter_width + mc.col + 1;
+        const col = viewport.start_col + gutter_width + visibleCursorCol(mc.col, tab.scroll_col, content_width);
 
         const items = self.state.lsp_ui.completionItems();
 
@@ -3589,6 +3687,34 @@ test "fast cursor move reject reason is null for eligible movement" {
     try std.testing.expectEqual(@as(?FastCursorRejectReason, null), ed.fastCursorMoveRejectReason(before));
 }
 
+test "horizontal cursor visibility math keeps cursor inside viewport" {
+    try std.testing.expectEqual(@as(usize, 0), Editor.horizontalScrollForCursor(0, 0, 10));
+    try std.testing.expectEqual(@as(usize, 0), Editor.horizontalScrollForCursor(9, 0, 10));
+    try std.testing.expectEqual(@as(usize, 1), Editor.horizontalScrollForCursor(10, 0, 10));
+    try std.testing.expectEqual(@as(usize, 16), Editor.horizontalScrollForCursor(25, 10, 10));
+    try std.testing.expectEqual(@as(usize, 5), Editor.horizontalScrollForCursor(5, 10, 10));
+    try std.testing.expectEqual(@as(usize, 10), Editor.horizontalScrollForCursor(25, 10, 0));
+}
+
+test "horizontal scroll commands clamp safely" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.width = 14; // 4-cell gutter leaves 10 content columns.
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 5;
+    tab.scroll_col = 10;
+
+    ed.applyHorizontalScrollCommand(.cursor_end);
+    try std.testing.expectEqual(@as(usize, 0), tab.scroll_col);
+
+    tab.mainCursor().col = 4;
+    ed.applyHorizontalScrollCommand(.right_half);
+    try std.testing.expect(tab.scroll_col <= tab.mainCursor().col);
+    try std.testing.expect(tab.scroll_col <= tab.buf.lines.items[0].len());
+}
+
 test "fast cursor move eligibility rejects scrolling movement" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
@@ -3602,6 +3728,41 @@ test "fast cursor move eligibility rejects scrolling movement" {
     try input.handleInput(&ed, ed.keys.move_down);
     try std.testing.expect(!ed.canFastRenderCursorMove(before));
     try std.testing.expectEqual(@as(?FastCursorRejectReason, FastCursorRejectReason.viewport_scrolled), ed.fastCursorMoveRejectReason(before));
+}
+
+test "fast cursor move eligibility rejects horizontal scrolling movement" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.width = 8; // 4-cell gutter leaves 4 content columns.
+    const tab = ed.currentTab().?;
+    tab.scroll_row = 0;
+    tab.scroll_col = 0;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 3;
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_right);
+    try std.testing.expectEqual(@as(usize, 1), tab.scroll_col);
+    try std.testing.expect(!ed.canFastRenderCursorMove(before));
+    try std.testing.expectEqual(@as(?FastCursorRejectReason, FastCursorRejectReason.viewport_scrolled), ed.fastCursorMoveRejectReason(before));
+}
+
+test "fast cursor move eligibility accepts movement inside horizontal viewport" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.width = 8; // 4-cell gutter leaves 4 content columns.
+    const tab = ed.currentTab().?;
+    tab.scroll_row = 0;
+    tab.scroll_col = 1;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 2;
+
+    const before = ed.captureCursorMoveState().?;
+    try input.handleInput(&ed, ed.keys.move_right);
+    try std.testing.expectEqual(@as(usize, 1), tab.scroll_col);
+    try std.testing.expect(ed.canFastRenderCursorMove(before));
 }
 
 test "fast cursor move eligibility rejects active overlays and complex cursors" {
@@ -3707,6 +3868,29 @@ test "fast cursor move output stays small and updates status only" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "2:1") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "alpha") == null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "beta") == null);
+}
+
+test "virtual renderer starts visible line content at horizontal scroll column" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    var old_line = tab.buf.lines.orderedRemove(0);
+    old_line.deinit();
+    try tab.buf.lines.insert(ed.allocator, 0, try buffer.Line.fromSlice(ed.allocator, "0123456789abcdef"));
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 5;
+    tab.scroll_col = 5;
+    ed.width = 10; // 4-cell gutter leaves 6 content columns.
+    ed.height = 8;
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    try ed.renderBenchmarkFrame(&out.writer);
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "56789a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "012345") == null);
 }
 
 test "fast cursor move overwrites wider cursor position in cached field" {

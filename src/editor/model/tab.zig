@@ -22,6 +22,7 @@ pub const Tab = struct {
     syntax_requested_revision: ?u64 = null,
     main_cursor_idx: usize = 0,
     scroll_row: usize = 0,
+    scroll_col: usize = 0,
     lsp_notified_revision: ?u64 = null,
     lsp_pending_since_ns: ?u64 = null,
 

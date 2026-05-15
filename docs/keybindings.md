@@ -50,6 +50,10 @@ Flamingo is a modal editor. You can switch between modes using the following key
 | **Toggle Explorer** | `CTRL + B`                |
 | **Toggle Terminal** | `CTRL + T`                |
 | **Switch Focus**    | `CTRL + E` (configurable) |
+| **Scroll Left**     | `zh` / `zH`               |
+| **Scroll Right**    | `zl` / `zL`               |
+| **Cursor To Left**  | `zs`                      |
+| **Cursor To Right** | `ze`                      |
 
 ---
 

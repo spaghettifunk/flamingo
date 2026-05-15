@@ -1,3 +1,4 @@
+const std = @import("std");
 const terminal = @import("../../terminal.zig");
 
 pub const max_sequence_len = 4;
@@ -6,6 +7,12 @@ pub const NormalCommand = enum {
     jump_top,
     jump_bottom,
     jump_matching_bracket,
+    scroll_left_small,
+    scroll_right_small,
+    scroll_left_half,
+    scroll_right_half,
+    scroll_cursor_start,
+    scroll_cursor_end,
 };
 
 pub const ResolveResult = union(enum) {
@@ -84,6 +91,30 @@ const normal_key_bindings = [_]NormalKeyBinding{
         .sequence = KeySequence.fromKeys(&.{charKey('%')}),
         .command = .jump_matching_bracket,
     },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('h') }),
+        .command = .scroll_left_small,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('l') }),
+        .command = .scroll_right_small,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('H') }),
+        .command = .scroll_left_half,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('L') }),
+        .command = .scroll_right_half,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('s') }),
+        .command = .scroll_cursor_start,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('e') }),
+        .command = .scroll_cursor_end,
+    },
 };
 
 pub fn resolve(sequence: KeySequence) ResolveResult {
@@ -106,4 +137,28 @@ pub fn resolve(sequence: KeySequence) ResolveResult {
     if (exact_command) |command| return .{ .command = command };
     if (has_longer_prefix_match) return .prefix;
     return .none;
+}
+
+test "normal z horizontal scroll sequences resolve" {
+    const cases = [_]struct {
+        keys: KeySequence,
+        command: NormalCommand,
+    }{
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('h') }), .command = .scroll_left_small },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('l') }), .command = .scroll_right_small },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('H') }), .command = .scroll_left_half },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('L') }), .command = .scroll_right_half },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('s') }), .command = .scroll_cursor_start },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('e') }), .command = .scroll_cursor_end },
+    };
+
+    try std.testing.expect(resolve(KeySequence.fromKeys(&.{charKey('z')})) == .prefix);
+    for (cases) |case| {
+        const result = resolve(case.keys);
+        const command = switch (result) {
+            .command => |command| command,
+            else => return error.ExpectedCommand,
+        };
+        try std.testing.expectEqual(case.command, command);
+    }
 }
