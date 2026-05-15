@@ -185,6 +185,7 @@ fn clampLocation(tab: *editor.Tab, location: jump_history.JumpLocation) jump_his
     }
 
     clamped.row = @min(clamped.row, tab.buf.lines.items.len - 1);
+    clamped.row = tab.buf.clampToVisibleLine(clamped.row);
     clamped.col = @min(clamped.col, tab.buf.lines.items[clamped.row].len());
     return clamped;
 }

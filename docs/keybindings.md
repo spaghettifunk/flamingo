@@ -76,6 +76,19 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 
 ---
 
+## Folding (Normal Mode)
+
+| Action | Keybinding |
+| :--- | :--- |
+| **Fold Current Brace Block** | `zc` |
+| **Unfold Current Brace Block** | `zo` |
+| **Toggle Current Brace Block** | `za` |
+| **Fold All Brace Blocks** | `zM` |
+| **Unfold All Brace Blocks** | `zR` |
+| **Toggle All Brace Blocks** | `zA` |
+
+---
+
 ## Command Mode Commands (`:`)
 
 Execute these by pressing `:` and typing the command followed by `Enter`.

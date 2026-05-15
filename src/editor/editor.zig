@@ -400,7 +400,7 @@ pub const Editor = struct {
                 return;
             }
         }
-        
+
         // No dirty tabs found, close all remaining tabs and go to dashboard
         self.closeAllTabs();
         self.state.quitting_all = false;
@@ -1061,6 +1061,7 @@ pub const Editor = struct {
             clamped_col = 0;
         } else {
             clamped_row = @min(clamped_row, tab.buf.lines.items.len - 1);
+            clamped_row = tab.buf.clampToVisibleLine(clamped_row);
             clamped_col = @min(clamped_col, tab.buf.lines.items[clamped_row].len());
         }
         _ = self;
@@ -1720,12 +1721,44 @@ pub const Editor = struct {
     fn maxVisibleLineLen(tab: *const Tab, visible_rows: usize) usize {
         const mc = tab.cursors.items[tab.main_cursor_idx];
         var max_len: usize = if (mc.row < tab.buf.lines.items.len) tab.buf.lines.items[mc.row].len() else 0;
-        const end = @min(tab.buf.lines.items.len, tab.scroll_row + visible_rows);
-        var row = tab.scroll_row;
-        while (row < end) : (row += 1) {
+        if (tab.buf.lines.items.len == 0) return max_len;
+        var row = tab.buf.clampToVisibleLine(tab.scroll_row);
+        var remaining = visible_rows;
+        while (remaining > 0 and row < tab.buf.lines.items.len) : (remaining -= 1) {
             max_len = @max(max_len, tab.buf.lines.items[row].len());
+            const next = tab.buf.nextVisibleLine(row);
+            if (next == row) break;
+            row = next;
         }
         return max_len;
+    }
+
+    fn visibleLineOffset(tab: *const Tab, start_line: usize, target_line: usize, max_rows: usize) ?usize {
+        if (tab.buf.lines.items.len == 0) return null;
+        var row = tab.buf.clampToVisibleLine(start_line);
+        const target = tab.buf.clampToVisibleLine(target_line);
+        var offset: usize = 0;
+        while (offset < max_rows and row < tab.buf.lines.items.len) : (offset += 1) {
+            if (row == target) return offset;
+            const next = tab.buf.nextVisibleLine(row);
+            if (next == row) break;
+            row = next;
+        }
+        return null;
+    }
+
+    fn visibleViewportEndLine(tab: *const Tab, start_line: usize, row_count: usize) usize {
+        if (tab.buf.lines.items.len == 0) return 0;
+        var row = tab.buf.clampToVisibleLine(start_line);
+        var last = row;
+        var remaining = row_count;
+        while (remaining > 0 and row < tab.buf.lines.items.len) : (remaining -= 1) {
+            last = row;
+            const next = tab.buf.nextVisibleLine(row);
+            if (next == row) break;
+            row = next;
+        }
+        return @min(last + 1, tab.buf.lines.items.len);
     }
 
     fn clampHorizontalScrollToVisibleLines(self: *Editor, tab: *Tab, visible_width: usize) void {
@@ -1765,10 +1798,22 @@ pub const Editor = struct {
         const before_scroll_row = tab.scroll_row;
         const before_scroll_col = tab.scroll_col;
         const visible_rows = @max(self.editorVisibleRows(), 1);
+        mc.row = tab.buf.clampToVisibleLine(mc.row);
+        if (mc.row < tab.buf.lines.items.len) {
+            mc.col = @min(mc.col, tab.buf.lines.items[mc.row].len());
+        }
+        tab.scroll_row = tab.buf.clampToVisibleLine(tab.scroll_row);
         if (mc.row < tab.scroll_row) {
             tab.scroll_row = mc.row;
-        } else if (mc.row >= tab.scroll_row + visible_rows) {
-            tab.scroll_row = mc.row - visible_rows + 1;
+        } else if (visibleLineOffset(tab, tab.scroll_row, mc.row, visible_rows) == null) {
+            var row = mc.row;
+            var remaining = visible_rows -| 1;
+            while (remaining > 0) : (remaining -= 1) {
+                const prev = tab.buf.prevVisibleLine(row);
+                if (prev == row) break;
+                row = prev;
+            }
+            tab.scroll_row = row;
         }
         const visible_width = self.textViewportWidthForTab(tab);
         tab.scroll_col = horizontalScrollForCursor(mc.col, tab.scroll_col, visible_width);
@@ -2239,8 +2284,10 @@ pub const Editor = struct {
             if (self.active_keypress_trace) |trace| trace.tabs_ns += perf.elapsedNs(tabs_start);
 
             if (ctx.tab) |t| {
+                t.scroll_row = t.buf.clampToVisibleLine(t.scroll_row);
                 const highlight_start = perf.nowNs();
-                self.prepareSyntaxForViewport(t, t.scroll_row, t.scroll_row + ctx.visible_rows, 20) catch {
+                const syntax_end = visibleViewportEndLine(t, t.scroll_row, ctx.visible_rows + 20);
+                self.prepareSyntaxForViewport(t, t.scroll_row, syntax_end, 20) catch {
                     if (self.active_keypress_trace) |trace| trace.syntax_cache = syntax.ViewportCacheStatus.unknown.name();
                 };
                 const highlight_elapsed = perf.elapsedNs(highlight_start);
@@ -2248,11 +2295,14 @@ pub const Editor = struct {
                 if (self.active_keypress_trace) |trace| trace.highlight_ns += highlight_elapsed;
 
                 const visible_lines_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
+                var buffer_line_idx = t.scroll_row;
                 for (0..ctx.visible_rows) |screen_row| {
-                    const buffer_line_idx = screen_row + t.scroll_row;
                     const row = screen_row + 2;
-                    if (buffer_line_idx >= t.buf.lines.items.len) continue;
+                    if (buffer_line_idx >= t.buf.lines.items.len) break;
                     self.renderVirtualLine(t, buffer_line_idx, row, ctx);
+                    const next = t.buf.nextVisibleLine(buffer_line_idx);
+                    if (next == buffer_line_idx) break;
+                    buffer_line_idx = next;
                 }
                 if (self.active_keypress_trace) |trace| trace.visible_lines_ns += perf.elapsedNs(visible_lines_start);
             }
@@ -2887,6 +2937,15 @@ pub const Editor = struct {
 
             self.renderer.screen.set(row, content_col + (char_idx - tab.scroll_col), ch, style);
         }
+
+        if (tab.buf.foldStartingAt(buffer_line_idx)) |fold| {
+            var marker_buf: [48]u8 = undefined;
+            const marker = std.fmt.bufPrint(&marker_buf, "  ⋯ {d} lines folded", .{fold.end_line - fold.start_line}) catch "";
+            const marker_offset = line_len -| tab.scroll_col;
+            if (tab.scroll_col <= line_len and marker_offset < content_width) {
+                self.renderer.screen.writeText(row, content_col + marker_offset, marker, .dim);
+            }
+        }
     }
 
     fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
@@ -3008,10 +3067,7 @@ pub const Editor = struct {
         const content_width = ctx.buf_width -| ctx.gutter_width;
         const mc = t.mainCursor();
         const vis_col = visibleCursorCol(mc.col, t.scroll_col, content_width);
-        const vis_row = if (mc.row >= t.scroll_row and mc.row < t.scroll_row + ctx.visible_rows)
-            mc.row - t.scroll_row + 3
-        else
-            3;
+        const vis_row = if (visibleLineOffset(t, t.scroll_row, mc.row, ctx.visible_rows)) |offset| offset + 3 else 3;
         self.renderer.screen.setCursor(vis_row, ctx.buf_start_col + ctx.gutter_width + vis_col);
     }
 
@@ -3394,6 +3450,30 @@ test "virtual renderer starts visible line content at horizontal scroll column" 
     try std.testing.expect(std.mem.indexOf(u8, rendered, "012345") == null);
 }
 
+test "virtual renderer and movement respect folded lines" {
+    var ed = try makeFoldTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    try tab.buf.foldCurrentBraceBlock(0, 10);
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+    try ed.renderBenchmarkFrame(&out.writer);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "foo();") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "2 lines folded") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "after();") != null);
+
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 0;
+    try std.testing.expect(try input.handleMovement(&ed, ed.keys.move_down));
+    try std.testing.expectEqual(@as(usize, 3), tab.mainCursor().row);
+    try std.testing.expect(try input.handleMovement(&ed, ed.keys.move_up));
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+}
+
 test "movement coalescing helper accepts repeated plain Down" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
@@ -3632,6 +3712,32 @@ fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count:
     ed.height = 24;
     ed.state.render_dirty = false;
     ed.state.force_full_render = false;
+    return ed;
+}
+
+fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    foo();",
+        "}",
+        "after();",
+    };
+    for (lines) |line| {
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    try ed.addTab(buf);
+    ed.state.mode = .Normal;
+    ed.width = 80;
+    ed.height = 12;
     return ed;
 }
 

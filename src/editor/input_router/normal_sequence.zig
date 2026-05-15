@@ -14,6 +14,12 @@ pub const NormalCommand = enum {
     scroll_right_half,
     scroll_cursor_start,
     scroll_cursor_end,
+    fold_current,
+    unfold_current,
+    toggle_fold_current,
+    fold_all,
+    unfold_all,
+    toggle_fold_all,
 };
 
 pub const ResolveResult = union(enum) {
@@ -120,6 +126,30 @@ const normal_key_bindings = [_]NormalKeyBinding{
         .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('e') }),
         .command = .scroll_cursor_end,
     },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('c') }),
+        .command = .fold_current,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('o') }),
+        .command = .unfold_current,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('a') }),
+        .command = .toggle_fold_current,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('M') }),
+        .command = .fold_all,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('R') }),
+        .command = .unfold_all,
+    },
+    .{
+        .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('A') }),
+        .command = .toggle_fold_all,
+    },
 };
 
 pub fn resolve(sequence: KeySequence) ResolveResult {
@@ -155,6 +185,30 @@ test "normal z horizontal scroll sequences resolve" {
         .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('L') }), .command = .scroll_right_half },
         .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('s') }), .command = .scroll_cursor_start },
         .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('e') }), .command = .scroll_cursor_end },
+    };
+
+    try std.testing.expect(resolve(KeySequence.fromKeys(&.{charKey('z')})) == .prefix);
+    for (cases) |case| {
+        const result = resolve(case.keys);
+        const command = switch (result) {
+            .command => |command| command,
+            else => return error.ExpectedCommand,
+        };
+        try std.testing.expectEqual(case.command, command);
+    }
+}
+
+test "normal z fold sequences resolve" {
+    const cases = [_]struct {
+        keys: KeySequence,
+        command: NormalCommand,
+    }{
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('c') }), .command = .fold_current },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('o') }), .command = .unfold_current },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('a') }), .command = .toggle_fold_current },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('M') }), .command = .fold_all },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('R') }), .command = .unfold_all },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('A') }), .command = .toggle_fold_all },
     };
 
     try std.testing.expect(resolve(KeySequence.fromKeys(&.{charKey('z')})) == .prefix);

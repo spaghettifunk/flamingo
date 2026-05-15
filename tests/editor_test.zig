@@ -328,7 +328,11 @@ test "Editor: clampScroll pulls scroll_row up when cursor is above viewport" {
 
 test "Editor: clampScroll pushes scroll_row down when cursor is below viewport" {
     const a = std.testing.allocator;
-    const lines = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" };
+    const lines = [_][]const u8{
+        "0",  "1",  "2",  "3",  "4",  "5",  "6",  "7",  "8",  "9",
+        "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
+        "20", "21", "22", "23", "24",
+    };
     var ed = try th.makeEditor(a, &lines);
     defer ed.deinit();
 

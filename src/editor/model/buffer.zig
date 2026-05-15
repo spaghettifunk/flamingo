@@ -176,6 +176,15 @@ pub const TextPoint = struct {
     col: usize,
 };
 
+pub const FoldRange = struct {
+    start_line: usize,
+    end_line: usize,
+
+    pub fn eql(self: FoldRange, other: FoldRange) bool {
+        return self.start_line == other.start_line and self.end_line == other.end_line;
+    }
+};
+
 pub const TextEditDelta = struct {
     revision: u64 = 0,
     start_point: TextPoint,
@@ -202,6 +211,7 @@ pub const Buffer = struct {
     last_edit_delta: ?TextEditDelta = null,
     edit_delta_history: [max_edit_delta_history]TextEditDelta = undefined,
     edit_delta_count: usize = 0,
+    folds: std.ArrayListUnmanaged(FoldRange) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) !Buffer {
         var lines = std.ArrayList(Line).empty;
@@ -233,6 +243,8 @@ pub const Buffer = struct {
         self.undo_stack.deinit(self.allocator);
         self.clearHistoryList(&self.redo_stack);
         self.redo_stack.deinit(self.allocator);
+        self.folds.deinit(self.allocator);
+        self.folds = .empty;
     }
 
     pub fn setFilename(self: *Buffer, filename: []const u8) !void {
@@ -247,6 +259,8 @@ pub const Buffer = struct {
         self.is_dirty = self.revision != self.saved_revision;
         self.last_edit_delta = null;
         self.edit_delta_count = 0;
+        // TODO: Preserve/update fold ranges across edits instead of clearing all folds.
+        self.clearFolds();
     }
 
     fn markChangedWithDelta(self: *Buffer, delta: TextEditDelta) void {
@@ -256,6 +270,228 @@ pub const Buffer = struct {
         stored.revision = self.revision;
         self.last_edit_delta = stored;
         self.appendEditDelta(stored);
+        // TODO: Preserve/update fold ranges across edits instead of clearing all folds.
+        self.clearFolds();
+    }
+
+    pub fn clearFolds(self: *Buffer) void {
+        self.folds.clearRetainingCapacity();
+    }
+
+    fn normalizeFoldRange(self: *const Buffer, range: FoldRange) ?FoldRange {
+        if (self.lines.items.len == 0) return null;
+        if (range.start_line >= self.lines.items.len or range.end_line >= self.lines.items.len) return null;
+        if (range.end_line <= range.start_line) return null;
+        return range;
+    }
+
+    fn foldIndex(self: *const Buffer, range: FoldRange) ?usize {
+        for (self.folds.items, 0..) |fold, i| {
+            if (fold.eql(range)) return i;
+        }
+        return null;
+    }
+
+    fn addFold(self: *Buffer, range: FoldRange) !void {
+        const normalized = self.normalizeFoldRange(range) orelse return;
+        if (self.foldIndex(normalized) != null) return;
+        try self.folds.append(self.allocator, normalized);
+    }
+
+    fn removeFold(self: *Buffer, range: FoldRange) void {
+        const normalized = self.normalizeFoldRange(range) orelse return;
+        const idx = self.foldIndex(normalized) orelse return;
+        _ = self.folds.orderedRemove(idx);
+    }
+
+    pub fn findMatchingCloseBrace(self: *const Buffer, start_line: usize, start_col: usize) ?TextPoint {
+        if (start_line >= self.lines.items.len) return null;
+        if (self.lines.items[start_line].byteAt(start_col) != '{') return null;
+
+        var depth: usize = 1;
+        var row = start_line;
+        var col = start_col + 1;
+        while (row < self.lines.items.len) : (row += 1) {
+            const line = &self.lines.items[row];
+            while (col < line.len()) : (col += 1) {
+                const c = line.byteAt(col) orelse return null;
+                if (c == '{') {
+                    depth += 1;
+                } else if (c == '}') {
+                    depth -= 1;
+                    if (depth == 0) return .{ .row = row, .col = col };
+                }
+            }
+            col = 0;
+        }
+        return null;
+    }
+
+    pub fn findMatchingOpenBrace(self: *const Buffer, end_line: usize, end_col: usize) ?TextPoint {
+        if (end_line >= self.lines.items.len) return null;
+        if (self.lines.items[end_line].byteAt(end_col) != '}') return null;
+
+        var depth: usize = 1;
+        var row = end_line;
+        var col = end_col;
+        while (true) {
+            const line = &self.lines.items[row];
+            var i = @min(col, line.len());
+            while (i > 0) {
+                i -= 1;
+                const c = line.byteAt(i) orelse return null;
+                if (c == '}') {
+                    depth += 1;
+                } else if (c == '{') {
+                    depth -= 1;
+                    if (depth == 0) return .{ .row = row, .col = i };
+                }
+            }
+            if (row == 0) break;
+            row -= 1;
+            col = self.lines.items[row].len();
+        }
+        return null;
+    }
+
+    fn currentLineBrace(self: *const Buffer, cursor_row: usize, cursor_col: usize) ?TextPoint {
+        if (cursor_row >= self.lines.items.len) return null;
+        const line = &self.lines.items[cursor_row];
+        var best_col: ?usize = null;
+        var best_distance: usize = std.math.maxInt(usize);
+        var col: usize = 0;
+        while (col < line.len()) : (col += 1) {
+            const c = line.byteAt(col) orelse return null;
+            if (c != '{' and c != '}') continue;
+            const distance = if (cursor_col >= col) cursor_col - col else col - cursor_col;
+            if (best_col == null or distance < best_distance) {
+                best_col = col;
+                best_distance = distance;
+            }
+        }
+        const brace_col = best_col orelse return null;
+        return .{ .row = cursor_row, .col = brace_col };
+    }
+
+    pub fn findCurrentBraceFoldRange(self: *const Buffer, cursor_row: usize, cursor_col: usize) ?FoldRange {
+        const brace = self.currentLineBrace(cursor_row, cursor_col) orelse return null;
+        const c = self.lines.items[brace.row].byteAt(brace.col) orelse return null;
+        const range = if (c == '{') blk: {
+            const close = self.findMatchingCloseBrace(brace.row, brace.col) orelse return null;
+            break :blk FoldRange{ .start_line = brace.row, .end_line = close.row };
+        } else blk: {
+            const open = self.findMatchingOpenBrace(brace.row, brace.col) orelse return null;
+            break :blk FoldRange{ .start_line = open.row, .end_line = brace.row };
+        };
+        return self.normalizeFoldRange(range);
+    }
+
+    pub fn foldCurrentBraceBlock(self: *Buffer, cursor_row: usize, cursor_col: usize) !void {
+        const range = self.findCurrentBraceFoldRange(cursor_row, cursor_col) orelse return;
+        try self.addFold(range);
+    }
+
+    pub fn unfoldCurrentBraceBlock(self: *Buffer, cursor_row: usize, cursor_col: usize) void {
+        const range = self.findCurrentBraceFoldRange(cursor_row, cursor_col) orelse return;
+        self.removeFold(range);
+    }
+
+    pub fn toggleCurrentBraceBlock(self: *Buffer, cursor_row: usize, cursor_col: usize) !void {
+        const range = self.findCurrentBraceFoldRange(cursor_row, cursor_col) orelse return;
+        if (self.foldIndex(range) != null) {
+            self.removeFold(range);
+        } else {
+            try self.addFold(range);
+        }
+    }
+
+    pub fn foldAllBraceBlocks(self: *Buffer) !void {
+        self.clearFolds();
+        var row: usize = 0;
+        while (row < self.lines.items.len) : (row += 1) {
+            const line = &self.lines.items[row];
+            var col: usize = 0;
+            while (col < line.len()) : (col += 1) {
+                if (line.byteAt(col) != '{') continue;
+                const close = self.findMatchingCloseBrace(row, col) orelse continue;
+                try self.addFold(.{ .start_line = row, .end_line = close.row });
+            }
+        }
+    }
+
+    pub fn unfoldAllBraceBlocks(self: *Buffer) void {
+        self.clearFolds();
+    }
+
+    pub fn toggleAllBraceBlocks(self: *Buffer) !void {
+        if (self.folds.items.len > 0) {
+            self.unfoldAllBraceBlocks();
+        } else {
+            try self.foldAllBraceBlocks();
+        }
+    }
+
+    pub fn foldContainingHiddenLine(self: *const Buffer, line: usize) ?FoldRange {
+        var best: ?FoldRange = null;
+        for (self.folds.items) |fold| {
+            if (line > fold.start_line and line <= fold.end_line) {
+                if (best == null or fold.start_line < best.?.start_line) best = fold;
+            }
+        }
+        return best;
+    }
+
+    pub fn isLineHiddenByFold(self: *const Buffer, line: usize) bool {
+        return self.foldContainingHiddenLine(line) != null;
+    }
+
+    pub fn foldStartingAt(self: *const Buffer, line: usize) ?FoldRange {
+        for (self.folds.items) |fold| {
+            if (fold.start_line == line) return fold;
+        }
+        return null;
+    }
+
+    pub fn isFoldStartLine(self: *const Buffer, line: usize) bool {
+        return self.foldStartingAt(line) != null;
+    }
+
+    pub fn clampToVisibleLine(self: *const Buffer, line: usize) usize {
+        if (self.lines.items.len == 0) return 0;
+        const bounded = @min(line, self.lines.items.len - 1);
+        if (self.foldContainingHiddenLine(bounded)) |fold| return fold.start_line;
+        return bounded;
+    }
+
+    pub fn nextVisibleLine(self: *const Buffer, line: usize) usize {
+        if (self.lines.items.len == 0) return 0;
+        var row = @min(line +| 1, self.lines.items.len - 1);
+        while (row < self.lines.items.len and self.isLineHiddenByFold(row)) : (row += 1) {}
+        if (row >= self.lines.items.len) return self.clampToVisibleLine(self.lines.items.len - 1);
+        return row;
+    }
+
+    pub fn prevVisibleLine(self: *const Buffer, line: usize) usize {
+        if (self.lines.items.len == 0 or line == 0) return 0;
+        var row = @min(line - 1, self.lines.items.len - 1);
+        while (self.isLineHiddenByFold(row)) {
+            if (self.foldContainingHiddenLine(row)) |fold| {
+                row = fold.start_line;
+            } else if (row == 0) {
+                return 0;
+            } else {
+                row -= 1;
+            }
+        }
+        return row;
+    }
+
+    pub fn visibleLineCount(self: *const Buffer) usize {
+        var count: usize = 0;
+        for (0..self.lines.items.len) |row| {
+            if (!self.isLineHiddenByFold(row)) count += 1;
+        }
+        return count;
     }
 
     pub fn lastEditDelta(self: *const Buffer) ?TextEditDelta {
@@ -748,6 +984,30 @@ pub fn countDigits(n: usize) usize {
     return d;
 }
 
+fn testBufferFromLines(allocator: std.mem.Allocator, lines: []const []const u8) !Buffer {
+    var buf = try Buffer.init(allocator);
+    var initial = buf.lines.orderedRemove(0);
+    initial.deinit();
+
+    for (lines) |line_text| {
+        var line = try Line.fromSlice(allocator, line_text);
+        var appended = false;
+        errdefer if (!appended) line.deinit();
+        try buf.lines.append(allocator, line);
+        appended = true;
+    }
+
+    if (buf.lines.items.len == 0) {
+        var line = try Line.init(allocator);
+        var appended = false;
+        errdefer if (!appended) line.deinit();
+        try buf.lines.append(allocator, line);
+        appended = true;
+    }
+
+    return buf;
+}
+
 test "Line basic operations" {
     const allocator = std.testing.allocator;
     var line = try Line.init(allocator);
@@ -765,6 +1025,177 @@ test "Line basic operations" {
     const s2 = try line.slice(allocator);
     defer allocator.free(s2);
     try std.testing.expectEqualStrings("ac", s2);
+}
+
+test "Buffer brace folding matches simple block" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    foo();",
+        "}",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    const close = buf.findMatchingCloseBrace(0, 10).?;
+    try std.testing.expectEqual(@as(usize, 2), close.row);
+    try std.testing.expectEqual(@as(usize, 0), close.col);
+
+    const open = buf.findMatchingOpenBrace(2, 0).?;
+    try std.testing.expectEqual(@as(usize, 0), open.row);
+    try std.testing.expectEqual(@as(usize, 10), open.col);
+}
+
+test "Buffer brace folding matches nested blocks" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    if (x) {",
+        "        foo();",
+        "    }",
+        "}",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    const outer = buf.findCurrentBraceFoldRange(0, 10).?;
+    try std.testing.expectEqual(FoldRange{ .start_line = 0, .end_line = 4 }, outer);
+
+    const inner = buf.findCurrentBraceFoldRange(1, 11).?;
+    try std.testing.expectEqual(FoldRange{ .start_line = 1, .end_line = 3 }, inner);
+}
+
+test "Buffer current-line brace folding behavior" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    if (x) {",
+        "        foo();",
+        "    }",
+        "} else {",
+        "    bar();",
+        "}",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    try buf.foldCurrentBraceBlock(1, 11);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+    try std.testing.expectEqual(FoldRange{ .start_line = 1, .end_line = 3 }, buf.folds.items[0]);
+
+    buf.unfoldCurrentBraceBlock(3, 4);
+    try std.testing.expectEqual(@as(usize, 0), buf.folds.items.len);
+
+    try buf.toggleCurrentBraceBlock(2, 0);
+    try std.testing.expectEqual(@as(usize, 0), buf.folds.items.len);
+
+    try buf.toggleCurrentBraceBlock(4, 7);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+    try std.testing.expectEqual(FoldRange{ .start_line = 4, .end_line = 6 }, buf.folds.items[0]);
+
+    buf.clearFolds();
+    try buf.toggleCurrentBraceBlock(4, 1);
+    try std.testing.expectEqual(FoldRange{ .start_line = 0, .end_line = 4 }, buf.folds.items[0]);
+}
+
+test "Buffer brace folding ignores invalid input" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn broken() {",
+        "}",
+        "}",
+        "if (x) { y(); }",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    try buf.foldCurrentBraceBlock(0, 12);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+    try std.testing.expectEqual(FoldRange{ .start_line = 0, .end_line = 1 }, buf.folds.items[0]);
+
+    try buf.foldCurrentBraceBlock(2, 0);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+
+    try buf.foldCurrentBraceBlock(3, 7);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+
+    var empty = Buffer{ .lines = std.ArrayList(Line).empty, .allocator = allocator };
+    defer empty.deinit();
+    try empty.foldCurrentBraceBlock(0, 0);
+    try std.testing.expectEqual(@as(usize, 0), empty.folds.items.len);
+}
+
+test "Buffer fold all discovers valid multi-line ranges once" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    if (x) { y(); }",
+        "    if (y) {",
+        "        foo();",
+        "    }",
+        "}",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    try buf.foldAllBraceBlocks();
+    try buf.foldAllBraceBlocks();
+    try std.testing.expectEqual(@as(usize, 2), buf.folds.items.len);
+    try std.testing.expectEqual(FoldRange{ .start_line = 0, .end_line = 5 }, buf.folds.items[0]);
+    try std.testing.expectEqual(FoldRange{ .start_line = 2, .end_line = 4 }, buf.folds.items[1]);
+
+    try buf.toggleAllBraceBlocks();
+    try std.testing.expectEqual(@as(usize, 0), buf.folds.items.len);
+    try buf.toggleAllBraceBlocks();
+    try std.testing.expectEqual(@as(usize, 2), buf.folds.items.len);
+}
+
+test "Buffer fold visibility helpers skip hidden ranges" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    if (x) {",
+        "        foo();",
+        "    }",
+        "}",
+        "after();",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    try buf.foldCurrentBraceBlock(1, 11);
+    try std.testing.expect(buf.isFoldStartLine(1));
+    try std.testing.expect(!buf.isLineHiddenByFold(1));
+    try std.testing.expect(buf.isLineHiddenByFold(2));
+    try std.testing.expect(buf.isLineHiddenByFold(3));
+    try std.testing.expectEqual(@as(usize, 4), buf.nextVisibleLine(1));
+    try std.testing.expectEqual(@as(usize, 1), buf.prevVisibleLine(4));
+    try std.testing.expectEqual(@as(usize, 1), buf.clampToVisibleLine(3));
+    try std.testing.expectEqual(@as(usize, 4), buf.visibleLineCount());
+
+    try buf.foldCurrentBraceBlock(0, 10);
+    try std.testing.expectEqual(@as(usize, 0), buf.clampToVisibleLine(3));
+}
+
+test "Buffer fold state clears on edit" {
+    const allocator = std.testing.allocator;
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    foo();",
+        "}",
+    };
+    var buf = try testBufferFromLines(allocator, &lines);
+    defer buf.deinit();
+
+    try buf.foldCurrentBraceBlock(0, 10);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+    try buf.insertChar(1, 4, 'x');
+    try std.testing.expectEqual(@as(usize, 0), buf.folds.items.len);
+
+    try buf.foldCurrentBraceBlock(0, 10);
+    try std.testing.expectEqual(@as(usize, 1), buf.folds.items.len);
+    try std.testing.expect(try buf.undo());
+    try std.testing.expectEqual(@as(usize, 0), buf.folds.items.len);
 }
 
 test "Buffer line merging" {

@@ -106,7 +106,65 @@ fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalComma
         .scroll_right_half => ed.applyHorizontalScrollCommand(.right_half),
         .scroll_cursor_start => ed.applyHorizontalScrollCommand(.cursor_start),
         .scroll_cursor_end => ed.applyHorizontalScrollCommand(.cursor_end),
+        .fold_current => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                try tab.buf.foldCurrentBraceBlock(mc.row, mc.col);
+                clampAfterFoldChange(ed);
+            }
+        },
+        .unfold_current => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                tab.buf.unfoldCurrentBraceBlock(mc.row, mc.col);
+                clampAfterFoldChange(ed);
+            }
+        },
+        .toggle_fold_current => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                try tab.buf.toggleCurrentBraceBlock(mc.row, mc.col);
+                clampAfterFoldChange(ed);
+            }
+        },
+        .fold_all => {
+            if (ed.currentTab()) |tab| {
+                try tab.buf.foldAllBraceBlocks();
+                clampAfterFoldChange(ed);
+            }
+        },
+        .unfold_all => {
+            if (ed.currentTab()) |tab| {
+                tab.buf.unfoldAllBraceBlocks();
+                clampAfterFoldChange(ed);
+            }
+        },
+        .toggle_fold_all => {
+            if (ed.currentTab()) |tab| {
+                try tab.buf.toggleAllBraceBlocks();
+                clampAfterFoldChange(ed);
+            }
+        },
     }
+}
+
+fn clampAfterFoldChange(ed: *editor.Editor) void {
+    const tab = ed.currentTab() orelse return;
+    for (tab.cursors.items) |*cursor| {
+        cursor.row = tab.buf.clampToVisibleLine(cursor.row);
+        cursor.col = @min(cursor.col, tab.buf.lines.items[cursor.row].len());
+        cursor.preferred_col = null;
+        if (cursor.selection_start) |selection_start| {
+            const row = tab.buf.clampToVisibleLine(selection_start.row);
+            cursor.selection_start = .{
+                .row = row,
+                .col = @min(selection_start.col, tab.buf.lines.items[row].len()),
+            };
+        }
+    }
+    tab.scroll_row = tab.buf.clampToVisibleLine(tab.scroll_row);
+    ed.clampScroll();
+    ed.markDirty(.full);
 }
 
 const GlobalSearchAction = union(enum) {
@@ -916,8 +974,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                         try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
                         if (ed.state.search_system.?.getActiveMatch()) |m| {
                             const mc = tab.mainCursor();
-                            mc.row = m.row;
-                            mc.col = m.col;
+                            mc.row = tab.buf.clampToVisibleLine(m.row);
+                            mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
                             mc.preferred_col = null;
                             ed.clampScroll();
                         }
@@ -934,8 +992,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     if (s.getActiveMatch()) |m| {
                         if (ed.currentTab()) |tab| {
                             const mc = tab.mainCursor();
-                            mc.row = m.row;
-                            mc.col = m.col;
+                            mc.row = tab.buf.clampToVisibleLine(m.row);
+                            mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
                             mc.preferred_col = null;
                             ed.clampScroll();
                         }
@@ -947,8 +1005,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     if (s.getActiveMatch()) |m| {
                         if (ed.currentTab()) |tab| {
                             const mc = tab.mainCursor();
-                            mc.row = m.row;
-                            mc.col = m.col;
+                            mc.row = tab.buf.clampToVisibleLine(m.row);
+                            mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
                             mc.preferred_col = null;
                             ed.clampScroll();
                         }
@@ -960,8 +1018,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                     try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
                     if (ed.state.search_system.?.getActiveMatch()) |m| {
                         const mc = tab.mainCursor();
-                        mc.row = m.row;
-                        mc.col = m.col;
+                        mc.row = tab.buf.clampToVisibleLine(m.row);
+                        mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
                         mc.preferred_col = null;
                         ed.clampScroll();
                     }
@@ -1041,7 +1099,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
             } else if (matches(event, keys.normal_mode) or
                 (event.key == .Char and !event.ctrl and !event.alt and
-                (event.char == 'n' or event.char == 'N')))
+                    (event.char == 'n' or event.char == 'N')))
             {
                 // Cancel — return to Normal mode without closing
                 ed.state.save_confirmation.close();
@@ -1095,28 +1153,36 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
         } else if (matchesMovement(event, keys.move_up)) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
-            if (cursor.row > 0) cursor.row -= 1;
+            cursor.row = tab.buf.prevVisibleLine(cursor.row);
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
         } else if (matchesMovement(event, keys.move_down)) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
-            if (cursor.row < tab.buf.lines.items.len - 1) cursor.row += 1;
+            cursor.row = tab.buf.nextVisibleLine(cursor.row);
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
         } else if (event.key == .PageUp and !event.ctrl and !event.alt) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
-            cursor.row = cursor.row -| page_rows;
+            for (0..page_rows) |_| {
+                const next = tab.buf.prevVisibleLine(cursor.row);
+                if (next == cursor.row) break;
+                cursor.row = next;
+            }
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
         } else if (event.key == .PageDown and !event.ctrl and !event.alt) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
-            cursor.row = @min(tab.buf.lines.items.len - 1, cursor.row + page_rows);
+            for (0..page_rows) |_| {
+                const next = tab.buf.nextVisibleLine(cursor.row);
+                if (next == cursor.row) break;
+                cursor.row = next;
+            }
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
@@ -1149,9 +1215,10 @@ fn clampCursorToBuffer(tab: *editor.Tab, cursor: *editor.Cursor) void {
     }
 
     cursor.row = @min(cursor.row, tab.buf.lines.items.len - 1);
+    cursor.row = tab.buf.clampToVisibleLine(cursor.row);
     cursor.col = @min(cursor.col, tab.buf.lines.items[cursor.row].len());
     if (cursor.selection_start) |selection_start| {
-        const row = @min(selection_start.row, tab.buf.lines.items.len - 1);
+        const row = tab.buf.clampToVisibleLine(@min(selection_start.row, tab.buf.lines.items.len - 1));
         cursor.selection_start = .{
             .row = row,
             .col = @min(selection_start.col, tab.buf.lines.items[row].len()),
