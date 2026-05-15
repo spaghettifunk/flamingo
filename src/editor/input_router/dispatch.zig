@@ -835,6 +835,10 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 if (try ed.state.filesystem_picker.selectFolder(ed.allocator)) |result| {
                     try applyPickerResult(ed, result);
                 }
+            } else if (ed.state.filesystem_picker.mode == .open_folder and event.key == .Char and event.char == '.' and !event.ctrl and !event.alt) {
+                if (try ed.state.filesystem_picker.selectCurrentFolder(ed.allocator)) |result| {
+                    try applyPickerResult(ed, result);
+                }
             } else if (event.key == .Up) {
                 ed.state.filesystem_picker.moveUp();
                 ed.markDirty(.full);

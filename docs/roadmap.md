@@ -25,7 +25,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement "Open Folder" by selecting a specific folder (and not just `.`) using a popup to show the filesystem (and navigate it)
 - [x] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
 - [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file. This step cannot happen until I find a way to automatically put the file in a specific folder at startup time
-- [ ] implement opening the current folder with `.` button when the Filesystem pane is open
+- [x] implement opening the current folder with `.` button when the Filesystem pane is open
 - [ ] UI rehaul for the Filesystem pane
 
 ## Editing TODO

@@ -265,6 +265,12 @@ pub const FilesystemPicker = struct {
         }
         return .{ .open_folder = try allocator.dupe(u8, self.cwd) };
     }
+
+    pub fn selectCurrentFolder(self: *FilesystemPicker, allocator: std.mem.Allocator) !?PickerResult {
+        if (self.mode != .open_folder) return null;
+        self.error_message = null;
+        return .{ .open_folder = try allocator.dupe(u8, self.cwd) };
+    }
 };
 
 test "filesystem picker changes directory and creates result path" {
@@ -344,4 +350,27 @@ test "open folder mode reports folder-specific error on file" {
 
     try std.testing.expect((try picker.accept(allocator, io)) == null);
     try std.testing.expectEqualStrings("Select a folder", picker.error_message.?);
+}
+
+test "open folder mode can select current directory explicitly" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "child");
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+
+    var picker = FilesystemPicker{};
+    defer picker.deinit(allocator);
+    try picker.open(allocator, io, .open_folder, root);
+
+    const result = (try picker.selectCurrentFolder(allocator)).?;
+    defer result.deinit(allocator);
+    switch (result) {
+        .open_folder => |path| try std.testing.expectEqualStrings(root, path),
+        else => return error.UnexpectedResult,
+    }
 }
