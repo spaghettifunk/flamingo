@@ -183,6 +183,36 @@ test "Insert: gg inserts text and does not affect Normal pending sequence" {
     try std.testing.expectEqual(@as(usize, 0), ed.state.pending_normal_sequence.len);
 }
 
+test "Insert: f inserts text and does not trigger definition lookup" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    ed.state.mode = .Insert;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('f')});
+
+    try expectLine(a, &ed, 0, "f");
+    try std.testing.expect(ed.state.error_message == null);
+    try std.testing.expectEqual(@as(?usize, null), ed.pending_definition_request_id);
+}
+
+test "Normal: f without file-backed buffer reports no active file and does not move" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"plain"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+    tab.mainCursor().col = 2;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('f')});
+
+    try std.testing.expectEqualStrings("No active file for definition lookup", ed.state.error_message.?);
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 2), tab.mainCursor().col);
+    try std.testing.expectEqual(@as(?usize, null), ed.pending_definition_request_id);
+}
+
 test "Normal: repeated gggg resolves as two gg commands and leaves no pending state" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{ "top", "middle", "bottom" });
@@ -1007,6 +1037,23 @@ test "Option+Up: moves cursor col to end-of-line" {
     // Cursor stays on same row, col moves to end (5 for "world")
     try std.testing.expectEqual(@as(usize, 1), tab.mainCursor().row);
     try std.testing.expectEqual(@as(usize, 5), tab.mainCursor().col);
+}
+
+test "Insert: Option+Up clamps a stale cursor before inserting" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 99;
+    tab.mainCursor().col = 99;
+    ed.state.mode = .Insert;
+
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyOption(.Up), th.keyChar('!') });
+
+    try expectLine(a, &ed, 0, "hello!");
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
 }
 
 test "Option+Down: moves cursor col to start-of-line" {

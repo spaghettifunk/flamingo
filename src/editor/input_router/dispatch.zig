@@ -99,6 +99,7 @@ fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalComma
                 }
             }
         },
+        .jump_to_function_definition => try ed.requestDefinitionAtCursor(),
         .scroll_left_small => ed.applyHorizontalScrollCommand(.left_small),
         .scroll_right_small => ed.applyHorizontalScrollCommand(.right_small),
         .scroll_left_half => ed.applyHorizontalScrollCommand(.left_half),
@@ -754,6 +755,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 if (ed.currentTab()) |tab| {
                     const mc = tab.mainCursor();
+                    clampCursorToBuffer(tab, mc);
                     if (matches(event, keys.indent)) {
                         tab.buf.beginUndoGroup();
                         defer tab.buf.endUndoGroup();
@@ -980,10 +982,13 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
     const keys = ed.keys;
     const page_rows = @max(ed.editorVisibleRows(), 1);
+    if (tab.buf.lines.items.len == 0) return false;
 
     // Multi-cursor support: apply movement to all cursors
     var handled = false;
     for (tab.cursors.items) |*cursor| {
+        clampCursorToBuffer(tab, cursor);
+
         if (event.shift) {
             if (cursor.selection_start == null) {
                 cursor.selection_start = .{ .row = cursor.row, .col = cursor.col };
@@ -1047,9 +1052,31 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
             cursor.preferred_col = null;
             handled = true;
         }
+
+        if (handled) clampCursorToBuffer(tab, cursor);
     }
 
     ed.noteKeypressMovementHandled(handled);
     if (handled) ed.clampScroll();
     return handled;
+}
+
+fn clampCursorToBuffer(tab: *editor.Tab, cursor: *editor.Cursor) void {
+    if (tab.buf.lines.items.len == 0) {
+        cursor.row = 0;
+        cursor.col = 0;
+        cursor.preferred_col = null;
+        cursor.selection_start = null;
+        return;
+    }
+
+    cursor.row = @min(cursor.row, tab.buf.lines.items.len - 1);
+    cursor.col = @min(cursor.col, tab.buf.lines.items[cursor.row].len());
+    if (cursor.selection_start) |selection_start| {
+        const row = @min(selection_start.row, tab.buf.lines.items.len - 1);
+        cursor.selection_start = .{
+            .row = row,
+            .col = @min(selection_start.col, tab.buf.lines.items[row].len()),
+        };
+    }
 }

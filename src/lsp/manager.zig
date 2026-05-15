@@ -5,6 +5,22 @@ const event_queue = @import("../editor/runtime/event_queue.zig");
 const protocol = @import("protocol.zig");
 const logz = @import("logz");
 
+pub const DefinitionRequestResult = union(enum) {
+    requested: struct {
+        request_id: usize,
+        plugin_name: []const u8,
+    },
+    no_plugin,
+    no_client,
+    not_ready,
+};
+
+pub const DefinitionLocation = struct {
+    uri: []const u8,
+    row: usize,
+    col: usize,
+};
+
 pub const LspManager = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -105,6 +121,10 @@ pub const LspManager = struct {
         none,
         initialized,
         completion: std.json.Value,
+        definition: struct {
+            request_id: usize,
+            result: std.json.Value,
+        },
         diagnostics: std.json.Value,
     };
 
@@ -142,6 +162,20 @@ pub const LspManager = struct {
                                 const result_cloned = try cloneValue(self.allocator, result);
                                 return .{ .completion = result_cloned };
                             }
+                        },
+                        .definition => {
+                            if (root.get("result")) |result| {
+                                // Clone the result because 'parsed' will be deinited.
+                                const result_cloned = try cloneValue(self.allocator, result);
+                                return .{ .definition = .{
+                                    .request_id = id,
+                                    .result = result_cloned,
+                                } };
+                            }
+                            return .{ .definition = .{
+                                .request_id = id,
+                                .result = .null,
+                            } };
                         },
                     }
                 }
@@ -306,6 +340,37 @@ pub const LspManager = struct {
         try client.send(req);
     }
 
+    pub fn requestDefinition(self: *LspManager, filename: []const u8, row: usize, col: usize) !DefinitionRequestResult {
+        logz.info().fmt("msg", "Requesting definition for {s} at {d}:{d}", .{ filename, row, col }).log();
+        const ext = std.fs.path.extension(filename);
+        const p = self.plugin_mgr.getPluginForExtension(ext) orelse return .no_plugin;
+        const client = self.clients.get(p.name) orelse return .no_client;
+
+        if (client.state != .ready) return .not_ready;
+
+        const uri = try self.pathToUri(self.allocator, filename);
+        defer self.allocator.free(uri);
+
+        // Flamingo cursor columns are byte offsets today, matching the current
+        // completion path. LSP characters are UTF-16 code units; add conversion
+        // here when the editor grows a shared byte<->UTF-16 position helper.
+        const request_id = client.request_id;
+        const req = protocol.DefinitionRequest{
+            .id = request_id,
+            .params = .{
+                .textDocument = .{ .uri = uri },
+                .position = .{ .line = row, .character = col },
+            },
+        };
+        try client.pending_requests.put(request_id, .definition);
+        client.request_id += 1;
+        try client.send(req);
+        return .{ .requested = .{
+            .request_id = request_id,
+            .plugin_name = p.name,
+        } };
+    }
+
     pub fn pathToUri(self: *LspManager, allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         var abs_path: []const u8 = undefined;
         var owned_path: ?[]u8 = null;
@@ -329,3 +394,97 @@ pub const LspManager = struct {
         return try std.fmt.allocPrint(allocator, "file://{s}", .{abs_path});
     }
 };
+
+pub fn firstDefinitionLocation(result: std.json.Value) ?DefinitionLocation {
+    return switch (result) {
+        .null => null,
+        .object => |obj| definitionLocationFromObject(obj),
+        .array => |arr| blk: {
+            for (arr.items) |item| {
+                if (item != .object) continue;
+                if (definitionLocationFromObject(item.object)) |location| break :blk location;
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
+fn definitionLocationFromObject(obj: std.json.ObjectMap) ?DefinitionLocation {
+    if (obj.get("uri")) |uri_val| {
+        if (uri_val != .string) return null;
+        const range = obj.get("range") orelse return null;
+        const start = rangeStart(range) orelse return null;
+        return .{ .uri = uri_val.string, .row = start.line, .col = start.character };
+    }
+
+    if (obj.get("targetUri")) |uri_val| {
+        if (uri_val != .string) return null;
+        const range = obj.get("targetSelectionRange") orelse obj.get("targetRange") orelse return null;
+        const start = rangeStart(range) orelse return null;
+        return .{ .uri = uri_val.string, .row = start.line, .col = start.character };
+    }
+
+    return null;
+}
+
+fn rangeStart(value: std.json.Value) ?protocol.Position {
+    if (value != .object) return null;
+    const start = value.object.get("start") orelse return null;
+    if (start != .object) return null;
+    const line = jsonUsize(start.object.get("line") orelse return null) orelse return null;
+    const character = jsonUsize(start.object.get("character") orelse return null) orelse return null;
+    return .{ .line = line, .character = character };
+}
+
+fn jsonUsize(value: std.json.Value) ?usize {
+    return switch (value) {
+        .integer => |i| if (i >= 0) @intCast(i) else null,
+        else => null,
+    };
+}
+
+pub fn fileUriToPathAlloc(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
+    const file_prefix = "file://";
+    if (!std.mem.startsWith(u8, uri, file_prefix)) return error.UnsupportedUri;
+
+    const rest = uri[file_prefix.len..];
+    const path = if (std.mem.startsWith(u8, rest, "localhost/"))
+        rest["localhost".len..]
+    else if (std.mem.startsWith(u8, rest, "/"))
+        rest
+    else
+        return error.UnsupportedUriHost;
+
+    return percentDecodeAlloc(allocator, path);
+}
+
+fn percentDecodeAlloc(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '%') {
+            if (i + 2 >= input.len) return error.InvalidUriEscape;
+            const hi = hexValue(input[i + 1]) orelse return error.InvalidUriEscape;
+            const lo = hexValue(input[i + 2]) orelse return error.InvalidUriEscape;
+            try out.append(allocator, (hi << 4) | lo);
+            i += 3;
+        } else {
+            try out.append(allocator, input[i]);
+            i += 1;
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn hexValue(c: u8) ?u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => null,
+    };
+}

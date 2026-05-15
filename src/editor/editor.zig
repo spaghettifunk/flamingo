@@ -13,6 +13,7 @@ const lsp_manager = @import("../lsp/manager.zig");
 const logger = @import("../logger.zig");
 const tab_mod = @import("model/tab.zig");
 const state_mod = @import("state/state.zig");
+const jump_history = @import("state/jump_history.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const keybindings = @import("input_router/keybindings.zig");
@@ -241,6 +242,9 @@ pub const Editor = struct {
     keypress_profiler: perf.KeypressProfiler,
     active_keypress_trace: ?*perf.KeypressTrace = null,
     pending_key: ?terminal.KeyEvent = null,
+    pending_definition_request_id: ?usize = null,
+    pending_definition_plugin_name: ?[]const u8 = null,
+    pending_definition_source: ?jump_history.JumpLocation = null,
     last_input_movement_handled: bool = false,
     width: usize = 0,
     height: usize = 0,
@@ -307,6 +311,62 @@ pub const Editor = struct {
                     logz.err().fmt("msg", "Failed to notify open: {any}", .{err}).log();
                 };
             };
+        }
+    }
+
+    pub fn requestDefinitionAtCursor(self: *Editor) !void {
+        const tab = self.currentTab() orelse {
+            self.state.error_message = "No active file for definition lookup";
+            self.pending_definition_request_id = null;
+            self.pending_definition_plugin_name = null;
+            self.pending_definition_source = null;
+            return;
+        };
+        const filename = tab.buf.filename orelse {
+            self.state.error_message = "No active file for definition lookup";
+            self.pending_definition_request_id = null;
+            self.pending_definition_plugin_name = null;
+            self.pending_definition_source = null;
+            return;
+        };
+        const mc = tab.mainCursor();
+        const source = jump_history.JumpLocation{
+            .buffer_id = tab.syntax_buffer_id,
+            .row = mc.row,
+            .col = mc.col,
+        };
+
+        if (self.runtime.lsp_mgr) |*mgr| {
+            self.flushPendingLspChanges(true) catch |err| {
+                logz.err().fmt("msg", "Failed to flush LSP changes before definition request: {any}", .{err}).log();
+            };
+
+            const result = mgr.requestDefinition(filename, mc.row, mc.col) catch |err| {
+                logz.err().fmt("msg", "Failed to request definition: {any}", .{err}).log();
+                self.state.error_message = "LSP definition unavailable";
+                self.pending_definition_request_id = null;
+                self.pending_definition_source = null;
+                return;
+            };
+
+            switch (result) {
+                .requested => |requested| {
+                    self.pending_definition_request_id = requested.request_id;
+                    self.pending_definition_plugin_name = requested.plugin_name;
+                    self.pending_definition_source = source;
+                },
+                .no_plugin, .no_client, .not_ready => {
+                    self.state.error_message = "LSP definition unavailable";
+                    self.pending_definition_request_id = null;
+                    self.pending_definition_plugin_name = null;
+                    self.pending_definition_source = null;
+                },
+            }
+        } else {
+            self.state.error_message = "LSP definition unavailable";
+            self.pending_definition_request_id = null;
+            self.pending_definition_plugin_name = null;
+            self.pending_definition_source = null;
         }
     }
 
@@ -848,6 +908,10 @@ pub const Editor = struct {
                     self.state.lsp_ui.replaceCompletion(items);
                     self.markDirty(.partial);
                 },
+                .definition => |definition| {
+                    defer mgr.freeValue(definition.result);
+                    try self.handleDefinitionResult(plugin_name, definition.request_id, definition.result);
+                },
                 .diagnostics => |diag_val| {
                     var diagnostics_stored = false;
                     errdefer if (!diagnostics_stored) mgr.freeValue(diag_val);
@@ -861,6 +925,116 @@ pub const Editor = struct {
                 .none => {},
             }
         }
+    }
+
+    fn handleDefinitionResult(self: *Editor, plugin_name: []const u8, request_id: usize, result: std.json.Value) !void {
+        const pending_id = self.pending_definition_request_id orelse return;
+        const pending_plugin_name = self.pending_definition_plugin_name orelse return;
+        if (pending_id != request_id) return;
+        if (!std.mem.eql(u8, pending_plugin_name, plugin_name)) return;
+
+        const source = self.pending_definition_source;
+        self.pending_definition_request_id = null;
+        self.pending_definition_plugin_name = null;
+        self.pending_definition_source = null;
+
+        const location = lsp_manager.firstDefinitionLocation(result) orelse {
+            self.state.error_message = "No definition found";
+            self.markDirty(.partial);
+            return;
+        };
+
+        const path = lsp_manager.fileUriToPathAlloc(self.allocator, location.uri) catch |err| {
+            logz.err().fmt("msg", "failed to convert definition URI {s}: {any}", .{ location.uri, err }).log();
+            self.state.error_message = "Could not open definition target";
+            self.markDirty(.partial);
+            return;
+        };
+        defer self.allocator.free(path);
+
+        _ = self.jumpToFileLocation(path, location.row, location.col, source) catch |err| {
+            logz.err().fmt("msg", "failed to jump to definition target {s}: {any}", .{ path, err }).log();
+            self.state.error_message = "Could not open definition target";
+            self.markDirty(.partial);
+            return;
+        };
+        self.state.error_message = null;
+        self.markDirty(.full);
+    }
+
+    fn jumpToFileLocation(
+        self: *Editor,
+        path: []const u8,
+        row: usize,
+        col: usize,
+        source: ?jump_history.JumpLocation,
+    ) !bool {
+        if (self.findOpenTabIndexByPath(path)) |idx| {
+            self.state.active_tab_index = idx;
+        } else {
+            var loaded = try buffer.Buffer.loadFromFile(self.allocator, self.io, path);
+            var consumed = false;
+            errdefer if (!consumed) loaded.deinit();
+            try self.addTab(loaded);
+            consumed = true;
+        }
+
+        const tab = self.currentTab() orelse return false;
+        const target = self.clampedLocationForTab(tab, row, col);
+        if (source) |from| {
+            if (!from.eql(target)) try self.state.jump_history.recordJump(self.allocator, from);
+        }
+
+        const mc = tab.mainCursor();
+        const changed = mc.row != target.row or mc.col != target.col;
+        mc.row = target.row;
+        mc.col = target.col;
+        mc.preferred_col = null;
+        self.clampScroll();
+        return changed;
+    }
+
+    fn findOpenTabIndexByPath(self: *Editor, path: []const u8) ?usize {
+        for (self.state.tabs.items, 0..) |*tab, i| {
+            if (tab.buf.filename) |filename| {
+                if (std.mem.eql(u8, filename, path)) return i;
+            }
+        }
+
+        const target_real = self.realPathOrNull(path) orelse return null;
+        defer self.allocator.free(target_real);
+
+        for (self.state.tabs.items, 0..) |*tab, i| {
+            const filename = tab.buf.filename orelse continue;
+            const filename_real = self.realPathOrNull(filename) orelse continue;
+            defer self.allocator.free(filename_real);
+            if (std.mem.eql(u8, filename_real, target_real)) return i;
+        }
+        return null;
+    }
+
+    fn realPathOrNull(self: *Editor, path: []const u8) ?[]u8 {
+        const z = std.Io.Dir.cwd().realPathFileAlloc(self.io, path, self.allocator) catch return null;
+        defer self.allocator.free(z);
+        return self.allocator.dupe(u8, z) catch null;
+    }
+
+    fn clampedLocationForTab(self: *Editor, tab: *const Tab, row: usize, col: usize) jump_history.JumpLocation {
+        var clamped_row = row;
+        var clamped_col = col;
+        if (tab.buf.lines.items.len == 0) {
+            clamped_row = 0;
+            clamped_col = 0;
+        } else {
+            clamped_row = @min(clamped_row, tab.buf.lines.items.len - 1);
+            clamped_col = @min(clamped_col, tab.buf.lines.items[clamped_row].len());
+        }
+        _ = self;
+        return .{
+            .buffer_id = tab.syntax_buffer_id,
+            .row = clamped_row,
+            .col = clamped_col,
+        };
     }
 
     pub fn noteKeypressMovementHandled(self: *Editor, handled: bool) void {
@@ -3323,6 +3497,27 @@ test "completion trigger is limited to buffer editing modes" {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());
     }
+}
+
+test "insert mode alt-up then character stays in bounds" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.state.mode = .Normal;
+    ed.state.render_dirty = true;
+    ed.state.force_full_render = true;
+
+    var reader = std.Io.Reader.fixed("i\x1b[1;3Ax\x11");
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+
+    try ed.runWithIO(&reader, &out.writer);
+
+    const tab = ed.currentTab().?;
+    const line = try tab.buf.lines.items[0].slice(std.testing.allocator);
+    defer std.testing.allocator.free(line);
+    try std.testing.expectEqualStrings("alphax", line);
+    try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
 }
 
 fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {

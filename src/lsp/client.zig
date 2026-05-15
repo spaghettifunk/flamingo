@@ -12,6 +12,7 @@ pub const ClientState = enum {
 pub const RequestType = enum {
     initialize,
     completion,
+    definition,
 };
 
 pub const LspClient = struct {

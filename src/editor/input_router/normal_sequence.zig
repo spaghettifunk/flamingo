@@ -7,6 +7,7 @@ pub const NormalCommand = enum {
     jump_top,
     jump_bottom,
     jump_matching_bracket,
+    jump_to_function_definition,
     scroll_left_small,
     scroll_right_small,
     scroll_left_half,
@@ -92,6 +93,10 @@ const normal_key_bindings = [_]NormalKeyBinding{
         .command = .jump_matching_bracket,
     },
     .{
+        .sequence = KeySequence.fromKeys(&.{charKey('f')}),
+        .command = .jump_to_function_definition,
+    },
+    .{
         .sequence = KeySequence.fromKeys(&.{ charKey('z'), charKey('h') }),
         .command = .scroll_left_small,
     },
@@ -161,4 +166,13 @@ test "normal z horizontal scroll sequences resolve" {
         };
         try std.testing.expectEqual(case.command, command);
     }
+}
+
+test "normal f resolves to jump to function definition" {
+    const result = resolve(KeySequence.fromKeys(&.{charKey('f')}));
+    const command = switch (result) {
+        .command => |command| command,
+        else => return error.ExpectedCommand,
+    };
+    try std.testing.expectEqual(NormalCommand.jump_to_function_definition, command);
 }

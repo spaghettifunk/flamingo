@@ -82,6 +82,20 @@ pub const Position = struct {
     character: usize,
 };
 
+pub const DefinitionParams = struct {
+    textDocument: struct {
+        uri: []const u8,
+    },
+    position: Position,
+};
+
+pub const DefinitionRequest = struct {
+    jsonrpc: []const u8 = "2.0",
+    id: usize,
+    method: []const u8 = "textDocument/definition",
+    params: DefinitionParams,
+};
+
 pub const Range = struct {
     start: Position,
     end: Position,
