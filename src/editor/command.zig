@@ -5,6 +5,7 @@ const fs_ops = @import("filesystem_ops.zig");
 
 pub const Command = enum {
     quit,
+    quit_all,
     force_quit,
     write,
     write_quit,
@@ -16,6 +17,7 @@ pub const Command = enum {
     pub fn name(self: Command) []const u8 {
         return switch (self) {
             .quit => "q",
+            .quit_all => "qall",
             .force_quit => "q!",
             .write => "w",
             .write_quit => "wq",
@@ -28,6 +30,7 @@ pub const Command = enum {
 
     pub fn alias(self: Command) ?[]const u8 {
         return switch (self) {
+            .quit_all => "qa",
             .rename_file => "rf",
             .delete_file => "df",
             .new_file => "nf",
@@ -48,6 +51,7 @@ pub const Command = enum {
 
 pub const all = [_]Command{
     .quit,
+    .quit_all,
     .force_quit,
     .write,
     .write_quit,
@@ -140,6 +144,10 @@ pub fn execute(ed: *editor.Editor) !void {
                 }
             }
             ed.closeTab();
+        },
+        .quit_all => {
+            ed.state.quitting_all = true;
+            ed.processQuitAll();
         },
         .force_quit => {
             ed.closeTab();
@@ -250,6 +258,8 @@ pub fn execute(ed: *editor.Editor) !void {
 
 test "Command registry parses command names" {
     try std.testing.expectEqual(Command.quit, Command.fromString("q").?);
+    try std.testing.expectEqual(Command.quit_all, Command.fromString("qall").?);
+    try std.testing.expectEqual(Command.quit_all, Command.fromString("qa").?);
     try std.testing.expectEqual(Command.force_quit, Command.fromString("q!").?);
     try std.testing.expectEqual(Command.write, Command.fromString("w").?);
     try std.testing.expectEqual(Command.write_quit, Command.fromString("wq").?);

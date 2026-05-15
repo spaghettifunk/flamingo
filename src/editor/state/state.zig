@@ -56,6 +56,7 @@ pub const EditorState = struct {
     next_syntax_buffer_id: u64 = 1,
     pending_normal_sequence: normal_sequence.KeySequence = .{},
     jump_history: jump_history_mod.JumpHistory = .{},
+    quitting_all: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) EditorState {
         return .{

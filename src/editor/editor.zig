@@ -389,6 +389,23 @@ pub const Editor = struct {
         self.markDirty(.full);
     }
 
+    pub fn processQuitAll(self: *Editor) void {
+        // Iterate over tabs to find the first dirty one
+        for (self.state.tabs.items, 0..) |*tab, i| {
+            if (tab.buf.is_dirty) {
+                self.state.active_tab_index = i;
+                self.state.save_confirmation.open(tab.buf.filename);
+                self.state.mode = .SaveConfirmation;
+                self.markDirty(.full);
+                return;
+            }
+        }
+        
+        // No dirty tabs found, close all remaining tabs and go to dashboard
+        self.closeAllTabs();
+        self.state.quitting_all = false;
+    }
+
     pub fn markDirty(self: *Editor, invalidation: render_mod.RenderInvalidation) void {
         self.state.render_dirty = true;
         if (invalidation == .full) {

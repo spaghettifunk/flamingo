@@ -1024,6 +1024,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
                 ed.state.save_confirmation.close();
                 ed.closeTab();
+                if (ed.state.quitting_all) {
+                    ed.processQuitAll();
+                }
             } else if ((event.key == .Char and !event.ctrl and !event.alt and
                 (event.char == 'd' or event.char == 'D')) or
                 matches(event, keys.prompt_submit))
@@ -1033,12 +1036,16 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 // Mark buffer clean so closeTab does not attempt a guard check
                 if (ed.currentTab()) |tab| tab.buf.is_dirty = false;
                 ed.closeTab();
+                if (ed.state.quitting_all) {
+                    ed.processQuitAll();
+                }
             } else if (matches(event, keys.normal_mode) or
                 (event.key == .Char and !event.ctrl and !event.alt and
                 (event.char == 'n' or event.char == 'N')))
             {
                 // Cancel — return to Normal mode without closing
                 ed.state.save_confirmation.close();
+                ed.state.quitting_all = false;
                 ed.state.mode = .Normal;
                 ed.markDirty(.full);
             }
