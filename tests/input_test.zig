@@ -1083,7 +1083,7 @@ test "Horizontal movement resets preferred column" {
     try std.testing.expectEqual(@as(?usize, null), tab.mainCursor().preferred_col);
 }
 
-test "Option+[ cycles to next tab" {
+test "Option+] cycles to next tab" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
@@ -1094,12 +1094,11 @@ test "Option+[ cycles to next tab" {
     try ed.addTab(b1);
     ed.state.active_tab_index = 0;
 
-    // Option+[ is represented as alt=true, key=Char, char='['
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('[')});
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar(']')});
     try std.testing.expectEqual(@as(usize, 1), ed.state.active_tab_index);
 }
 
-test "Option+] cycles to previous tab" {
+test "Option+[ cycles to previous tab" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
@@ -1110,7 +1109,8 @@ test "Option+] cycles to previous tab" {
     try ed.addTab(b1);
     ed.state.active_tab_index = 1;
 
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar(']')});
+    // Option+[ is represented as alt=true, key=Char, char='['.
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('[')});
     try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
 }
 

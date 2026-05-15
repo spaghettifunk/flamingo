@@ -38,10 +38,15 @@ pub const RenderStyle = enum {
     command_popup_title,
     command_popup_prompt,
     command_popup_selected,
+    completion_detail,
     global_search_file,
     global_search_file_selected,
     global_search_result,
     global_search_result_selected,
+    dashboard_logo,
+    dashboard_selected,
+    popup_footer,
+    popup_error,
     explorer_bg,
     explorer_header,
     explorer_folder,
@@ -128,10 +133,15 @@ pub const RenderStyle = enum {
             .command_popup_title => "\x1b[48;5;235m\x1b[38;5;250m",
             .command_popup_prompt => "\x1b[48;5;235m\x1b[38;5;250m",
             .command_popup_selected => "\x1b[48;5;238m\x1b[38;5;255m",
+            .completion_detail => "\x1b[48;5;238m\x1b[38;5;252m",
             .global_search_file => "\x1b[48;5;235m\x1b[38;5;220m",
             .global_search_file_selected => "\x1b[48;5;238m\x1b[38;5;220m",
             .global_search_result => "\x1b[48;5;235m\x1b[38;5;121m",
             .global_search_result_selected => "\x1b[48;5;238m\x1b[38;5;121m",
+            .dashboard_logo => "\x1b[38;5;204m",
+            .dashboard_selected => "\x1b[7m",
+            .popup_footer => "\x1b[48;5;235m\x1b[38;5;245m",
+            .popup_error => "\x1b[48;5;235m\x1b[38;5;203m",
             .explorer_bg => "\x1b[48;2;30;32;48m\x1b[38;2;148;156;184m",
             .explorer_header => "\x1b[48;2;30;32;48m\x1b[38;2;116;158;231m\x1b[1m",
             .explorer_folder => "\x1b[48;2;30;32;48m\x1b[38;2;116;158;231m\x1b[1m",
@@ -224,6 +234,9 @@ pub const VirtualScreen = struct {
     width: usize = 0,
     height: usize = 0,
     cells: std.ArrayList(RenderCell) = .empty,
+    cursor_row: usize = 1,
+    cursor_col: usize = 1,
+    cursor_visible: bool = true,
 
     pub fn init(allocator: std.mem.Allocator) VirtualScreen {
         return .{ .allocator = allocator };
@@ -247,6 +260,16 @@ pub const VirtualScreen = struct {
 
     pub fn clear(self: *VirtualScreen) void {
         @memset(self.cells.items, RenderCell{});
+    }
+
+    pub fn hideCursor(self: *VirtualScreen) void {
+        self.cursor_visible = false;
+    }
+
+    pub fn setCursor(self: *VirtualScreen, row: usize, col: usize) void {
+        self.cursor_row = if (self.height == 0) 1 else @min(@max(row, 1), self.height);
+        self.cursor_col = if (self.width == 0) 1 else @min(@max(col, 1), self.width);
+        self.cursor_visible = true;
     }
 
     pub fn index(self: *const VirtualScreen, row: usize, col: usize) usize {
@@ -286,6 +309,13 @@ pub const VirtualScreen = struct {
         if (row >= self.height) return;
         for (0..self.width) |col| {
             self.set(row, col, ch, style);
+        }
+    }
+
+    pub fn fillRowGlyph(self: *VirtualScreen, row: usize, glyph: []const u8, style: RenderStyle) void {
+        if (row >= self.height) return;
+        for (0..self.width) |col| {
+            self.setGlyph(row, col, glyph, style);
         }
     }
 };
@@ -347,6 +377,7 @@ pub const VirtualScreenRenderer = struct {
         }
 
         var active_style: RenderStyle = .normal;
+        var wrote_cells = false;
         for (0..current.height) |row| {
             var col: usize = 0;
             while (col < current.width) {
@@ -368,13 +399,22 @@ pub const VirtualScreenRenderer = struct {
                     if (!full and run_cell.eql(run_prev)) break;
 
                     if (run_cell.style != active_style) {
-                        const ansi = run_cell.style.ansi();
-                        try writer.writeAll(ansi);
-                        bytes += ansi.len;
-                        active_style = run_cell.style;
+                        if (active_style != .normal) {
+                            const reset = RenderStyle.normal.ansi();
+                            try writer.writeAll(reset);
+                            bytes += reset.len;
+                            active_style = .normal;
+                        }
+                        if (run_cell.style != .normal) {
+                            const ansi = run_cell.style.ansi();
+                            try writer.writeAll(ansi);
+                            bytes += ansi.len;
+                            active_style = run_cell.style;
+                        }
                     }
                     try writer.writeAll(run_cell.glyphBytes());
                     bytes += run_cell.len;
+                    wrote_cells = true;
                     self.previous.cells.items[run_idx] = run_cell;
                 }
             }
@@ -385,6 +425,26 @@ pub const VirtualScreenRenderer = struct {
             try writer.writeAll(reset);
             bytes += reset.len;
         }
+
+        const cursor_changed = self.previous.cursor_row != current.cursor_row or
+            self.previous.cursor_col != current.cursor_col or
+            self.previous.cursor_visible != current.cursor_visible;
+        if (current.cursor_visible) {
+            if (full or cursor_changed or wrote_cells) {
+                try terminal.moveCursor(writer, current.cursor_row, current.cursor_col);
+                bytes += cursorMoveBytes(current.cursor_row, current.cursor_col);
+            }
+            if (full or !self.previous.cursor_visible) {
+                try terminal.showCursor(writer);
+                bytes += "\x1b[?25h".len;
+            }
+        } else if (full or self.previous.cursor_visible) {
+            try terminal.hideCursor(writer);
+            bytes += "\x1b[?25l".len;
+        }
+        self.previous.cursor_row = current.cursor_row;
+        self.previous.cursor_col = current.cursor_col;
+        self.previous.cursor_visible = current.cursor_visible;
 
         self.invalidation = .none;
         return bytes;
@@ -494,6 +554,46 @@ test "virtual screen diff emits changed utf8 glyph without corrupting bytes" {
     _ = try renderer.emit(&aw.writer, &current);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "") != null);
     try std.testing.expect(std.mem.indexOf(u8, aw.written(), "") == null);
+}
+
+test "virtual screen resets style attributes between styled runs" {
+    const allocator = std.testing.allocator;
+    var current = VirtualScreen.init(allocator);
+    defer current.deinit();
+    _ = try current.resize(2, 1);
+    current.set(0, 0, '-', .dim);
+    current.set(0, 1, '>', .gutter_current);
+
+    var renderer = VirtualScreenRenderer.init(allocator);
+    defer renderer.deinit();
+
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(allocator);
+    var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    defer aw.deinit();
+
+    _ = try renderer.emit(&aw.writer, &current);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[2;37m-\x1b[0m\x1b[33;1m>") != null);
+}
+
+test "virtual screen can hide final cursor" {
+    const allocator = std.testing.allocator;
+    var current = VirtualScreen.init(allocator);
+    defer current.deinit();
+    _ = try current.resize(1, 1);
+    current.hideCursor();
+
+    var renderer = VirtualScreenRenderer.init(allocator);
+    defer renderer.deinit();
+
+    var out = std.ArrayListUnmanaged(u8).empty;
+    defer out.deinit(allocator);
+    var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    defer aw.deinit();
+
+    _ = try renderer.emit(&aw.writer, &current);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?25l") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "\x1b[?25h") == null);
 }
 
 test "virtual screen resize forces full redraw" {

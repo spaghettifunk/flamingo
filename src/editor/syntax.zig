@@ -39,21 +39,6 @@ pub const Style = enum {
     operator,
     punctuation,
 
-    pub fn ansi(self: Style) []const u8 {
-        return switch (self) {
-            .keyword => "\x1b[38;5;177m",
-            .string => "\x1b[38;5;150m",
-            .comment => "\x1b[38;5;244m",
-            .number => "\x1b[38;5;216m",
-            .constant => "\x1b[38;5;203m",
-            .type => "\x1b[38;5;116m",
-            .function => "\x1b[38;5;111m",
-            .property => "\x1b[38;5;180m",
-            .operator => "\x1b[38;5;250m",
-            .punctuation => "\x1b[38;5;245m",
-        };
-    }
-
     fn priority(self: Style) u8 {
         return switch (self) {
             .comment => 100,

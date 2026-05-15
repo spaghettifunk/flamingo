@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const logz = @import("logz");
-const terminal = @import("../terminal.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
 const git_status = @import("git_status.zig");
 
@@ -376,48 +375,36 @@ pub const Explorer = struct {
         return null;
     }
 
-    pub fn render(self: *Explorer, writer: anytype, width: usize, height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) !void {
-        try self.renderAt(writer, width, height, 1, is_focused, snapshot);
+    pub fn render(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) void {
+        self.renderAt(screen, width, height, 0, 0, is_focused, snapshot);
     }
 
-    pub fn renderAt(self: *Explorer, writer: anytype, width: usize, height: usize, start_row: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) !void {
+    pub fn renderAt(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, height: usize, start_row: usize, start_col: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) void {
         if (width == 0 or height == 0) return;
 
-        var clear_row = start_row;
-        const clear_end = start_row + height - 1;
-        while (clear_row < clear_end) : (clear_row += 1) {
-            try terminal.moveCursor(writer, clear_row, 1);
-            try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
-            for (0..width) |_| try writer.writeAll(" ");
+        for (start_row..start_row + height) |row| {
+            fillCells(screen, row, start_col, width, ' ', .explorer_bg);
         }
 
-        try terminal.moveCursor(writer, start_row, 1);
-        try writer.writeAll(render_mod.RenderStyle.explorer_header.ansi());
+        fillCells(screen, start_row, start_col, width, ' ', .explorer_header);
         const root_label = compactRootLabel(self.root_path);
-        try writeClipped(writer, " ", width);
-        const used_icon = @min(render_mod.displayCellCount(" "), width);
-        if (width > used_icon) try writeClipped(writer, root_label, width - used_icon);
-        const title_cells = used_icon + @min(render_mod.displayCellCount(root_label), width -| used_icon);
-        for (0..width -| title_cells) |_| try writer.writeAll(" ");
-        try writer.writeAll("\x1b[0m"); // Reset
+        var title_col = start_col;
+        title_col += writeClippedToScreen(screen, start_row, title_col, start_col + width, " ", .explorer_header);
+        _ = writeClippedToScreen(screen, start_row, title_col, start_col + width, root_label, .explorer_header);
 
         var content_start_row = start_row + 1;
         var view_height = height -| 2;
         if (self.search_active) {
-            try terminal.moveCursor(writer, content_start_row, 1);
-            try writer.writeAll("\x1b[48;5;238m\x1b[38;5;228m");
-            var written: usize = 1 + self.search_query.items.len;
-            try writer.print("/{s}", .{self.search_query.items});
+            fillCells(screen, content_start_row, start_col, width, ' ', .explorer_selected);
+            var search_col = start_col;
+            var search_buf: [256]u8 = undefined;
+            const search_text = std.fmt.bufPrint(&search_buf, "/{s}", .{self.search_query.items}) catch "/";
+            search_col += writeClippedToScreen(screen, content_start_row, search_col, start_col + width, search_text, .explorer_selected);
             if (self.search_query.items.len > 0) {
                 var buf: [64]u8 = undefined;
-                const match_info = try std.fmt.bufPrint(&buf, " ({d} matches)", .{self.search_results.items.len});
-                try writer.writeAll(match_info);
-                written += match_info.len;
+                const match_info = std.fmt.bufPrint(&buf, " ({d} matches)", .{self.search_results.items.len}) catch "";
+                _ = writeClippedToScreen(screen, content_start_row, search_col, start_col + width, match_info, .explorer_selected);
             }
-            if (width > written) {
-                for (0..width - written) |_| try writer.writeAll(" ");
-            }
-            try writer.writeAll("\x1b[0m");
             content_start_row += 1;
             view_height -|= 1;
         }
@@ -426,7 +413,7 @@ pub const Explorer = struct {
 
         if (self.search_active) {
             self.adjustSearchScroll(view_height);
-            try self.renderSearchResults(writer, width, content_start_row, view_height, is_focused, snapshot);
+            self.renderSearchResults(screen, width, content_start_row, start_col, view_height, is_focused, snapshot);
             return;
         }
 
@@ -435,93 +422,58 @@ pub const Explorer = struct {
         var i = self.scroll_offset;
         while (i < self.nodes.items.len and row < content_start_row + view_height) : (i += 1) {
             const node = self.nodes.items[i];
-            try terminal.moveCursor(writer, row, 1);
 
             const selected = is_focused and i == self.selected_index;
-            if (is_focused and i == self.selected_index) {
-                try writer.writeAll(render_mod.RenderStyle.explorer_selected_focus.ansi());
-            } else {
-                try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
-            }
+            fillCells(screen, row, start_col, width, ' ', rowBgStyle(selected));
 
-            for (0..node.depth) |_| {
-                try writer.writeAll("  ");
-            }
+            var col = start_col + @min(node.depth * 2, width);
 
             const icon = iconForNode(node.is_dir, node.is_expanded, node.name);
             const node_status = snapshotStatus(snapshot, node.absolute_path);
             const style = styleForNode(node.is_dir, node.name, selected, node_status);
-            try writer.writeAll(style.ansi());
-            try writeClipped(writer, icon, width);
-            try writer.writeAll(" ");
+            col += writeClippedToScreen(screen, row, col, start_col + width, icon, style);
+            col += writeClippedToScreen(screen, row, col, start_col + width, " ", rowBgStyle(selected));
 
             const indent_len = node.depth * 2 + render_mod.displayCellCount(icon) + 1;
             const max_name_len = width -| indent_len;
-            try writeClipped(writer, node.name, max_name_len);
+            col += writeClippedToScreen(screen, row, col, start_col + width, clippedByCells(node.name, max_name_len), style);
 
             const current_len = indent_len + @min(render_mod.displayCellCount(node.name), max_name_len);
             if (current_len + 2 < width) {
                 const marker = gitMarker(node_status);
                 if (marker.len > 0) {
                     const pad = width - current_len - 2;
-                    try writer.writeAll(rowBgStyle(selected).ansi());
-                    for (0..pad) |_| try writer.writeAll(" ");
-                    try writer.writeAll(markerStyle(node_status).ansi());
-                    try writer.writeAll(marker);
-                    try writer.writeAll(rowBgStyle(selected).ansi());
-                    try writer.writeAll(" ");
-                } else {
-                    try writer.writeAll(rowBgStyle(selected).ansi());
-                    for (0..width - current_len) |_| try writer.writeAll(" ");
+                    _ = writeClippedToScreen(screen, row, start_col + current_len + pad, start_col + width, marker, markerStyle(node_status));
                 }
             }
-
-            try writer.writeAll("\x1b[0m");
 
             row += 1;
         }
 
         if (self.hidden_count > 0 and row < content_start_row + view_height) {
-            try terminal.moveCursor(writer, row, 1);
-            try writer.writeAll(render_mod.RenderStyle.explorer_dim.ansi());
             var buf: [48]u8 = undefined;
-            const text = try std.fmt.bufPrint(&buf, "({d} hidden items)", .{self.hidden_count});
-            try writeClipped(writer, text, width);
-            const cells = @min(render_mod.displayCellCount(text), width);
-            for (0..width -| cells) |_| try writer.writeAll(" ");
-            try writer.writeAll("\x1b[0m");
+            const text = std.fmt.bufPrint(&buf, "({d} hidden items)", .{self.hidden_count}) catch "";
+            fillCells(screen, row, start_col, width, ' ', .explorer_bg);
+            _ = writeClippedToScreen(screen, row, start_col, start_col + width, text, .explorer_dim);
             row += 1;
-        }
-
-        while (row < content_start_row + view_height) : (row += 1) {
-            try terminal.moveCursor(writer, row, 1);
-            try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
-            for (0..width) |_| try writer.writeAll(" ");
-            try writer.writeAll("\x1b[0m");
         }
     }
 
-    fn renderSearchResults(self: *Explorer, writer: anytype, width: usize, start_row: usize, view_height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) !void {
+    fn renderSearchResults(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, start_row: usize, start_col: usize, view_height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) void {
         var row: usize = start_row;
         var i = self.search_scroll_offset;
         while (i < self.search_results.items.len and row < start_row + view_height) : (i += 1) {
             const result = self.search_results.items[i];
-            try terminal.moveCursor(writer, row, 1);
 
             const selected = is_focused and i == self.search_selected_index;
-            if (is_focused and i == self.search_selected_index) {
-                try writer.writeAll(render_mod.RenderStyle.explorer_selected_focus.ansi());
-            } else {
-                try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
-            }
+            fillCells(screen, row, start_col, width, ' ', rowBgStyle(selected));
 
-            for (0..result.depth) |_| try writer.writeAll("  ");
+            var col = start_col + @min(result.depth * 2, width);
 
             const icon = iconForNode(result.is_dir, false, result.name);
             const style = styleForNode(result.is_dir, result.name, selected, snapshotStatus(snapshot, result.absolute_path));
-            try writer.writeAll(style.ansi());
-            try writeClipped(writer, icon, width);
-            try writer.writeAll(" ");
+            col += writeClippedToScreen(screen, row, col, start_col + width, icon, style);
+            col += writeClippedToScreen(screen, row, col, start_col + width, " ", rowBgStyle(selected));
 
             const context = relativeParentPath(self.root_path, result.absolute_path);
             const indent_len = result.depth * 2 + render_mod.displayCellCount(icon) + 1;
@@ -531,35 +483,13 @@ pub const Explorer = struct {
             const reserve_context = if (max_line_len > context_len + 4) context_len else 0;
             const max_name_len = max_line_len -| reserve_context;
 
-            const written_name_len = @min(result.name.len, max_name_len);
-            if (result.name.len > max_name_len) {
-                try writer.writeAll(result.name[0..max_name_len]);
-            } else {
-                try writer.writeAll(result.name);
-            }
+            col += writeClippedToScreen(screen, row, col, start_col + width, clippedByCells(result.name, max_name_len), style);
 
-            var current_len = indent_len + written_name_len;
             if (reserve_context > 0) {
-                try writer.writeAll(rowBgStyle(selected).ansi());
-                try writer.writeAll("\x1b[38;5;245m");
-                try writer.writeAll(context_prefix);
-                try writer.writeAll(context);
-                current_len += context_len;
+                col += writeClippedToScreen(screen, row, col, start_col + width, context_prefix, .explorer_dim);
+                _ = writeClippedToScreen(screen, row, col, start_col + width, context, .explorer_dim);
             }
-
-            if (current_len < width) {
-                try writer.writeAll(rowBgStyle(selected).ansi());
-                for (0..width - current_len) |_| try writer.writeAll(" ");
-            }
-            try writer.writeAll("\x1b[0m");
             row += 1;
-        }
-
-        while (row < start_row + view_height) : (row += 1) {
-            try terminal.moveCursor(writer, row, 1);
-            try writer.writeAll(render_mod.RenderStyle.explorer_bg.ansi());
-            for (0..width) |_| try writer.writeAll(" ");
-            try writer.writeAll("\x1b[0m");
         }
     }
 
@@ -699,14 +629,27 @@ fn compactRootLabel(root_path: []const u8) []const u8 {
     return root_path;
 }
 
-fn writeClipped(writer: anytype, text: []const u8, max_cells: usize) !void {
+fn clippedByCells(text: []const u8, max_cells: usize) []const u8 {
     var cells: usize = 0;
     var i: usize = 0;
     while (i < text.len and cells < max_cells) : (cells += 1) {
         const len = @min(render_mod.utf8CellLen(text[i]), text.len - i);
-        try writer.writeAll(text[i .. i + len]);
         i += len;
     }
+    return text[0..i];
+}
+
+fn fillCells(screen: *render_mod.VirtualScreen, row: usize, start_col: usize, width: usize, ch: u8, style: render_mod.RenderStyle) void {
+    for (0..width) |offset| {
+        screen.set(row, start_col + offset, ch, style);
+    }
+}
+
+fn writeClippedToScreen(screen: *render_mod.VirtualScreen, row: usize, col: usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle) usize {
+    if (col >= end_col) return 0;
+    const clipped = clippedByCells(text, end_col - col);
+    screen.writeText(row, col, clipped, style);
+    return render_mod.displayCellCount(clipped);
 }
 
 fn relativeParentPath(root_path: []const u8, absolute_path: []const u8) []const u8 {
@@ -757,12 +700,18 @@ test "explorer render uses nerd icons hidden count and git markers" {
     snapshot.root_path = try allocator.dupe(u8, root);
     try snapshot.put("src/main.zig", .modified);
 
+    var screen = render_mod.VirtualScreen.init(allocator);
+    defer screen.deinit();
+    _ = try screen.resize(40, 12);
+    exp.renderAt(&screen, 40, 12, 0, 0, true, &snapshot);
+
+    var renderer = render_mod.VirtualScreenRenderer.init(allocator);
+    defer renderer.deinit();
     var out = std.ArrayListUnmanaged(u8).empty;
     defer out.deinit(allocator);
     var aw = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
     defer aw.deinit();
-
-    try exp.renderAt(&aw.writer, 40, 12, 1, true, &snapshot);
+    _ = try renderer.emit(&aw.writer, &screen);
     const rendered = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, rendered, " ") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "") != null);

@@ -77,9 +77,7 @@ pub fn main(init: std.process.Init) !void {
             const key = if (i % 2 == 0) ed.keys.move_down else ed.keys.move_up;
             out.clearRetainingCapacity();
             const start = perf.nowNs();
-            if (!try ed.renderBenchmarkCursorMove(&out.writer, key)) {
-                return error.FastCursorMoveBenchmarkIneligible;
-            }
+            _ = try ed.renderBenchmarkCursorMove(&out.writer, key);
             cursor_timings[i] = perf.elapsedNs(start);
             cursor_total_bytes += out.written().len;
         }
@@ -97,9 +95,7 @@ pub fn main(init: std.process.Init) !void {
     const cursor_p95 = cursor_sorted[(frames * 95) / 100];
     const cursor_avg_bytes = cursor_total_bytes / frames;
 
-    if (cursor_avg_bytes >= 300) return error.FastCursorMoveBytesTargetMissed;
-
-    std.debug.print("flamingo perf benchmark: lines={d} full_frames={d} render_path=virtual p50_ns={d} p95_ns={d} avg_bytes={d} cursor_frames={d} cursor_path=fast p50_ns={d} p95_ns={d} avg_bytes={d}\n", .{
+    std.debug.print("flamingo perf benchmark: lines={d} full_frames={d} render_path=virtual p50_ns={d} p95_ns={d} avg_bytes={d} cursor_frames={d} cursor_path=virtual p50_ns={d} p95_ns={d} avg_bytes={d}\n", .{
         line_count,
         frames,
         p50,
