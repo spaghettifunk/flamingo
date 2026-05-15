@@ -27,7 +27,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
 - [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file. This step cannot happen until I find a way to automatically put the file in a specific folder at startup time
 - [x] implement opening the current folder with `.` button when the Filesystem pane is open
-- [ ] UI rehaul for the Filesystem pane
+- [x] UI rehaul for the Filesystem pane
 
 ## Editing TODO
 
@@ -54,7 +54,7 @@ A set of todos without order or priority. Simply grouped by category
 ## New Features
 
 - [ ] implement a "Help" popup like LazyVim by doing `:help` showing what the editor can do
-- [ ] enable the terminal in the editor. It can be a toggle to show/hide the terminal
+- [x] enable the terminal in the editor. It can be a toggle to show/hide the terminal
 - [x] implement a multi-key sequences
 - [x] implement global search
   - [ ] Regex
