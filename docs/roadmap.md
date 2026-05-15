@@ -4,7 +4,7 @@ A set of todos without order or priority. Simply grouped by category
 
 ## General TODO
 
-- [ ] write a proper README.md with contributions, runnign the project, etc
+- [ ] write a proper README.md with contributions, running the project, etc
 - [ ] CI pipeline for running tests and binary creation (GitHub actions as a start)
 - [ ] `homebrew` formula for installation
 - [ ] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`

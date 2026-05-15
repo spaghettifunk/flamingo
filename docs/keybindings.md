@@ -83,8 +83,10 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | Command | Alias | Description |
 | :--- | :--- | :--- |
 | `:q` | | Quit current tab / Dashboard |
+| `:qall` | `:qa` | Quit all open tabs |
 | `:q!` | | Force quit (discard unsaved changes) |
 | `:w [path]` | | Write (Save) current buffer to [path] or its original file |
+| `:wall` | `:wa` | Write (Save) all modified buffers |
 | `:wq [path]` | | Save and Quit |
 | `:newFile <path>` | `:nf` | Create a new file at `<path>` and open it |
 | `:renameFile <old> <new>` | `:rf` | Rename file from `<old>` to `<new>` |
