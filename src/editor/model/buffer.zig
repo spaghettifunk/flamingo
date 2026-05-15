@@ -89,7 +89,8 @@ pub const Line = struct {
             self.gap_end -= delta;
         } else if (pos > self.gap_start) {
             const delta = pos - self.gap_start;
-            @memcpy(
+            std.mem.copyForwards(
+                u8,
                 self.buf[self.gap_start .. self.gap_start + delta],
                 self.buf[self.gap_end .. self.gap_end + delta],
             );

@@ -38,7 +38,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] jump to line
 - [x] jump to top/bottom of file
 - [x] implement jump between matching `() { } [ ]`
-- [ ] implement jump to function definition
+- [x] implement jump to function definition with keybinding `f`
 - [x] implement going backwards/forwards like a browser
 - [x] syntax highlight for Markdown files
 - [ ] Tabs with folder name in a different color

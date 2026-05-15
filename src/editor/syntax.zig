@@ -1011,3 +1011,4 @@ test "highlighter keeps highlights aligned after edit before token" {
     try std.testing.expect(highlighter.styleAtLine(0, 0) == null);
     try std.testing.expectEqual(Style.keyword, highlighter.styleAtLine(1, 0).?);
 }
+
