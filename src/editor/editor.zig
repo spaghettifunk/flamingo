@@ -22,6 +22,9 @@ const terminal_panel_mod = @import("terminal_panel.zig");
 
 const max_fifo_events_per_idle_tick = 8;
 const syntax_parse_idle_delay_ns = 50 * std.time.ns_per_ms;
+const max_tab_name_width = 15;
+const tab_prefix_width = 2;
+const tab_separator = " | ";
 
 pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
@@ -148,6 +151,15 @@ const StatusLayoutCache = struct {
     fn invalidate(self: *StatusLayoutCache) void {
         self.* = .{};
     }
+};
+
+const TabBarLayout = struct {
+    total_width: usize,
+    scroll_col: usize,
+    content_start_col: usize,
+    content_width: usize,
+    has_hidden_left: bool,
+    has_hidden_right: bool,
 };
 
 const RightStatusLayout = struct {
@@ -1936,43 +1948,197 @@ pub const Editor = struct {
         }
     }
 
+    fn tabBasename(tab: *const Tab) []const u8 {
+        const filename = tab.buf.filename orelse "unsaved";
+        return std.fs.path.basename(filename);
+    }
+
+    fn tabNameLen(basename: []const u8) usize {
+        return @min(basename.len, max_tab_name_width);
+    }
+
+    fn tabLabelWidth(tab: *const Tab) usize {
+        const basename = tabBasename(tab);
+        const name_len = tabNameLen(basename);
+        return tab_prefix_width + name_len + (if (basename.len > name_len) @as(usize, 3) else @as(usize, 0)) + tab_separator.len;
+    }
+
+    fn totalTabBarWidth(tabs: []const Tab) usize {
+        var total: usize = 0;
+        for (tabs) |*tab| total += tabLabelWidth(tab);
+        return total;
+    }
+
+    fn tabStartCol(tabs: []const Tab, index: usize) usize {
+        var start: usize = 0;
+        for (tabs[0..index]) |*tab| start += tabLabelWidth(tab);
+        return start;
+    }
+
+    fn clampTabBarScroll(scroll_col: *usize, total_width: usize, available_width: usize) void {
+        if (available_width == 0 or total_width <= available_width) {
+            scroll_col.* = 0;
+            return;
+        }
+        scroll_col.* = @min(scroll_col.*, total_width - available_width);
+    }
+
+    fn ensureActiveTabVisible(tabs: []const Tab, active_index: usize, available_width: usize, scroll_col: *usize) void {
+        if (tabs.len == 0 or available_width == 0 or active_index >= tabs.len) {
+            scroll_col.* = 0;
+            return;
+        }
+
+        const total_width = totalTabBarWidth(tabs);
+        clampTabBarScroll(scroll_col, total_width, available_width);
+
+        const active_start = tabStartCol(tabs, active_index);
+        const active_end = active_start + tabLabelWidth(&tabs[active_index]);
+        if (active_start < scroll_col.*) {
+            scroll_col.* = active_start;
+        } else if (active_end > scroll_col.* + available_width) {
+            scroll_col.* = active_end - available_width;
+        }
+
+        clampTabBarScroll(scroll_col, total_width, available_width);
+    }
+
+    fn prepareTabBarLayout(self: *Editor, width: usize) TabBarLayout {
+        const tabs = self.state.tabs.items;
+        const total_width = totalTabBarWidth(tabs);
+        if (tabs.len == 0 or width == 0) {
+            self.state.tab_bar_scroll_col = 0;
+            return .{
+                .total_width = total_width,
+                .scroll_col = 0,
+                .content_start_col = 0,
+                .content_width = 0,
+                .has_hidden_left = false,
+                .has_hidden_right = false,
+            };
+        }
+
+        var has_hidden_left = self.state.tab_bar_scroll_col > 0;
+        var has_hidden_right = false;
+        var content_width = width;
+
+        for (0..4) |_| {
+            const reserved = @as(usize, @intFromBool(has_hidden_left)) + @as(usize, @intFromBool(has_hidden_right));
+            content_width = width -| reserved;
+            ensureActiveTabVisible(tabs, self.state.active_tab_index, content_width, &self.state.tab_bar_scroll_col);
+
+            const next_hidden_left = self.state.tab_bar_scroll_col > 0;
+            const next_hidden_right = total_width > self.state.tab_bar_scroll_col + content_width;
+            if (next_hidden_left == has_hidden_left and next_hidden_right == has_hidden_right) break;
+            has_hidden_left = next_hidden_left;
+            has_hidden_right = next_hidden_right;
+        }
+
+        const reserved = @as(usize, @intFromBool(has_hidden_left)) + @as(usize, @intFromBool(has_hidden_right));
+        content_width = width -| reserved;
+        ensureActiveTabVisible(tabs, self.state.active_tab_index, content_width, &self.state.tab_bar_scroll_col);
+        has_hidden_left = self.state.tab_bar_scroll_col > 0;
+        has_hidden_right = total_width > self.state.tab_bar_scroll_col + content_width;
+
+        return .{
+            .total_width = total_width,
+            .scroll_col = self.state.tab_bar_scroll_col,
+            .content_start_col = @intFromBool(has_hidden_left),
+            .content_width = content_width,
+            .has_hidden_left = has_hidden_left,
+            .has_hidden_right = has_hidden_right,
+        };
+    }
+
+    fn writeVirtualClippedText(self: *Editor, row: usize, dest_base_col: usize, text_start_col: usize, viewport_start: usize, viewport_end: usize, text: []const u8, style: render_mod.RenderStyle) void {
+        const text_end_col = text_start_col + text.len;
+        const draw_start = @max(text_start_col, viewport_start);
+        const draw_end = @min(text_end_col, viewport_end);
+        if (draw_start >= draw_end) return;
+
+        const skip = draw_start - text_start_col;
+        const len = draw_end - draw_start;
+        self.renderer.screen.writeText(row, dest_base_col + draw_start - viewport_start, text[skip .. skip + len], style);
+    }
+
+    fn writeVirtualClippedTabLabel(self: *Editor, row: usize, dest_base_col: usize, label_start_col: usize, viewport_start: usize, viewport_end: usize, tab: *const Tab, active: bool) void {
+        const style: render_mod.RenderStyle = if (active) .gutter_current else .dim;
+        const prefix = if (active) "> " else "  ";
+        const basename = tabBasename(tab);
+        const name_len = tabNameLen(basename);
+        var col = label_start_col;
+
+        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, prefix, style);
+        col += prefix.len;
+        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, basename[0..name_len], style);
+        col += name_len;
+        if (basename.len > name_len) {
+            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, "...", style);
+            col += 3;
+        }
+        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, tab_separator, .dim);
+    }
+
+    fn writeAnsiClippedText(writer: anytype, start_col: usize, dest_base_col: usize, text_start_col: usize, viewport_start: usize, viewport_end: usize, text: []const u8) !void {
+        const text_end_col = text_start_col + text.len;
+        const draw_start = @max(text_start_col, viewport_start);
+        const draw_end = @min(text_end_col, viewport_end);
+        if (draw_start >= draw_end) return;
+
+        const skip = draw_start - text_start_col;
+        const len = draw_end - draw_start;
+        try terminal.moveCursor(writer, 1, start_col + dest_base_col + draw_start - viewport_start);
+        try writer.writeAll(text[skip .. skip + len]);
+    }
+
+    fn writeAnsiClippedTabLabel(writer: anytype, start_col: usize, dest_base_col: usize, label_start_col: usize, viewport_start: usize, viewport_end: usize, tab: *const Tab, active: bool) !void {
+        const prefix = if (active) "> " else "  ";
+        const basename = tabBasename(tab);
+        const name_len = tabNameLen(basename);
+        var col = label_start_col;
+
+        try writer.writeAll(if (active) "\x1b[1;33m" else "\x1b[2;37m");
+        try writeAnsiClippedText(writer, start_col, dest_base_col, col, viewport_start, viewport_end, prefix);
+        col += prefix.len;
+        try writeAnsiClippedText(writer, start_col, dest_base_col, col, viewport_start, viewport_end, basename[0..name_len]);
+        col += name_len;
+        if (basename.len > name_len) {
+            try writeAnsiClippedText(writer, start_col, dest_base_col, col, viewport_start, viewport_end, "...");
+            col += 3;
+        }
+        try writer.writeAll("\x1b[2;37m");
+        try writeAnsiClippedText(writer, start_col, dest_base_col, col, viewport_start, viewport_end, tab_separator);
+        try writer.writeAll("\x1b[0m");
+    }
+
     fn renderTabs(self: *Editor, writer: anytype, start_col: usize, width: usize) !void {
+        if (width == 0) return;
         try terminal.moveCursor(writer, 1, 1);
         try terminal.eraseToLineEnd(writer);
         try terminal.moveCursor(writer, 1, start_col);
 
         if (self.state.tabs.items.len == 0) return;
 
-        const max_tab_width = 20;
-        var current_col: usize = 1;
-
-        for (self.state.tabs.items, 0..) |tab, i| {
-            const is_active = (i == self.state.active_tab_index);
-            const filename = tab.buf.filename orelse "unsaved";
-            const basename = std.fs.path.basename(filename);
-
-            var display_name: []const u8 = basename;
-            var truncated = false;
-            if (display_name.len > max_tab_width - 4) {
-                display_name = display_name[0 .. max_tab_width - 7];
-                truncated = true;
+        const layout = self.prepareTabBarLayout(width);
+        if (layout.has_hidden_left) {
+            try writer.writeAll("\x1b[2;37m<\x1b[0m");
+        }
+        if (layout.content_width > 0) {
+            const viewport_start = layout.scroll_col;
+            const viewport_end = viewport_start + layout.content_width;
+            var label_start: usize = 0;
+            for (self.state.tabs.items, 0..) |*tab, i| {
+                const label_width = tabLabelWidth(tab);
+                if (label_start >= viewport_end) break;
+                if (label_start + label_width > viewport_start) {
+                    try writeAnsiClippedTabLabel(writer, start_col, layout.content_start_col, label_start, viewport_start, viewport_end, tab, i == self.state.active_tab_index);
+                }
+                label_start += label_width;
             }
-
-            if (is_active) {
-                try writer.writeAll("\x1b[1;33m"); // Bold Yellow
-                try writer.writeAll("▶ ");
-            } else {
-                try writer.writeAll("\x1b[2;37m"); // Dim Grey
-                try writer.writeAll("  ");
-            }
-
-            try writer.print("{s}{s} ", .{ display_name, if (truncated) "..." else "" });
-            try writer.writeAll("\x1b[0m");
-            try writer.writeAll("│ ");
-
-            const tab_len = display_name.len + (if (truncated) @as(usize, 3) else @as(usize, 0)) + 5; // "  " + name + " " + "│ "
-            current_col += tab_len;
-            if (current_col >= width) break;
+        }
+        if (layout.has_hidden_right) {
+            try terminal.moveCursor(writer, 1, start_col + width - 1);
+            try writer.writeAll("\x1b[2;37m>\x1b[0m");
         }
 
         // Render separator on row 2
@@ -2887,31 +3053,25 @@ pub const Editor = struct {
             return;
         }
 
-        var col: usize = 0;
-        const max_tab_width = 20;
-        for (self.state.tabs.items, 0..) |tab, i| {
-            if (col >= self.width) break;
-            const is_active = i == self.state.active_tab_index;
-            const filename = tab.buf.filename orelse "unsaved";
-            const basename = std.fs.path.basename(filename);
-            const style: render_mod.RenderStyle = if (is_active) .gutter_current else .dim;
-
-            const prefix = if (is_active) "> " else "  ";
-            self.renderer.screen.writeText(0, col, prefix, style);
-            col += @min(prefix.len, self.width - col);
-
-            const max_name = if (max_tab_width > 5) max_tab_width - 5 else max_tab_width;
-            const name_len = @min(basename.len, max_name);
-            self.renderer.screen.writeText(0, col, basename[0..name_len], style);
-            col += @min(name_len, self.width - col);
-            if (basename.len > name_len and col + 3 <= self.width) {
-                self.renderer.screen.writeText(0, col, "...", style);
-                col += 3;
+        const layout = self.prepareTabBarLayout(self.width);
+        if (layout.has_hidden_left) {
+            self.renderer.screen.set(0, 0, '<', .dim);
+        }
+        if (layout.content_width > 0) {
+            const viewport_start = layout.scroll_col;
+            const viewport_end = viewport_start + layout.content_width;
+            var label_start: usize = 0;
+            for (self.state.tabs.items, 0..) |*tab, i| {
+                const label_width = tabLabelWidth(tab);
+                if (label_start >= viewport_end) break;
+                if (label_start + label_width > viewport_start) {
+                    self.writeVirtualClippedTabLabel(0, layout.content_start_col, label_start, viewport_start, viewport_end, tab, i == self.state.active_tab_index);
+                }
+                label_start += label_width;
             }
-            if (col + 3 <= self.width) {
-                self.renderer.screen.writeText(0, col, " | ", .dim);
-                col += 3;
-            }
+        }
+        if (layout.has_hidden_right) {
+            self.renderer.screen.set(0, self.width - 1, '>', .dim);
         }
 
         self.renderer.screen.fillRow(1, '-', .dim);
@@ -3497,6 +3657,60 @@ test "Editor.calculateGutterWidth" {
     // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
+}
+
+fn addNamedTestTab(state: *state_mod.EditorState, allocator: std.mem.Allocator, name: []const u8) !void {
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    try buf.setFilename(name);
+    try std.testing.expect(try state.addTab(allocator, buf));
+}
+
+test "tab bar scroll follows active tab with variable label widths" {
+    const allocator = std.testing.allocator;
+    var state = state_mod.EditorState.init(allocator);
+    defer state.deinit(allocator);
+
+    try addNamedTestTab(&state, allocator, "a.zig");
+    try addNamedTestTab(&state, allocator, "very_long_filename_one.zig");
+    try addNamedTestTab(&state, allocator, "b.zig");
+    try addNamedTestTab(&state, allocator, "another_long_filename_two.zig");
+
+    state.active_tab_index = 3;
+    Editor.ensureActiveTabVisible(state.tabs.items, state.active_tab_index, 20, &state.tab_bar_scroll_col);
+    const active_start = Editor.tabStartCol(state.tabs.items, state.active_tab_index);
+    const active_end = active_start + Editor.tabLabelWidth(&state.tabs.items[state.active_tab_index]);
+    try std.testing.expect(state.tab_bar_scroll_col < active_end);
+    try std.testing.expect(active_start < state.tab_bar_scroll_col + 20);
+    try std.testing.expect(active_end <= state.tab_bar_scroll_col + 20);
+
+    state.active_tab_index = 1;
+    Editor.ensureActiveTabVisible(state.tabs.items, state.active_tab_index, 20, &state.tab_bar_scroll_col);
+    const left_active_start = Editor.tabStartCol(state.tabs.items, state.active_tab_index);
+    try std.testing.expect(state.tab_bar_scroll_col <= left_active_start);
+}
+
+test "tab bar layout clamps stale scroll and reserves continuation markers" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+
+    try addNamedTestTab(&ed.state, ed.allocator, "short.zig");
+    try addNamedTestTab(&ed.state, ed.allocator, "a_much_longer_name.zig");
+    try addNamedTestTab(&ed.state, ed.allocator, "tail.zig");
+
+    ed.state.active_tab_index = 2;
+    ed.state.tab_bar_scroll_col = 9999;
+    const narrow = ed.prepareTabBarLayout(12);
+    try std.testing.expect(narrow.has_hidden_left);
+    try std.testing.expect(narrow.content_width <= 12);
+    try std.testing.expect(ed.state.tab_bar_scroll_col < narrow.total_width);
+
+    ed.state.active_tab_index = 0;
+    const wide = ed.prepareTabBarLayout(200);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tab_bar_scroll_col);
+    try std.testing.expect(!wide.has_hidden_left);
+    try std.testing.expect(!wide.has_hidden_right);
 }
 
 test "Editor command mode status uses command segment label" {

@@ -42,7 +42,8 @@ A set of todos without order or priority. Simply grouped by category
 - [x] syntax highlight for Markdown files
 - [ ] Tabs with folder name in a different color
 - [ ] implement folding/unfolding feature for when `{}` are found (add also keybinding)
-- [ ] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
+- [x] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
+- [x] BUG: cannot scroll the tabs
 
 ## Plugins System TODO
 
@@ -59,4 +60,3 @@ A set of todos without order or priority. Simply grouped by category
   - [ ] Async/background indexing
   - [ ] Persistent search index
   - [x] Preview pane
-

@@ -32,6 +32,7 @@ pub const EditorState = struct {
     dash: dashboard.Dashboard = .{},
     tabs: std.ArrayList(tab_mod.Tab),
     active_tab_index: usize = 0,
+    tab_bar_scroll_col: usize = 0,
     command_buffer: std.ArrayListUnmanaged(u8) = .empty,
     command_popup: command_popup.CommandPopup = .{},
     filesystem_picker: filesystem_picker.FilesystemPicker = .{},
@@ -150,6 +151,7 @@ pub const EditorState = struct {
         if (self.tabs.items.len == 0) {
             self.mode = .Dashboard;
             self.active_tab_index = 0;
+            self.tab_bar_scroll_col = 0;
             self.explorer_visible = false;
             self.explorer_focused = false;
         } else if (self.active_tab_index >= self.tabs.items.len) {
@@ -177,6 +179,7 @@ pub const EditorState = struct {
         }
         self.tabs.clearRetainingCapacity();
         self.active_tab_index = 0;
+        self.tab_bar_scroll_col = 0;
         self.mode = .Dashboard;
         self.explorer_visible = false;
         self.explorer_focused = false;
