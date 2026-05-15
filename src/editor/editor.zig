@@ -17,6 +17,7 @@ const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const keybindings = @import("input_router/keybindings.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
+const file_icons = @import("file_icons.zig");
 const prompt_popup = @import("prompt_popup.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
 
@@ -168,6 +169,13 @@ const CommandPopupGeometry = struct {
     col: usize,
     width: usize,
     suggestion_count: usize,
+};
+
+const FilesystemPickerGeometry = struct {
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
 };
 
 const command_popup_title = " Cmdline ";
@@ -1133,14 +1141,7 @@ pub const Editor = struct {
     }
 
     fn fileIconForName(name: []const u8) []const u8 {
-        const ext = std.fs.path.extension(name);
-        if (std.mem.eql(u8, ext, ".zig")) return "";
-        if (std.mem.eql(u8, ext, ".toml") or std.mem.eql(u8, ext, ".json") or
-            std.mem.eql(u8, ext, ".zon") or std.mem.eql(u8, ext, ".xml"))
-            return "";
-        if (std.mem.eql(u8, ext, ".md")) return "";
-        if (std.ascii.eqlIgnoreCase(std.fs.path.basename(name), "LICENSE")) return "";
-        return "";
+        return file_icons.iconForFileName(name);
     }
 
     fn statusFilePath(self: *const Editor, tab: ?*Tab) []const u8 {
@@ -1877,6 +1878,70 @@ pub const Editor = struct {
         };
     }
 
+    fn pickerPrompt(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
+        if (mode == .new_file_location and phase == .entering_name) return "Name the new file";
+        return switch (mode) {
+            .open_file => "Select a file...",
+            .open_folder => "Select a directory...",
+            .new_file_location => "Choose a location...",
+        };
+    }
+
+    fn pickerFooterCompact(width: usize) bool {
+        return width < 62;
+    }
+
+    fn pickerFooterLineOne(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, compact: bool) []const u8 {
+        if (mode == .new_file_location and phase == .entering_name) {
+            return if (compact) "Enter create  Backspace edit" else "Enter create  Backspace edit  Esc cancel";
+        }
+        return switch (mode) {
+            .open_file => if (compact) "Enter open  ↑/↓ select" else "Enter open  ↑/↓ select  Backspace parent  Esc cancel",
+            .open_folder => if (compact) "Enter browse  Space select" else "Enter browse  Space select  . current  Backspace parent  Esc cancel",
+            .new_file_location => if (compact) "Enter browse  Space name" else "Enter browse  Space name  Backspace parent  Esc cancel",
+        };
+    }
+
+    fn pickerFooterLineTwo(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, compact: bool) ?[]const u8 {
+        if (!compact) return null;
+        if (mode == .new_file_location and phase == .entering_name) return "Esc cancel";
+        return switch (mode) {
+            .open_file => "Esc cancel  Backspace parent",
+            .open_folder => "Esc cancel  Backspace parent  . current",
+            .new_file_location => "Esc cancel  Backspace parent",
+        };
+    }
+
+    fn pickerFooterLineCount(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, width: usize) usize {
+        return if (pickerFooterLineTwo(mode, phase, pickerFooterCompact(width)) == null) 1 else 2;
+    }
+
+    fn filesystemPickerGeometry(self: *const Editor, mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, has_error: bool) ?FilesystemPickerGeometry {
+        if (self.width < 24 or self.height < 9) return null;
+
+        const available_width = self.width -| 4;
+        if (available_width < 24) return null;
+        const capped_width = @min(available_width, @as(usize, 72));
+        const panel_width = if (capped_width >= 36) capped_width else available_width;
+        if (panel_width < 24) return null;
+
+        const available_height = self.height -| 2;
+        if (available_height < 8) return null;
+        const target_height = @max(@as(usize, 8), (self.height * 65) / 100);
+        const footer_rows = pickerFooterLineCount(mode, phase, panel_width);
+        const minimum_height = 6 + footer_rows + @as(usize, if (has_error) 1 else 0) + 1;
+        const panel_height = @min(available_height, @max(minimum_height, target_height));
+        if (panel_height < minimum_height) return null;
+
+        const row = if (available_height > panel_height) ((available_height - panel_height) / 2) -| 1 else 0;
+        return .{
+            .row = row,
+            .col = (self.width - panel_width) / 2,
+            .width = panel_width,
+            .height = panel_height,
+        };
+    }
+
     fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
         return switch (kind) {
             .explorer_new_file => "Enter create  Backspace edit  Esc cancel",
@@ -2155,60 +2220,109 @@ pub const Editor = struct {
     fn renderVirtualFilesystemPickerPopup(self: *Editor) void {
         if (!self.state.filesystem_picker.visible) return;
         const picker = &self.state.filesystem_picker;
-        const item_count: usize = if (picker.phase == .browsing) picker.entries.items.len else 1;
-        const geom = self.popupGeometry(true, item_count + 3, true, 12) orelse return;
-        const inner_width = geom.width - 2;
+        const geom = self.filesystemPickerGeometry(picker.mode, picker.phase, picker.error_message != null) orelse return;
+        const inner_end = geom.col + geom.width - 1;
         const title = pickerTitle(picker.mode, picker.phase);
-        const title_col = if (geom.width > title.len) geom.col + (geom.width - title.len) / 2 else geom.col;
+        self.drawPickerTop(geom, title, .command_popup_border);
 
-        self.drawVirtualPopupTop(geom, title, title_col, .command_popup_border);
-        const cwd_row = geom.row + 1;
-        self.drawVirtualPopupRow(cwd_row, geom.col, geom.width, .command_popup_border, .command_popup);
-        self.renderer.screen.writeText(cwd_row, geom.col + 2, picker.cwd[0..@min(picker.cwd.len, inner_width -| 2)], .command_popup);
+        var row = geom.row + 1;
+        self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .command_popup);
+        var col = geom.col + 2;
+        self.writeVirtualTruncatedCells(row, &col, inner_end, " ", .explorer_folder, false);
+        self.writeVirtualTruncatedCells(row, &col, inner_end, picker.cwd, .command_popup, true);
+        row += 1;
 
-        var rows_written: usize = 0;
+        self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .command_popup);
+        col = geom.col + 2;
+        const prompt_icon = switch (picker.mode) {
+            .open_folder => file_icons.folderIcon(),
+            else => "",
+        };
+        self.writeVirtualTruncatedCells(row, &col, inner_end, prompt_icon, .command_popup_prompt, false);
+        self.writeVirtualTruncatedCells(row, &col, inner_end, " ", .command_popup, false);
+        self.writeVirtualTruncatedCells(row, &col, inner_end, pickerPrompt(picker.mode, picker.phase), .command_popup_prompt, false);
+        row += 1;
+
+        self.drawPickerSeparator(row, geom.col, geom.width, .command_popup_border);
+        row += 1;
+
+        const footer_rows = pickerFooterLineCount(picker.mode, picker.phase, geom.width);
+        const error_rows: usize = if (picker.error_message == null) 0 else 1;
+        const result_height = geom.height -| (6 + footer_rows + error_rows);
+
         if (picker.phase == .entering_name) {
-            const row = geom.row + 2;
-            self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, .command_popup);
-            self.renderer.screen.writeText(row, geom.col + 2, "filename: ", .command_popup);
-            const prefix_len = "filename: ".len;
-            const input_space = inner_width -| prefix_len -| 2;
-            const shown = picker.input.items[0..@min(picker.input.items.len, input_space)];
-            self.renderer.screen.writeText(row, geom.col + 2 + prefix_len, shown, .command_popup);
-            rows_written = 1;
-        } else if (geom.suggestion_count > 3) {
-            const view_height = geom.suggestion_count - 3;
-            if (picker.selected_index >= picker.scroll_offset + view_height) {
-                picker.scroll_offset = picker.selected_index - view_height + 1;
-            } else if (picker.selected_index < picker.scroll_offset) {
-                picker.scroll_offset = picker.selected_index;
+            for (0..result_height) |offset| {
+                const item_row = row + offset;
+                self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
+                if (offset == 0) {
+                    col = geom.col + 2;
+                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, " ", .explorer_file, false);
+                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, "filename: ", .explorer_dim, false);
+                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, picker.input.items, .normal, false);
+                }
             }
-            while (rows_written < view_height and picker.scroll_offset + rows_written < picker.entries.items.len) : (rows_written += 1) {
-                const index = picker.scroll_offset + rows_written;
-                const entry = picker.entries.items[index];
-                const selected = index == picker.selected_index;
-                const style: render_mod.RenderStyle = if (selected) .command_popup_selected else .command_popup;
-                const row = geom.row + 2 + rows_written;
-                self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, style);
-                var col = geom.col + 2;
-                const suffix = if (entry.kind == .directory) "/" else "";
-                self.writeVirtualTruncated(row, &col, geom.col + geom.width - 1, entry.name, style);
-                self.writeVirtualTruncated(row, &col, geom.col + geom.width - 1, suffix, style);
+        } else {
+            if (picker.entries.items.len == 0) {
+                for (0..result_height) |offset| {
+                    const item_row = row + offset;
+                    self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
+                    if (offset == 0) {
+                        col = geom.col + 2;
+                        self.writeVirtualTruncatedCells(item_row, &col, inner_end, "No entries", .explorer_dim, false);
+                    }
+                }
+            } else {
+                if (picker.selected_index >= picker.scroll_offset + result_height) {
+                    picker.scroll_offset = picker.selected_index - result_height + 1;
+                } else if (picker.selected_index < picker.scroll_offset) {
+                    picker.scroll_offset = picker.selected_index;
+                }
+                for (0..result_height) |offset| {
+                    const item_row = row + offset;
+                    const index = picker.scroll_offset + offset;
+                    if (index >= picker.entries.items.len) {
+                        self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
+                        continue;
+                    }
+                    const entry = picker.entries.items[index];
+                    const selected = index == picker.selected_index;
+                    const row_style: render_mod.RenderStyle = if (selected) .explorer_selected_focus else .explorer_bg;
+                    const text_style = pickerEntryStyle(entry, selected);
+                    self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, row_style);
+                    col = geom.col + 2;
+                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, pickerEntryIcon(entry), text_style, false);
+                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, " ", row_style, false);
+                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, entry.name, text_style, false);
+                    if (entry.kind == .directory) {
+                        self.writeVirtualTruncatedCells(item_row, &col, inner_end, "/", text_style, false);
+                    }
+                }
             }
         }
+        row += result_height;
+
+        self.drawPickerSeparator(row, geom.col, geom.width, .command_popup_border);
+        row += 1;
 
         if (picker.error_message) |msg| {
-            const row = geom.row + 2 + rows_written;
-            self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, .popup_error);
-            self.renderer.screen.writeText(row, geom.col + 2, msg[0..@min(msg.len, inner_width -| 2)], .popup_error);
-            rows_written += 1;
+            self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .popup_error);
+            col = geom.col + 2;
+            self.writeVirtualTruncatedCells(row, &col, inner_end, msg, .popup_error, false);
+            row += 1;
         }
 
-        const footer_row = geom.row + 2 + rows_written;
-        self.drawVirtualPopupRow(footer_row, geom.col, geom.width, .command_popup_border, .popup_footer);
-        const footer = pickerFooter(picker.mode, picker.phase);
-        self.renderer.screen.writeText(footer_row, geom.col + 2, footer[0..@min(footer.len, inner_width -| 2)], .popup_footer);
-        self.drawVirtualPopupBottom(footer_row + 1, geom.col, geom.width, .command_popup_border);
+        const compact = pickerFooterCompact(geom.width);
+        self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .popup_footer);
+        col = geom.col + 2;
+        self.writeVirtualTruncatedCells(row, &col, inner_end, pickerFooterLineOne(picker.mode, picker.phase, compact), .popup_footer, false);
+        row += 1;
+        if (pickerFooterLineTwo(picker.mode, picker.phase, compact)) |line| {
+            self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .popup_footer);
+            col = geom.col + 2;
+            self.writeVirtualTruncatedCells(row, &col, inner_end, line, .popup_footer, false);
+        }
+
+        self.drawPickerBottom(geom.row + geom.height - 1, geom.col, geom.width, .command_popup_border);
     }
 
     fn renderVirtualPromptPopup(self: *Editor) void {
@@ -2322,6 +2436,97 @@ pub const Editor = struct {
         self.renderer.screen.set(row, col, '+', style);
         for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
         self.renderer.screen.set(row, col + width - 1, '+', style);
+    }
+
+    fn drawPickerTop(self: *Editor, geom: FilesystemPickerGeometry, title: []const u8, style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(geom.row, geom.col, "╭", style);
+        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(geom.row, geom.col + i, horizontal_line, style);
+        self.renderer.screen.setGlyph(geom.row, geom.col + geom.width - 1, "╮", style);
+        if (render_mod.displayCellCount(title) + 4 < geom.width) {
+            self.renderer.screen.writeText(geom.row, geom.col + 2, title, style);
+        }
+    }
+
+    fn drawPickerSeparator(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(row, col, "├", style);
+        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
+        self.renderer.screen.setGlyph(row, col + width - 1, "┤", style);
+    }
+
+    fn drawPickerRow(self: *Editor, row: usize, col: usize, width: usize, border_style: render_mod.RenderStyle, fill_style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(row, col, "│", border_style);
+        self.renderer.screen.setGlyph(row, col + width - 1, "│", border_style);
+        for (1..width - 1) |i| self.renderer.screen.set(row, col + i, ' ', fill_style);
+    }
+
+    fn drawPickerBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
+        self.renderer.screen.setGlyph(row, col, "╰", style);
+        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
+        self.renderer.screen.setGlyph(row, col + width - 1, "╯", style);
+    }
+
+    fn byteOffsetAfterCells(text: []const u8, cell_count: usize) usize {
+        var i: usize = 0;
+        var cells: usize = 0;
+        while (i < text.len and cells < cell_count) : (cells += 1) {
+            i += @min(render_mod.utf8CellLen(text[i]), text.len - i);
+        }
+        return i;
+    }
+
+    fn writeVirtualCellsLimited(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, max_cells: usize, style: render_mod.RenderStyle) usize {
+        if (col.* >= end_col or max_cells == 0) return 0;
+        const end = byteOffsetAfterCells(text, max_cells);
+        const shown = text[0..end];
+        self.renderer.screen.writeText(row, col.*, shown, style);
+        const written = render_mod.displayCellCount(shown);
+        col.* += written;
+        return written;
+    }
+
+    fn writeVirtualTruncatedCells(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle, truncate_left: bool) void {
+        if (col.* >= end_col) return;
+        const remaining = end_col - col.*;
+        const text_cells = render_mod.displayCellCount(text);
+        if (text_cells <= remaining) {
+            self.renderer.screen.writeText(row, col.*, text, style);
+            col.* += text_cells;
+            return;
+        }
+
+        if (remaining <= 3) {
+            _ = self.writeVirtualCellsLimited(row, col, end_col, "...", remaining, style);
+            return;
+        }
+
+        if (truncate_left) {
+            _ = self.writeVirtualCellsLimited(row, col, end_col, "...", 3, style);
+            const tail_cells = remaining - 3;
+            const skip_cells = text_cells - tail_cells;
+            const start = byteOffsetAfterCells(text, skip_cells);
+            _ = self.writeVirtualCellsLimited(row, col, end_col, text[start..], tail_cells, style);
+        } else {
+            const head_cells = remaining - 3;
+            _ = self.writeVirtualCellsLimited(row, col, end_col, text, head_cells, style);
+            _ = self.writeVirtualCellsLimited(row, col, end_col, "...", 3, style);
+        }
+    }
+
+    fn pickerEntryIcon(entry: filesystem_picker.PickerEntry) []const u8 {
+        return switch (entry.kind) {
+            .directory => file_icons.folderIcon(),
+            .file => file_icons.iconForFileName(entry.name),
+            .other => "",
+        };
+    }
+
+    fn pickerEntryStyle(entry: filesystem_picker.PickerEntry, selected: bool) render_mod.RenderStyle {
+        if (selected) return .explorer_selected_focus;
+        return switch (entry.kind) {
+            .directory => .explorer_folder,
+            .file => file_icons.styleForFileName(entry.name),
+            .other => .explorer_dim,
+        };
     }
 
     fn renderVirtualTerminalPanel(self: *Editor) void {
