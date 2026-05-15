@@ -112,9 +112,10 @@ test "CommandPopup prefix suggestions" {
     try popup.open(allocator);
     try popup.appendChar(allocator, 'w');
 
-    try std.testing.expectEqual(@as(usize, 2), popup.suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 3), popup.suggestions.items.len);
     try std.testing.expectEqual(cmd.Command.write, popup.suggestions.items[0].command);
-    try std.testing.expectEqual(cmd.Command.write_quit, popup.suggestions.items[1].command);
+    try std.testing.expectEqual(cmd.Command.write_all, popup.suggestions.items[1].command);
+    try std.testing.expectEqual(cmd.Command.write_quit, popup.suggestions.items[2].command);
 
     popup.close();
     try popup.open(allocator);
@@ -152,7 +153,7 @@ test "CommandPopup tab moves selection without changing input" {
     try std.testing.expectEqualStrings("w", popup.input.items);
     try std.testing.expectEqual(@as(?usize, 1), popup.selected_index);
     popup.tabComplete();
-    try std.testing.expectEqual(@as(?usize, 0), popup.selected_index);
+    try std.testing.expectEqual(@as(?usize, 2), popup.selected_index);
     try popup.appendChar(allocator, '!');
     try std.testing.expectEqualStrings("w!", popup.input.items);
 }
@@ -168,7 +169,7 @@ test "CommandPopup backspace recomputes suggestions" {
     try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
 
     try popup.backspace(allocator);
-    try std.testing.expectEqual(@as(usize, 2), popup.suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 3), popup.suggestions.items.len);
 }
 
 test "CommandPopup close clears state" {

@@ -8,6 +8,7 @@ pub const Command = enum {
     quit_all,
     force_quit,
     write,
+    write_all,
     write_quit,
     search,
     rename_file,
@@ -20,6 +21,7 @@ pub const Command = enum {
             .quit_all => "qall",
             .force_quit => "q!",
             .write => "w",
+            .write_all => "wall",
             .write_quit => "wq",
             .search => "search",
             .rename_file => "renameFile",
@@ -31,6 +33,7 @@ pub const Command = enum {
     pub fn alias(self: Command) ?[]const u8 {
         return switch (self) {
             .quit_all => "qa",
+            .write_all => "wa",
             .rename_file => "rf",
             .delete_file => "df",
             .new_file => "nf",
@@ -54,6 +57,7 @@ pub const all = [_]Command{
     .quit_all,
     .force_quit,
     .write,
+    .write_all,
     .write_quit,
     .search,
     .rename_file,
@@ -168,6 +172,10 @@ pub fn execute(ed: *editor.Editor) !void {
             }
             ed.state.mode = .Normal;
         },
+        .write_all => {
+            ed.processWriteAll();
+            ed.state.mode = .Normal;
+        },
         .write_quit => {
             const filename = nextArg(&it);
             if (ed.currentTab()) |tab| {
@@ -262,6 +270,8 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.quit_all, Command.fromString("qa").?);
     try std.testing.expectEqual(Command.force_quit, Command.fromString("q!").?);
     try std.testing.expectEqual(Command.write, Command.fromString("w").?);
+    try std.testing.expectEqual(Command.write_all, Command.fromString("wall").?);
+    try std.testing.expectEqual(Command.write_all, Command.fromString("wa").?);
     try std.testing.expectEqual(Command.write_quit, Command.fromString("wq").?);
     try std.testing.expectEqual(Command.search, Command.fromString("search").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("renameFile").?);

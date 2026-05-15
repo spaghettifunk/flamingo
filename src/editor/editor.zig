@@ -406,6 +406,24 @@ pub const Editor = struct {
         self.state.quitting_all = false;
     }
 
+    pub fn processWriteAll(self: *Editor) void {
+        var error_occurred = false;
+        for (self.state.tabs.items) |*tab| {
+            if (tab.buf.is_dirty) {
+                if (tab.buf.filename) |f| {
+                    tab.buf.saveToFile(self.io, f) catch {
+                        error_occurred = true;
+                    };
+                } else {
+                    error_occurred = true;
+                }
+            }
+        }
+        if (error_occurred) {
+            self.state.error_message = "Failed to save some files";
+        }
+    }
+
     pub fn markDirty(self: *Editor, invalidation: render_mod.RenderInvalidation) void {
         self.state.render_dirty = true;
         if (invalidation == .full) {
