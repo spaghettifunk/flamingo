@@ -696,7 +696,7 @@ test "Command: :q on clean tab closes it" {
     try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
-test "Command: :q on dirty buffer shows error" {
+test "Command: :q on dirty buffer opens save confirmation popup" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
@@ -709,9 +709,10 @@ test "Command: :q on dirty buffer shows error" {
         th.keySpecial(.Enter),
     });
 
-    // Tab stays open, error is set
+    // Tab stays open and the save-confirmation popup is shown
     try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
-    try std.testing.expect(ed.state.error_message != null);
+    try std.testing.expectEqual(editor_mod.EditorMode.SaveConfirmation, ed.state.mode);
+    try std.testing.expect(ed.state.save_confirmation.visible);
 }
 
 test "Command: :q! force-closes dirty tab" {

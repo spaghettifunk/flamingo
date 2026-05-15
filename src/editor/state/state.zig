@@ -8,6 +8,7 @@ const command_popup = @import("../command_popup.zig");
 const global_search = @import("../global_search.zig");
 const filesystem_picker = @import("../filesystem_picker.zig");
 const prompt_popup = @import("../prompt_popup.zig");
+const save_confirmation = @import("../save_confirmation.zig");
 const buffer = @import("../model/buffer.zig");
 const tab_mod = @import("../model/tab.zig");
 const normal_sequence = @import("../input_router/normal_sequence.zig");
@@ -25,6 +26,7 @@ pub const EditorMode = enum {
     Search,
     GlobalSearch,
     Terminal,
+    SaveConfirmation,
 };
 
 pub const EditorState = struct {
@@ -37,6 +39,7 @@ pub const EditorState = struct {
     command_popup: command_popup.CommandPopup = .{},
     filesystem_picker: filesystem_picker.FilesystemPicker = .{},
     prompt_popup: prompt_popup.PromptPopup = .{},
+    save_confirmation: save_confirmation.SaveConfirmationPopup = .{},
     error_message: ?[]const u8 = null,
     project_root: ?[]u8 = null,
     tree: ?explorer.Explorer = null,

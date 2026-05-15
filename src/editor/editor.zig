@@ -2197,6 +2197,7 @@ pub const Editor = struct {
         self.renderVirtualGlobalSearchPopup();
         self.renderVirtualFilesystemPickerPopup();
         self.renderVirtualPromptPopup();
+        self.renderVirtualSaveConfirmationPopup();
         self.renderVirtualCompletionMenu();
         if (self.active_keypress_trace) |trace| trace.popup_ns += perf.elapsedNs(popup_start);
         const status_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
@@ -2514,6 +2515,38 @@ pub const Editor = struct {
         const footer = promptFooter(popup.kind);
         self.renderer.screen.writeText(footer_row, geom.col + 2, footer[0..@min(footer.len, inner_width -| 2)], .popup_footer);
         self.drawVirtualPopupBottom(footer_row + 1, geom.col, geom.width, .command_popup_border);
+    }
+
+    fn renderVirtualSaveConfirmationPopup(self: *Editor) void {
+        if (!self.state.save_confirmation.visible) return;
+        const popup = &self.state.save_confirmation;
+        const geom = self.popupGeometry(true, 0, false, 0) orelse return;
+        const inner_width = geom.width - 2;
+
+        // Title row
+        self.drawVirtualPopupTop(geom, " Save File ", .command_popup_border);
+
+        // Body: show filename
+        const body_row = geom.row + 1;
+        self.drawVirtualPopupRow(body_row, geom.col, geom.width, .command_popup_border, .command_popup);
+        const display = popup.displayName();
+        const shown = display[0..@min(display.len, inner_width -| 4)];
+        var name_buf: [256]u8 = undefined;
+        const name_line = std.fmt.bufPrint(&name_buf, "  {s}", .{shown}) catch "";
+        self.renderer.screen.writeText(body_row, geom.col + 2, name_line[0..@min(name_line.len, inner_width -| 2)], .command_popup);
+
+        // Separator
+        const sep_row = geom.row + 2;
+        self.drawVirtualPopupSeparator(sep_row, geom.col, geom.width, .command_popup_border);
+
+        // Footer hint
+        const footer_row = geom.row + 3;
+        self.drawVirtualPopupRow(footer_row, geom.col, geom.width, .command_popup_border, .popup_footer);
+        const hint = "[S] Save   [D] Discard   [Esc] Cancel";
+        self.renderer.screen.writeText(footer_row, geom.col + 2, hint[0..@min(hint.len, inner_width -| 2)], .popup_footer);
+
+        // Bottom border
+        self.drawVirtualPopupBottom(geom.row + 4, geom.col, geom.width, .command_popup_border);
     }
 
     fn renderVirtualCompletionMenu(self: *Editor) void {
@@ -2886,7 +2919,9 @@ pub const Editor = struct {
             self.renderer.screen.setCursor(self.statusTerminalRow(), @min(self.width, 12 + self.state.command_buffer.items.len));
             return;
         }
-        if (self.state.mode == .FilesystemPicker or self.state.mode == .Prompt or self.state.mode == .Dashboard) {
+        if (self.state.mode == .FilesystemPicker or self.state.mode == .Prompt or
+            self.state.mode == .Dashboard or self.state.mode == .SaveConfirmation)
+        {
             self.renderer.screen.hideCursor();
             return;
         }
@@ -3478,7 +3513,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Terminal };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Terminal, .SaveConfirmation };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());

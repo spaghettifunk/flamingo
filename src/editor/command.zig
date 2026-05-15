@@ -134,8 +134,8 @@ pub fn execute(ed: *editor.Editor) !void {
         .quit => {
             if (ed.currentTab()) |tab| {
                 if (tab.buf.is_dirty) {
-                    ed.state.error_message = "No write since last change (add ! to override)";
-                    ed.state.mode = .Normal;
+                    ed.state.save_confirmation.open(tab.buf.filename);
+                    ed.state.mode = .SaveConfirmation;
                     return;
                 }
             }

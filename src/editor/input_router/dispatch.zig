@@ -193,6 +193,13 @@ fn pickerStartDir(ed: *editor.Editor) []const u8 {
     return ".";
 }
 
+fn openSaveConfirmation(ed: *editor.Editor) void {
+    const tab = ed.currentTab() orelse return;
+    ed.state.save_confirmation.open(tab.buf.filename);
+    ed.state.mode = .SaveConfirmation;
+    ed.markDirty(.full);
+}
+
 fn openDashboardPicker(ed: *editor.Editor, mode: filesystem_picker.PickerMode) !void {
     try ed.state.filesystem_picker.open(ed.allocator, ed.io, mode, pickerStartDir(ed));
     ed.state.mode = .FilesystemPicker;
@@ -463,6 +470,14 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (matches(event, keys.close_tab)) {
         clearPendingNormalSequence(ed);
         if (ed.state.mode != .Dashboard) {
+            // If the buffer has unsaved changes, show the confirmation popup
+            // instead of silently discarding them.
+            if (ed.currentTab()) |tab| {
+                if (tab.buf.is_dirty) {
+                    openSaveConfirmation(ed);
+                    return;
+                }
+            }
             ed.closeTab();
         }
         return;
@@ -980,6 +995,51 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.global_search.input.append(ed.allocator, event.char);
                 try refreshGlobalSearchOrReport(ed);
+                ed.markDirty(.full);
+            }
+        },
+        .SaveConfirmation => {
+            // S / s  → save then close, D / d or Enter → discard, Esc / n → cancel
+            if (event.key == .Char and !event.ctrl and !event.alt and
+                (event.char == 's' or event.char == 'S'))
+            {
+                // Save then close tab
+                if (ed.currentTab()) |tab| {
+                    if (tab.buf.filename) |f| {
+                        tab.buf.saveToFile(ed.io, f) catch {
+                            ed.state.error_message = "Failed to save file";
+                            ed.state.save_confirmation.close();
+                            ed.state.mode = .Normal;
+                            ed.markDirty(.full);
+                            return;
+                        };
+                    } else {
+                        // No filename — cannot save; fall through to error
+                        ed.state.error_message = "No file name — use :w <filename> first";
+                        ed.state.save_confirmation.close();
+                        ed.state.mode = .Normal;
+                        ed.markDirty(.full);
+                        return;
+                    }
+                }
+                ed.state.save_confirmation.close();
+                ed.closeTab();
+            } else if ((event.key == .Char and !event.ctrl and !event.alt and
+                (event.char == 'd' or event.char == 'D')) or
+                matches(event, keys.prompt_submit))
+            {
+                // Discard changes and close
+                ed.state.save_confirmation.close();
+                // Mark buffer clean so closeTab does not attempt a guard check
+                if (ed.currentTab()) |tab| tab.buf.is_dirty = false;
+                ed.closeTab();
+            } else if (matches(event, keys.normal_mode) or
+                (event.key == .Char and !event.ctrl and !event.alt and
+                (event.char == 'n' or event.char == 'N')))
+            {
+                // Cancel — return to Normal mode without closing
+                ed.state.save_confirmation.close();
+                ed.state.mode = .Normal;
                 ed.markDirty(.full);
             }
         },
