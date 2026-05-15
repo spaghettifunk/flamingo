@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const logz = @import("logz");
 const render_mod = @import("renderer/virtual_screen.zig");
 const git_status = @import("git_status.zig");
+const file_icons = @import("file_icons.zig");
 
 pub const FileNode = struct {
     name: []const u8,
@@ -570,29 +571,15 @@ fn matchesQuery(haystack: []const u8, query: []const u8) bool {
 }
 
 fn iconForNode(is_dir: bool, is_expanded: bool, name: []const u8) []const u8 {
-    if (is_dir) return if (is_expanded) " " else " ";
-    const ext = std.fs.path.extension(name);
-    if (std.mem.eql(u8, ext, ".zig")) return "";
-    if (std.mem.eql(u8, ext, ".toml") or std.mem.eql(u8, ext, ".json") or
-        std.mem.eql(u8, ext, ".zon") or std.mem.eql(u8, ext, ".xml"))
-        return "";
-    if (std.mem.eql(u8, ext, ".md")) return "";
-    if (std.ascii.eqlIgnoreCase(name, "LICENSE")) return "";
-    return "";
+    if (is_dir) return file_icons.iconForDirectory(is_expanded);
+    return file_icons.iconForFileName(name);
 }
 
 fn styleForNode(is_dir: bool, name: []const u8, selected: bool, state: ?git_status.FileState) render_mod.RenderStyle {
     if (selected) return .explorer_selected_focus;
     if (state == .ignored) return .explorer_dim;
     if (is_dir) return .explorer_folder;
-    const ext = std.fs.path.extension(name);
-    if (std.mem.eql(u8, ext, ".zig") or std.mem.eql(u8, ext, ".ziggy")) return .explorer_zig;
-    if (std.mem.eql(u8, ext, ".toml") or std.mem.eql(u8, ext, ".json") or
-        std.mem.eql(u8, ext, ".zon") or std.mem.eql(u8, ext, ".xml"))
-        return .explorer_config;
-    if (std.mem.eql(u8, ext, ".md")) return .explorer_md;
-    if (std.ascii.eqlIgnoreCase(name, "LICENSE")) return .explorer_license;
-    return .explorer_file;
+    return file_icons.styleForFileName(name);
 }
 
 fn rowBgStyle(selected: bool) render_mod.RenderStyle {
