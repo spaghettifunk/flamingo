@@ -854,6 +854,56 @@ test "Command: :search enters GlobalSearch mode" {
     try std.testing.expectEqualStrings(root_path, ed.state.global_search.root_path);
 }
 
+test "Command: :help opens help popup and q closes it" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('h'),
+        th.keyChar('e'),
+        th.keyChar('l'),
+        th.keyChar('p'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Help, ed.state.mode);
+    try std.testing.expect(ed.state.help_popup.visible);
+    try std.testing.expect(!ed.state.command_popup.visible);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('q')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.help_popup.visible);
+}
+
+test "Help: Esc closes to dashboard when no tabs are open" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    ed.state.help_popup.open();
+    ed.state.mode = .Help;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
+    try std.testing.expect(!ed.state.help_popup.visible);
+}
+
+test "Help: scrolling clamps" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    ed.state.help_popup.open();
+    ed.state.mode = .Help;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.PageDown)});
+    try std.testing.expect(ed.state.help_popup.scroll_offset > 0);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.PageUp)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.help_popup.scroll_offset);
+}
+
 test "GlobalSearch: Esc closes and typing/backspace refreshes query" {
     const a = std.testing.allocator;
     const io = std.testing.io;

@@ -105,6 +105,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:renameFile <old> <new>` | `:rf` | Rename file from `<old>` to `<new>` |
 | `:deleteFile <path>` | `:df` | Delete file at `<path>` |
 | `:search` | | Open project-wide Global Search |
+| `:help` | | Open the Help popup |
 | `:<number>` | | Jump to line `<number>` |
 | `:goto <number>` | | Jump to line `<number>` |
 | `:line <number>` | | Jump to line `<number>` |
@@ -149,6 +150,14 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | **Previous Result** | `Up` |
 | **Accept Result** | `Enter` |
 | **Cancel Search** | `Esc` |
+
+### Help Popup
+| Action | Keybinding |
+| :--- | :--- |
+| **Open Help** | `:help` |
+| **Close Help** | `q` or `Esc` |
+| **Scroll Help** | `Up / Down` |
+| **Page Help** | `PageUp / PageDown` |
 
 ---
 

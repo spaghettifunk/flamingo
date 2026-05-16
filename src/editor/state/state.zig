@@ -7,6 +7,7 @@ const lsp_state = @import("lsp_ui.zig");
 const command_popup = @import("../command_popup.zig");
 const global_search = @import("../global_search.zig");
 const filesystem_picker = @import("../filesystem_picker.zig");
+const help = @import("../help.zig");
 const prompt_popup = @import("../prompt_popup.zig");
 const save_confirmation = @import("../save_confirmation.zig");
 const buffer = @import("../model/buffer.zig");
@@ -25,6 +26,7 @@ pub const EditorMode = enum {
     Prompt,
     Search,
     GlobalSearch,
+    Help,
     Terminal,
     SaveConfirmation,
 };
@@ -48,6 +50,7 @@ pub const EditorState = struct {
     search_buffer: std.ArrayListUnmanaged(u8) = .empty,
     search_system: ?search.SearchSystem = null,
     global_search: global_search.GlobalSearch = .{},
+    help_popup: help.HelpPopup = .{},
     clipboard: ?[]u8 = null,
     render_dirty: bool = true,
     force_full_render: bool = true,

@@ -481,12 +481,43 @@ fn handleTerminalInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     };
 }
 
+fn handleHelpInput(ed: *editor.Editor, event: terminal.KeyEvent) void {
+    const keys = ed.keys;
+    if (matches(event, keys.normal_mode) or
+        (event.key == .Char and event.char == 'q' and !event.ctrl and !event.alt))
+    {
+        clearPendingNormalSequence(ed);
+        ed.state.help_popup.close();
+        ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+        ed.markDirty(.full);
+    } else if (event.key == .Up and !event.ctrl and !event.alt) {
+        ed.state.help_popup.scrollUp(1);
+        ed.markDirty(.full);
+    } else if (event.key == .Down and !event.ctrl and !event.alt) {
+        ed.state.help_popup.scrollDown(1, ed.helpPopupBodyRows());
+        ed.markDirty(.full);
+    } else if (event.key == .PageUp and !event.ctrl and !event.alt) {
+        const rows = ed.helpPopupBodyRows();
+        ed.state.help_popup.scrollUp(rows);
+        ed.markDirty(.full);
+    } else if (event.key == .PageDown and !event.ctrl and !event.alt) {
+        const rows = ed.helpPopupBodyRows();
+        ed.state.help_popup.scrollDown(rows, rows);
+        ed.markDirty(.full);
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
     }
 
     const keys = ed.keys;
+
+    if (ed.state.mode == .Help) {
+        handleHelpInput(ed, event);
+        return;
+    }
 
     if (matches(event, keys.toggle_terminal)) {
         clearPendingNormalSequence(ed);
@@ -1055,6 +1086,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 try refreshGlobalSearchOrReport(ed);
                 ed.markDirty(.full);
             }
+        },
+        .Help => {
+            handleHelpInput(ed, event);
         },
         .SaveConfirmation => {
             // S / s  → save then close, D / d or Enter → discard, Esc / n → cancel

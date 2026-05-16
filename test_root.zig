@@ -17,6 +17,7 @@ test {
     _ = @import("src/editor/command.zig");
     _ = @import("src/editor/command_popup.zig");
     _ = @import("src/editor/global_search.zig");
+    _ = @import("src/editor/help.zig");
     _ = @import("src/editor/git_status.zig");
     _ = @import("src/editor/model/buffer.zig");
     _ = @import("src/editor/input_router/normal_sequence.zig");

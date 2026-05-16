@@ -18,6 +18,7 @@ const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const keybindings = @import("input_router/keybindings.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
+const help_mod = @import("help.zig");
 const file_icons = @import("file_icons.zig");
 const prompt_popup = @import("prompt_popup.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
@@ -180,6 +181,7 @@ const FilesystemPickerGeometry = struct {
 
 const command_popup_title = " Cmdline ";
 const global_search_popup_title = " Search ";
+const help_popup_title = " Help ";
 const horizontal_line = "─";
 
 const GlobalSearchRenderRow = union(enum) {
@@ -1301,6 +1303,7 @@ pub const Editor = struct {
         const mode_str = switch (self.state.mode) {
             .Command => "COMMAND",
             .GlobalSearch => "GLOBAL SEARCH",
+            .Help => "HELP",
             .FilesystemPicker => "FILES",
             .Prompt => "PROMPT",
             .Insert => "INSERT",
@@ -1324,6 +1327,7 @@ pub const Editor = struct {
             .Command => "COMMAND",
             .Search => "SEARCH",
             .GlobalSearch => "GLOBAL",
+            .Help => "HELP",
             .FilesystemPicker => "FILES",
             .Prompt => "PROMPT",
             .Terminal => "TERM",
@@ -1334,7 +1338,7 @@ pub const Editor = struct {
     fn statusModeStyle(self: *const Editor) render_mod.RenderStyle {
         return switch (self.state.mode) {
             .Insert => .status_mode_insert,
-            .Command, .FilesystemPicker, .Prompt, .Terminal => .status_mode_command,
+            .Command, .FilesystemPicker, .Prompt, .Help, .Terminal => .status_mode_command,
             .Search, .GlobalSearch => .status_mode_search,
             else => .status_mode_normal,
         };
@@ -1343,7 +1347,7 @@ pub const Editor = struct {
     fn statusModeSepStyle(self: *const Editor) render_mod.RenderStyle {
         return switch (self.state.mode) {
             .Insert => .status_sep_insert,
-            .Command, .FilesystemPicker, .Prompt, .Terminal => .status_sep_command,
+            .Command, .FilesystemPicker, .Prompt, .Help, .Terminal => .status_sep_command,
             .Search, .GlobalSearch => .status_sep_search,
             else => .status_sep_normal,
         };
@@ -1371,6 +1375,7 @@ pub const Editor = struct {
     fn statusContext(self: *const Editor) ?[]const u8 {
         if (self.state.mode == .Prompt) return @tagName(self.state.prompt_popup.kind);
         if (self.state.mode == .Command) return "command";
+        if (self.state.mode == .Help) return "help";
         if (self.state.mode == .Search) return "search";
         if (self.state.mode == .GlobalSearch) return "global_search";
         if (self.terminal_panel.visible) return if (self.terminal_panel.focused) "terminal focused" else "terminal";
@@ -1494,13 +1499,13 @@ pub const Editor = struct {
     }
 
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
-        if (event.eql(self.keys.quit)) {
+        if (self.state.mode != .Help and event.eql(self.keys.quit)) {
             self.should_quit = true;
             self.markDirty(.full);
             return;
         }
 
-        if (self.state.lsp_ui.completion_active) {
+        if (self.state.mode != .Help and self.state.lsp_ui.completion_active) {
             if (try self.handleCompletionInput(event)) {
                 self.markDirty(.partial);
                 self.notePendingLspChange();
@@ -2227,6 +2232,49 @@ pub const Editor = struct {
         };
     }
 
+    fn helpPopupGeometry(self: *const Editor) ?FilesystemPickerGeometry {
+        if (!self.state.help_popup.visible or self.width < 20 or self.height < 7) return null;
+
+        const viewport = self.bufferViewportGeometry();
+        if (viewport.width < 20) return null;
+
+        const right_margin: usize = if (viewport.width >= 34) 2 else 0;
+        const available_width = viewport.width -| right_margin;
+        if (available_width < 20) return null;
+        const desired_width: usize = 56;
+        const max_width: usize = 72;
+        const panel_width = if (available_width >= 28)
+            @min(@min(desired_width, max_width), available_width)
+        else
+            available_width;
+        if (panel_width < 20) return null;
+
+        const status_row = self.statusRowIndex();
+        if (status_row == 0) return null;
+        const bottom_row = status_row - 1;
+        const usable_height = bottom_row + 1;
+        if (usable_height < 6) return null;
+
+        const content_height = self.state.help_popup.totalRows() + 4;
+        const target_height = @min(@max(@as(usize, 8), (usable_height * 65) / 100), @as(usize, 24));
+        const panel_height = @min(usable_height, @min(content_height, target_height));
+        if (panel_height < 6) return null;
+
+        const viewport_col = viewport.start_col -| 1;
+        const col = viewport_col + viewport.width - panel_width - right_margin;
+        return .{
+            .row = bottom_row + 1 - panel_height,
+            .col = col,
+            .width = panel_width,
+            .height = panel_height,
+        };
+    }
+
+    pub fn helpPopupBodyRows(self: *const Editor) usize {
+        const geom = self.helpPopupGeometry() orelse return 1;
+        return @max(@as(usize, 1), geom.height -| 4);
+    }
+
     fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
         return switch (kind) {
             .explorer_new_file => "Enter create  Backspace edit  Esc cancel",
@@ -2274,7 +2322,9 @@ pub const Editor = struct {
         var status_buf: [160]u8 = undefined;
         const ctx = self.buildRenderContext(&status_buf);
 
-        if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt or self.state.mode == .FilesystemPicker) {
+        if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt or self.state.mode == .FilesystemPicker or
+            (self.state.mode == .Help and self.state.tabs.items.len == 0))
+        {
             self.state.dash.renderToScreen(&self.renderer.screen);
         } else {
             self.renderVirtualExplorer();
@@ -2314,6 +2364,7 @@ pub const Editor = struct {
         self.renderVirtualFilesystemPickerPopup();
         self.renderVirtualPromptPopup();
         self.renderVirtualSaveConfirmationPopup();
+        self.renderVirtualHelpPopup();
         self.renderVirtualCompletionMenu();
         if (self.active_keypress_trace) |trace| trace.popup_ns += perf.elapsedNs(popup_start);
         const status_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
@@ -2588,6 +2639,65 @@ pub const Editor = struct {
             col = geom.col + 2;
             self.writeVirtualTruncatedCells(row, &col, inner_end, line, .popup_footer, false);
         }
+
+        self.drawPickerBottom(geom.row + geom.height - 1, geom.col, geom.width, .command_popup_border);
+    }
+
+    fn helpFooter(width: usize) []const u8 {
+        return if (width < 46)
+            "q/Esc close  Up/Down scroll"
+        else
+            "q/Esc close  Up/Down scroll  PgUp/PgDn page";
+    }
+
+    fn renderVirtualHelpPopup(self: *Editor) void {
+        if (!self.state.help_popup.visible) return;
+        const geom = self.helpPopupGeometry() orelse return;
+        const body_rows = @max(@as(usize, 1), geom.height -| 4);
+        const inner_end = geom.col + geom.width - 1;
+        self.state.help_popup.clampScroll(body_rows);
+
+        self.drawPickerTop(geom, help_popup_title, .command_popup_border);
+
+        const key_width: usize = if (geom.width < 42) 10 else 16;
+        var body_row: usize = geom.row + 1;
+        for (0..body_rows) |offset| {
+            const source_row = self.state.help_popup.scroll_offset + offset;
+            const row = body_row + offset;
+            const help_row = self.state.help_popup.rowAt(source_row);
+            switch (help_row orelse {
+                self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
+                continue;
+            }) {
+                .category => |category| {
+                    self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_selected_focus);
+                    var col = geom.col + 2;
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, category.title(), .explorer_selected_focus, false);
+                },
+                .entry => |entry| {
+                    self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
+                    var col = geom.col + 2;
+                    const key_text = help_mod.keyText(entry, self.config.keybindings);
+                    const key_start = col;
+                    self.writeVirtualTruncatedCells(row, &col, @min(inner_end, key_start + key_width), key_text, .command_popup_prompt, false);
+                    if (col < key_start + key_width and col < inner_end) {
+                        while (col < key_start + key_width and col < inner_end) : (col += 1) {
+                            self.renderer.screen.set(row, col, ' ', .explorer_bg);
+                        }
+                    }
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, "  ", .explorer_bg, false);
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, entry.description, .command_popup, false);
+                },
+            }
+        }
+        body_row += body_rows;
+
+        self.drawPickerSeparator(body_row, geom.col, geom.width, .command_popup_border);
+        body_row += 1;
+
+        self.drawPickerRow(body_row, geom.col, geom.width, .command_popup_border, .popup_footer);
+        var col = geom.col + 2;
+        self.writeVirtualTruncatedCells(body_row, &col, inner_end, helpFooter(geom.width), .popup_footer, false);
 
         self.drawPickerBottom(geom.row + geom.height - 1, geom.col, geom.width, .command_popup_border);
     }
@@ -3044,7 +3154,7 @@ pub const Editor = struct {
             self.renderer.screen.setCursor(self.statusTerminalRow(), @min(self.width, 12 + self.state.command_buffer.items.len));
             return;
         }
-        if (self.state.mode == .FilesystemPicker or self.state.mode == .Prompt or
+        if (self.state.mode == .FilesystemPicker or self.state.mode == .Prompt or self.state.mode == .Help or
             self.state.mode == .Dashboard or self.state.mode == .SaveConfirmation)
         {
             self.renderer.screen.hideCursor();
@@ -3368,6 +3478,58 @@ test "Editor status omits git branch outside repository and keeps error" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "") == null);
 }
 
+test "help popup geometry anchors bottom-right" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.help_popup.open();
+    ed.state.mode = .Help;
+
+    const geom = ed.helpPopupGeometry() orelse return error.ExpectedHelpGeometry;
+    try std.testing.expectEqual(@as(usize, 56), geom.width);
+    try std.testing.expectEqual(@as(usize, 22), geom.col);
+    try std.testing.expectEqual(ed.statusRowIndex() - 1, geom.row + geom.height - 1);
+}
+
+test "help popup geometry stays inside narrow viewport" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+
+    ed.width = 30;
+    ed.height = 10;
+    ed.state.help_popup.open();
+    ed.state.mode = .Help;
+
+    const geom = ed.helpPopupGeometry() orelse return error.ExpectedHelpGeometry;
+    try std.testing.expect(geom.width <= ed.width);
+    try std.testing.expect(geom.col + geom.width <= ed.width);
+    try std.testing.expect(geom.row + geom.height <= ed.statusRowIndex());
+    try std.testing.expect(ed.helpPopupBodyRows() > 0);
+}
+
+test "virtual renderer includes help popup content" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.help_popup.open();
+    ed.state.mode = .Help;
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+    try ed.renderBenchmarkFrame(&out.writer);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Help") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "Modes") != null);
+}
+
 test "Editor discards stale syntax parse results" {
     try logger.init(std.testing.io, std.testing.allocator, true);
     defer logger.shutdown() catch {};
@@ -3530,6 +3692,7 @@ test "movement coalescing rejects prompt and overlay modes" {
         .Prompt,
         .Search,
         .GlobalSearch,
+        .Help,
         .Terminal,
     };
 
@@ -3659,7 +3822,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Terminal, .SaveConfirmation };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Help, .Terminal, .SaveConfirmation };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());

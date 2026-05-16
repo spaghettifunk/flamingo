@@ -125,6 +125,12 @@ test "CommandPopup prefix suggestions" {
 
     popup.close();
     try popup.open(allocator);
+    try popup.appendChar(allocator, 'h');
+    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
+    try std.testing.expectEqual(cmd.Command.help, popup.suggestions.items[0].command);
+
+    popup.close();
+    try popup.open(allocator);
     try popup.appendChar(allocator, 'n');
     try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
     try std.testing.expectEqual(cmd.Command.new_file, popup.suggestions.items[0].command);
