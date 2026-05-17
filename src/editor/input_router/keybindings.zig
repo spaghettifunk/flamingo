@@ -1,6 +1,12 @@
 const config = @import("../../config.zig");
 const terminal = @import("../../terminal.zig");
 
+// Legacy flat [keybindings] compatibility view.
+//
+// New command-style input resolution uses src/editor/keybindings.zig's
+// Registry. This struct is retained for the migration window because some
+// runtime optimization paths and compatibility fallbacks still need the old
+// single-chord field view while flat config is supported.
 pub const ResolvedKeybindings = struct {
     new_file: terminal.KeyEvent,
     open_file: terminal.KeyEvent,

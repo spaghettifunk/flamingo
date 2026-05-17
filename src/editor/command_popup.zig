@@ -1,11 +1,25 @@
 const std = @import("std");
-const cmd = @import("command.zig");
+const commands = @import("commands.zig");
 
 pub const CommandSuggestion = struct {
-    command: cmd.Command,
+    meta: *const commands.CommandMeta,
+    command_name: []const u8,
+    is_alias: bool = false,
 
     pub fn name(self: CommandSuggestion) []const u8 {
-        return self.command.name();
+        return self.command_name;
+    }
+
+    pub fn description(self: CommandSuggestion) []const u8 {
+        return self.meta.short_description;
+    }
+
+    pub fn commandId(self: CommandSuggestion) commands.CommandId {
+        return self.meta.id;
+    }
+
+    pub fn displayText(self: CommandSuggestion, buf: []u8) []const u8 {
+        return std.fmt.bufPrint(buf, "{s:<12} {s}", .{ self.command_name, self.description() }) catch self.command_name;
     }
 };
 
@@ -51,15 +65,22 @@ pub const CommandPopup = struct {
 
     pub fn updateSuggestions(self: *CommandPopup, allocator: std.mem.Allocator) !void {
         self.suggestions.clearRetainingCapacity();
-        const prefix = self.commandPrefix();
+        const prefix = commandSearchPrefix(self.commandPrefix());
         if (prefix.len == 0) {
             self.selected_index = null;
             return;
         }
 
-        for (cmd.all) |command| {
-            if (std.mem.startsWith(u8, command.name(), prefix)) {
-                try self.suggestions.append(allocator, .{ .command = command });
+        for (commands.commandPopupVisible()) |*meta| {
+            for (meta.command_names) |name| {
+                if (std.mem.startsWith(u8, name, prefix)) {
+                    try self.suggestions.append(allocator, .{ .meta = meta, .command_name = name });
+                }
+            }
+            for (meta.aliases) |alias| {
+                if (std.mem.startsWith(u8, alias, prefix)) {
+                    try self.suggestions.append(allocator, .{ .meta = meta, .command_name = alias, .is_alias = true });
+                }
             }
         }
         self.selected_index = if (self.suggestions.items.len > 0) 0 else null;
@@ -104,6 +125,18 @@ pub const CommandPopup = struct {
     }
 };
 
+fn commandSearchPrefix(prefix: []const u8) []const u8 {
+    if (prefix.len > 0 and prefix[0] == ':') return prefix[1..];
+    return prefix;
+}
+
+fn expectSuggestionNames(actual: []const CommandSuggestion, expected: []const []const u8) !void {
+    try std.testing.expectEqual(expected.len, actual.len);
+    for (expected, 0..) |name, idx| {
+        try std.testing.expectEqualStrings(name, actual[idx].name());
+    }
+}
+
 test "CommandPopup prefix suggestions" {
     const allocator = std.testing.allocator;
     var popup = CommandPopup{};
@@ -112,40 +145,82 @@ test "CommandPopup prefix suggestions" {
     try popup.open(allocator);
     try popup.appendChar(allocator, 'w');
 
-    try std.testing.expectEqual(@as(usize, 3), popup.suggestions.items.len);
-    try std.testing.expectEqual(cmd.Command.write, popup.suggestions.items[0].command);
-    try std.testing.expectEqual(cmd.Command.write_all, popup.suggestions.items[1].command);
-    try std.testing.expectEqual(cmd.Command.write_quit, popup.suggestions.items[2].command);
+    try expectSuggestionNames(popup.suggestions.items, &.{ "w", "wall", "wa", "wq" });
 
     popup.close();
     try popup.open(allocator);
     try popup.appendChar(allocator, 's');
-    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
-    try std.testing.expectEqual(cmd.Command.search, popup.suggestions.items[0].command);
+    try expectSuggestionNames(popup.suggestions.items, &.{"search"});
 
     popup.close();
     try popup.open(allocator);
     try popup.appendChar(allocator, 'h');
-    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
-    try std.testing.expectEqual(cmd.Command.help, popup.suggestions.items[0].command);
+    try expectSuggestionNames(popup.suggestions.items, &.{"help"});
 
     popup.close();
     try popup.open(allocator);
     try popup.appendChar(allocator, 'n');
-    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
-    try std.testing.expectEqual(cmd.Command.new_file, popup.suggestions.items[0].command);
+    try expectSuggestionNames(popup.suggestions.items, &.{ "newFile", "nf" });
 
     popup.close();
     try popup.open(allocator);
     try popup.appendChar(allocator, 'r');
-    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
-    try std.testing.expectEqual(cmd.Command.rename_file, popup.suggestions.items[0].command);
+    try expectSuggestionNames(popup.suggestions.items, &.{ "renameFile", "rf" });
 
     popup.close();
     try popup.open(allocator);
     try popup.appendChar(allocator, 'd');
-    try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
-    try std.testing.expectEqual(cmd.Command.delete_file, popup.suggestions.items[0].command);
+    try expectSuggestionNames(popup.suggestions.items, &.{ "deleteFile", "df" });
+}
+
+test "CommandPopup suggestions include aliases and metadata descriptions" {
+    const allocator = std.testing.allocator;
+    var popup = CommandPopup{};
+    defer popup.deinit(allocator);
+
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'q');
+    try expectSuggestionNames(popup.suggestions.items, &.{ "q", "qall", "qa", "q!" });
+
+    const qall = popup.suggestions.items[1];
+    try std.testing.expectEqual(commands.CommandId.app_quit_all, qall.commandId());
+    try std.testing.expect(!qall.is_alias);
+    try std.testing.expectEqualStrings(commands.metadata(.app_quit_all).short_description, qall.description());
+    try std.testing.expect(popup.suggestions.items[2].is_alias);
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'q');
+    try popup.appendChar(allocator, 'a');
+    try expectSuggestionNames(popup.suggestions.items, &.{ "qall", "qa" });
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'n');
+    try popup.appendChar(allocator, 'f');
+    try expectSuggestionNames(popup.suggestions.items, &.{"nf"});
+}
+
+test "CommandPopup suggestions are metadata-backed and hide non-popup commands" {
+    const allocator = std.testing.allocator;
+    var popup = CommandPopup{};
+    defer popup.deinit(allocator);
+
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'g');
+    try std.testing.expectEqual(@as(usize, 0), popup.suggestions.items.len);
+    try std.testing.expect(commands.metadata(.navigation_goto_line).show_in_command_popup == false);
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, ':');
+    try popup.appendChar(allocator, 'h');
+    try expectSuggestionNames(popup.suggestions.items, &.{"help"});
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'q');
+    try expectSuggestionNames(popup.suggestions.items, &.{ "q", "qall", "qa", "q!" });
 }
 
 test "CommandPopup tab moves selection without changing input" {
@@ -160,6 +235,10 @@ test "CommandPopup tab moves selection without changing input" {
     try std.testing.expectEqual(@as(?usize, 1), popup.selected_index);
     popup.tabComplete();
     try std.testing.expectEqual(@as(?usize, 2), popup.selected_index);
+    popup.tabComplete();
+    try std.testing.expectEqual(@as(?usize, 3), popup.selected_index);
+    popup.tabComplete();
+    try std.testing.expectEqual(@as(?usize, 0), popup.selected_index);
     try popup.appendChar(allocator, '!');
     try std.testing.expectEqualStrings("w!", popup.input.items);
 }
@@ -175,7 +254,25 @@ test "CommandPopup backspace recomputes suggestions" {
     try std.testing.expectEqual(@as(usize, 1), popup.suggestions.items.len);
 
     try popup.backspace(allocator);
-    try std.testing.expectEqual(@as(usize, 3), popup.suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 4), popup.suggestions.items.len);
+}
+
+test "CommandPopup accepts canonical and alias suggestions" {
+    const allocator = std.testing.allocator;
+    var popup = CommandPopup{};
+    defer popup.deinit(allocator);
+
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'h');
+    try popup.acceptSelected(allocator);
+    try std.testing.expectEqualStrings("help", popup.input.items);
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'n');
+    popup.selectNext();
+    try popup.acceptSelected(allocator);
+    try std.testing.expectEqualStrings("nf", popup.input.items);
 }
 
 test "CommandPopup close clears state" {

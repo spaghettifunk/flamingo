@@ -1321,6 +1321,20 @@ test "command line visible commands preserve current popup order" {
     try std.testing.expectEqual(CommandId.navigation_goto_line, command_line_visible[command_line_visible.len - 1].id);
 }
 
+test "command popup visible commands have command-line spellings" {
+    for (commandPopupVisible()) |meta| {
+        try std.testing.expect(meta.show_in_command_popup);
+        try std.testing.expect(meta.command_names.len > 0);
+
+        for (meta.command_names) |name| {
+            try std.testing.expectEqual(meta.id, commandByCommandLineName(name).?);
+        }
+        for (meta.aliases) |alias| {
+            try std.testing.expectEqual(meta.id, commandByCommandLineName(alias).?);
+        }
+    }
+}
+
 test "goto line metadata documents command line forms" {
     const meta = metadata(.navigation_goto_line);
     try std.testing.expectEqual(CommandCategory.navigation, meta.category);

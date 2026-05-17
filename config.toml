@@ -101,6 +101,10 @@ completion_cancel = "esc"
 # [keybindings.normal.unbind]
 # keys = ["ctrl+q", "ctrl+w"]
 #
+# The :help popup reflects resolved defaults, overrides, and unbinds. The
+# command popup uses command metadata for command names, aliases, and
+# descriptions.
+#
 # Printable editor text, prompt text, and terminal PTY input are raw input,
 # not command keybindings.
 

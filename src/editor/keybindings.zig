@@ -595,6 +595,62 @@ pub fn parseKeySequence(text: []const u8) KeyParseError!KeySequence {
     return sequence;
 }
 
+fn appendFormatText(buf: []u8, index: *usize, text: []const u8) void {
+    if (index.* >= buf.len) return;
+    const len = @min(text.len, buf.len - index.*);
+    @memcpy(buf[index.* .. index.* + len], text[0..len]);
+    index.* += len;
+}
+
+fn keyName(chord: KeyChord) []const u8 {
+    return switch (chord.key) {
+        .None => "none",
+        .Backspace => "backspace",
+        .Enter => "enter",
+        .Esc => "esc",
+        .Up => "up",
+        .Down => "down",
+        .Right => "right",
+        .Left => "left",
+        .Delete => "delete",
+        .Home => "home",
+        .End => "end",
+        .PageUp => "pageup",
+        .PageDown => "pagedown",
+        .Char => switch (chord.char) {
+            '\t' => "tab",
+            ' ' => "space",
+            else => "",
+        },
+    };
+}
+
+pub fn formatKeySequence(sequence: KeySequence, buf: []u8) []const u8 {
+    var index: usize = 0;
+    for (0..sequence.len) |i| {
+        const chord = sequence.chords[i];
+        if (i > 0) {
+            const previous = sequence.chords[i - 1];
+            const join_plain_chars = previous.key == .Char and previous.char != '\t' and previous.char != ' ' and !previous.ctrl and !previous.alt and !previous.shift and
+                chord.key == .Char and chord.char != '\t' and chord.char != ' ' and !chord.ctrl and !chord.alt and !chord.shift;
+            if (!join_plain_chars) appendFormatText(buf, &index, " ");
+        }
+        if (chord.ctrl) appendFormatText(buf, &index, "ctrl+");
+        if (chord.alt) appendFormatText(buf, &index, "alt+");
+        if (chord.shift) appendFormatText(buf, &index, "shift+");
+        const name = keyName(chord);
+        if (name.len > 0) {
+            appendFormatText(buf, &index, name);
+        } else if (chord.key == .Char) {
+            if (index < buf.len) {
+                buf[index] = chord.char;
+                index += 1;
+            }
+        }
+    }
+    return buf[0..index];
+}
+
 const default_bindings = [_]Binding{
     // Global controls handled before most mode-specific dispatch.
     .{ .context = .global, .sequence = ctrlChar('q'), .command = .app_quit_flamingo },
@@ -869,6 +925,19 @@ test "parseKeySequence supports plain modifier and special key forms" {
     try std.testing.expect((try parseKeySequence("ctrl+x ctrl+s")).eql(KeySequence.fromChords(&.{ .{ .key = .Char, .char = 'x', .ctrl = true }, .{ .key = .Char, .char = 's', .ctrl = true } })));
     try std.testing.expectError(error.UnknownKey, parseKeySequence("ctrl+hyperdrive"));
     try std.testing.expectError(error.InvalidModifier, parseKeySequence("super+x"));
+}
+
+test "formatKeySequence emits config-style labels" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("gg", formatKeySequence(charSeq("gg"), &buf));
+    try std.testing.expectEqualStrings("G", formatKeySequence(keyChar('G'), &buf));
+    try std.testing.expectEqualStrings("ctrl+s", formatKeySequence(ctrlChar('s'), &buf));
+    try std.testing.expectEqualStrings("ctrl+shift+k", formatKeySequence(ctrlShiftChar('k'), &buf));
+    try std.testing.expectEqualStrings("alt+delete", formatKeySequence(altKey(.Delete), &buf));
+    try std.testing.expectEqualStrings("ctrl+alt+up", formatKeySequence(ctrlAltKey(.Up), &buf));
+    try std.testing.expectEqualStrings("shift+tab", formatKeySequence(KeySequence.fromChord(.{ .key = .Char, .char = '\t', .shift = true }), &buf));
+    try std.testing.expectEqualStrings("enter", formatKeySequence(keySpecial(.Enter), &buf));
+    try std.testing.expectEqualStrings("space", formatKeySequence(keyChar(' '), &buf));
 }
 
 test "default registry resolves exact prefix and no-match results" {

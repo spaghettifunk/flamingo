@@ -201,4 +201,6 @@ keys = ["ctrl+w"]
 
 Supported key spellings include plain sequences like `gg` and `zM`, modifiers like `ctrl+s`, `C-S-k`, `alt+delete`, `shift+tab`, and special keys like `enter`, `esc`, `tab`, `backspace`, arrows, `pageup`, `pagedown`, `home`, `end`, and `space`.
 
-The legacy flat `[keybindings]` fields remain supported for now, but the context tables are the preferred schema. Printable editor text, prompt text, and terminal PTY input are raw input rather than command keybindings.
+The legacy flat `[keybindings]` fields remain supported for one migration window, but the context tables are the preferred schema. New context-specific bindings win when both schemas configure the same effective shortcut. Printable editor text, prompt text, and terminal PTY input are raw input rather than command keybindings.
+
+The `:help` popup is generated from the same command metadata and resolved keybinding registry, so overrides and unbinds are reflected there automatically. The command popup also uses command metadata for names, aliases, and descriptions.

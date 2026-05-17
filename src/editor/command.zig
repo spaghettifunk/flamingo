@@ -2,6 +2,7 @@ const std = @import("std");
 const editor = @import("editor.zig");
 const navigation = @import("navigation.zig");
 const fs_ops = @import("filesystem_ops.zig");
+const commands = @import("commands.zig");
 
 pub const Command = enum {
     quit,
@@ -16,57 +17,54 @@ pub const Command = enum {
     delete_file,
     new_file,
 
-    pub fn name(self: Command) []const u8 {
+    pub fn commandId(self: Command) commands.CommandId {
         return switch (self) {
-            .quit => "q",
-            .quit_all => "qall",
-            .force_quit => "q!",
-            .write => "w",
-            .write_all => "wall",
-            .write_quit => "wq",
-            .search => "search",
-            .help => "help",
-            .rename_file => "renameFile",
-            .delete_file => "deleteFile",
-            .new_file => "newFile",
+            .quit => .app_quit,
+            .quit_all => .app_quit_all,
+            .force_quit => .app_force_quit_tab,
+            .write => .file_write,
+            .write_all => .file_write_all,
+            .write_quit => .file_write_quit,
+            .search => .command_search_open,
+            .help => .help_open,
+            .rename_file => .file_rename,
+            .delete_file => .file_delete,
+            .new_file => .file_new,
         };
+    }
+
+    pub fn name(self: Command) []const u8 {
+        const meta = commands.metadata(self.commandId());
+        return meta.command_names[0];
     }
 
     pub fn alias(self: Command) ?[]const u8 {
-        return switch (self) {
-            .quit_all => "qa",
-            .write_all => "wa",
-            .rename_file => "rf",
-            .delete_file => "df",
-            .new_file => "nf",
-            else => null,
-        };
+        const meta = commands.metadata(self.commandId());
+        return if (meta.aliases.len > 0) meta.aliases[0] else null;
     }
 
     pub fn fromString(value: []const u8) ?Command {
-        for (all) |command| {
-            if (std.mem.eql(u8, command.name(), value)) return command;
-            if (command.alias()) |a| {
-                if (std.mem.eql(u8, a, value)) return command;
-            }
-        }
-        return null;
+        const id = commands.commandByCommandLineName(value) orelse return null;
+        return legacyCommandFromCommandId(id);
     }
 };
 
-pub const all = [_]Command{
-    .quit,
-    .quit_all,
-    .force_quit,
-    .write,
-    .write_all,
-    .write_quit,
-    .search,
-    .help,
-    .rename_file,
-    .delete_file,
-    .new_file,
-};
+fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
+    return switch (id) {
+        .app_quit => .quit,
+        .app_quit_all => .quit_all,
+        .app_force_quit_tab => .force_quit,
+        .file_write => .write,
+        .file_write_all => .write_all,
+        .file_write_quit => .write_quit,
+        .command_search_open => .search,
+        .help_open => .help,
+        .file_rename => .rename_file,
+        .file_delete => .delete_file,
+        .file_new => .new_file,
+        else => null,
+    };
+}
 
 fn nextArg(it: *std.mem.SplitIterator(u8, .scalar)) ?[]const u8 {
     while (it.next()) |arg| {
@@ -290,4 +288,22 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.new_file, Command.fromString("newFile").?);
     try std.testing.expectEqual(Command.new_file, Command.fromString("nf").?);
     try std.testing.expect(Command.fromString("nope") == null);
+}
+
+test "Command parsing agrees with command metadata for executable colon commands" {
+    for (commands.commandPopupVisible()) |meta| {
+        for (meta.command_names) |name| {
+            const parsed = Command.fromString(name) orelse return error.TestExpectedEqual;
+            try std.testing.expectEqual(meta.id, parsed.commandId());
+        }
+        for (meta.aliases) |alias_name| {
+            const parsed = Command.fromString(alias_name) orelse return error.TestExpectedEqual;
+            try std.testing.expectEqual(meta.id, parsed.commandId());
+        }
+    }
+
+    try std.testing.expect(Command.fromString("goto") == null);
+    try std.testing.expect(Command.fromString("line") == null);
+    try std.testing.expect(Command.fromString("<number>") == null);
+    try std.testing.expect(Command.fromString("mode.normal") == null);
 }

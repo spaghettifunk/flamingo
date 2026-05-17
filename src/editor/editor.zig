@@ -1540,6 +1540,9 @@ pub const Editor = struct {
         if (self.registryCommandMatches(context, event, id)) {
             return true;
         }
+        // Temporary migration-window fallback for legacy flat [keybindings].
+        // Command-style resolution goes through keybinding_registry first; this
+        // only keeps older direct field behavior alive while flat config exists.
         return !keyMatchesDefault(legacy_key, default_text) and event.eql(legacy_key);
     }
 
@@ -2349,7 +2352,7 @@ pub const Editor = struct {
         const usable_height = bottom_row + 1;
         if (usable_height < 6) return null;
 
-        const content_height = self.state.help_popup.totalRows() + 4;
+        const content_height = self.state.help_popup.totalRows(&self.keybinding_registry) + 4;
         const target_height = @min(@max(@as(usize, 8), (usable_height * 65) / 100), @as(usize, 24));
         const panel_height = @min(usable_height, @min(content_height, target_height));
         if (panel_height < 6) return null;
@@ -2543,7 +2546,8 @@ pub const Editor = struct {
             else
                 .command_popup;
             self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, style);
-            const suggestion = popup.suggestions.items[i].name();
+            var suggestion_buf: [128]u8 = undefined;
+            const suggestion = popup.suggestions.items[i].displayText(&suggestion_buf);
             const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
             self.renderer.screen.writeText(row, geom.col + 2, shown, style);
         }
@@ -2749,16 +2753,16 @@ pub const Editor = struct {
         const geom = self.helpPopupGeometry() orelse return;
         const body_rows = @max(@as(usize, 1), geom.height -| 4);
         const inner_end = geom.col + geom.width - 1;
-        self.state.help_popup.clampScroll(body_rows);
+        self.state.help_popup.clampScroll(&self.keybinding_registry, body_rows);
 
         self.drawPickerTop(geom, help_popup_title, .command_popup_border);
 
-        const key_width: usize = if (geom.width < 42) 10 else 16;
+        const key_width: usize = if (geom.width < 42) 14 else 24;
         var body_row: usize = geom.row + 1;
         for (0..body_rows) |offset| {
             const source_row = self.state.help_popup.scroll_offset + offset;
             const row = body_row + offset;
-            const help_row = self.state.help_popup.rowAt(source_row);
+            const help_row = self.state.help_popup.rowAt(&self.keybinding_registry, source_row);
             switch (help_row orelse {
                 self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
                 continue;
@@ -2766,12 +2770,15 @@ pub const Editor = struct {
                 .category => |category| {
                     self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_selected_focus);
                     var col = geom.col + 2;
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, category.title(), .explorer_selected_focus, false);
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, help_mod.categoryTitle(category), .explorer_selected_focus, false);
                 },
-                .entry => |entry| {
+                .command => |command| {
                     self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
                     var col = geom.col + 2;
-                    const key_text = help_mod.keyText(entry, self.config.keybindings);
+                    var key_buf: [192]u8 = undefined;
+                    var description_buf: [256]u8 = undefined;
+                    const key_text = help_mod.formatCommandKeys(command.meta, &self.keybinding_registry, &key_buf);
+                    const description = help_mod.formatCommandDescription(command.meta, &description_buf);
                     const key_start = col;
                     self.writeVirtualTruncatedCells(row, &col, @min(inner_end, key_start + key_width), key_text, .command_popup_prompt, false);
                     if (col < key_start + key_width and col < inner_end) {
@@ -2780,7 +2787,7 @@ pub const Editor = struct {
                         }
                     }
                     self.writeVirtualTruncatedCells(row, &col, inner_end, "  ", .explorer_bg, false);
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, entry.description, .command_popup, false);
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, description, .command_popup, false);
                 },
             }
         }

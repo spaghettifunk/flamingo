@@ -1048,7 +1048,7 @@ test "Command popup: typing and backspace update suggestions" {
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
     try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
-    try std.testing.expectEqual(@as(usize, 3), ed.state.command_popup.suggestions.items.len);
+    try std.testing.expectEqual(@as(usize, 4), ed.state.command_popup.suggestions.items.len);
 }
 
 test "Command popup: tab moves suggestion selection without editing input" {
@@ -1067,6 +1067,10 @@ test "Command popup: tab moves suggestion selection without editing input" {
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
     try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
     try std.testing.expectEqual(@as(?usize, 2), ed.state.command_popup.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
+    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(?usize, 3), ed.state.command_popup.selected_index);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
     try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);

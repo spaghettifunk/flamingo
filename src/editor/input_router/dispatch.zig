@@ -317,6 +317,10 @@ fn matchesRegistryOrLegacyCommand(
             if (resolved == id) return true;
         }
     }
+    // Temporary migration-window fallback for legacy flat [keybindings] fields.
+    // The registry path above remains the canonical source for defaults and
+    // context-specific config; this branch only preserves old direct field
+    // behavior until flat keybindings are removed.
     return !keyMatchesDefault(legacy_key, default_text) and matches(event, legacy_key);
 }
 
@@ -1294,7 +1298,7 @@ fn executeHelpActionCommand(ed: *editor.Editor, command: commands.CommandId) voi
             ed.markDirty(.full);
         },
         .help_scroll_down => {
-            ed.state.help_popup.scrollDown(1, ed.helpPopupBodyRows());
+            ed.state.help_popup.scrollDown(&ed.keybinding_registry, 1, ed.helpPopupBodyRows());
             ed.markDirty(.full);
         },
         .help_page_up => {
@@ -1304,7 +1308,7 @@ fn executeHelpActionCommand(ed: *editor.Editor, command: commands.CommandId) voi
         },
         .help_page_down => {
             const rows = ed.helpPopupBodyRows();
-            ed.state.help_popup.scrollDown(rows, rows);
+            ed.state.help_popup.scrollDown(&ed.keybinding_registry, rows, rows);
             ed.markDirty(.full);
         },
         else => unreachable,
