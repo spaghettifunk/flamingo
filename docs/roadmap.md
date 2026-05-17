@@ -55,7 +55,7 @@ A set of todos without order or priority. Simply grouped by category
 
 ## New Features
 
-- [ ] implement a "Help" popup like LazyVim by doing `:help` showing what the editor can do
+- [x] implement a "Help" popup like LazyVim by doing `:help` showing what the editor can do
 - [x] enable the terminal in the editor. It can be a toggle to show/hide the terminal
 - [x] implement a multi-key sequences
 - [x] implement global search

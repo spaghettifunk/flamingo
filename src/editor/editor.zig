@@ -6,6 +6,9 @@ const buffer = @import("model/buffer.zig");
 const input = @import("input_router/router.zig");
 const search = @import("search.zig");
 const global_search = @import("global_search.zig");
+const commands = @import("commands.zig");
+const command_keybindings = @import("keybindings.zig");
+const normal_sequence = @import("input_router/normal_sequence.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
@@ -234,6 +237,7 @@ const KeypressProfilePosition = struct {
 pub const Editor = struct {
     config: config.Config,
     keys: ResolvedKeybindings,
+    keybinding_registry: command_keybindings.Registry,
     allocator: std.mem.Allocator,
     io: std.Io,
     state: state_mod.EditorState,
@@ -261,12 +265,17 @@ pub const Editor = struct {
     pub fn initWithRuntimeOptions(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, runtime_options: runtime_mod.EditorRuntime.Options) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
+        var keybinding_diagnostics = command_keybindings.BuildDiagnostics{};
+        defer keybinding_diagnostics.deinit(allocator);
+        var keybinding_registry = try config.buildKeybindingRegistry(allocator, &cfg, &keybinding_diagnostics);
+        errdefer keybinding_registry.deinit(allocator);
 
         return Editor{
             .allocator = allocator,
             .io = io,
             .config = cfg,
             .keys = ResolvedKeybindings.init(cfg.keybindings),
+            .keybinding_registry = keybinding_registry,
             .state = state_mod.EditorState.init(allocator),
             .terminal_panel = terminal_panel_mod.TerminalPanel.init(allocator),
             .runtime = runtime,
@@ -280,6 +289,7 @@ pub const Editor = struct {
         self.is_deinitialized = true;
 
         self.terminal_panel.deinit();
+        self.keybinding_registry.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
         self.state.deinit(self.allocator);
         self.renderer.deinit(self.allocator);
@@ -292,6 +302,11 @@ pub const Editor = struct {
 
     pub fn refreshKeybindings(self: *Editor) void {
         self.keys = ResolvedKeybindings.init(self.config.keybindings);
+        var diagnostics = command_keybindings.BuildDiagnostics{};
+        defer diagnostics.deinit(self.allocator);
+        const rebuilt = config.buildKeybindingRegistry(self.allocator, &self.config, &diagnostics) catch return;
+        self.keybinding_registry.deinit(self.allocator);
+        self.keybinding_registry = rebuilt;
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
@@ -1498,8 +1513,90 @@ pub const Editor = struct {
         return @min(@as(usize, 100), ((row + 1) * 100) / total_lines);
     }
 
+    fn keyMatchesDefault(actual: terminal.KeyEvent, default_text: []const u8) bool {
+        return actual.eql(terminal.parseKeyChord(default_text));
+    }
+
+    fn resolveDefaultContextCommand(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
+        const result = self.keybinding_registry.resolve(context, command_keybindings.KeySequence.fromEvent(event));
+        return switch (result) {
+            .command => |command| command,
+            else => null,
+        };
+    }
+
+    fn registryCommandMatches(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent, id: commands.CommandId) bool {
+        return (self.resolveDefaultContextCommand(context, event) orelse return false) == id;
+    }
+
+    fn matchesRegistryOrLegacyCommand(
+        self: *const Editor,
+        event: terminal.KeyEvent,
+        context: commands.CommandContext,
+        id: commands.CommandId,
+        legacy_key: terminal.KeyEvent,
+        default_text: []const u8,
+    ) bool {
+        if (self.registryCommandMatches(context, event, id)) {
+            return true;
+        }
+        return !keyMatchesDefault(legacy_key, default_text) and event.eql(legacy_key);
+    }
+
+    fn quitRequestedByEvent(self: *const Editor, event: terminal.KeyEvent) bool {
+        const defaults = config.KeybindingsConfig{};
+        if (self.registryCommandMatches(.global, event, .app_quit_flamingo)) return true;
+        if (!keyMatchesDefault(self.keys.quit, defaults.quit)) {
+            return event.eql(self.keys.quit);
+        }
+        if (self.state.mode == .Normal) {
+            const command = normal_sequence.resolveGlobalActionCommand(&self.keybinding_registry, event) orelse return false;
+            return command == .app_quit_flamingo;
+        }
+        return false;
+    }
+
+    fn completionCommandForEvent(self: *const Editor, event: terminal.KeyEvent) ?commands.CommandId {
+        const defaults = config.KeybindingsConfig{};
+        const context: commands.CommandContext = switch (self.state.mode) {
+            .Normal => .normal,
+            .Insert => .insert,
+            else => return null,
+        };
+
+        if (self.matchesRegistryOrLegacyCommand(
+            event,
+            context,
+            .completion_auto_trigger,
+            self.keys.completion_auto_trigger,
+            defaults.completion_auto_trigger,
+        )) return .completion_auto_trigger;
+        if (self.matchesRegistryOrLegacyCommand(
+            event,
+            context,
+            .completion_trigger,
+            self.keys.completion_trigger,
+            defaults.completion_trigger,
+        )) return .completion_trigger;
+        return null;
+    }
+
+    fn completionActionCommandForEvent(self: *const Editor, event: terminal.KeyEvent) ?commands.CommandId {
+        const defaults = config.KeybindingsConfig{};
+        return if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_previous, self.keys.completion_previous, defaults.completion_previous))
+            .completion_previous
+        else if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_next, self.keys.completion_next, defaults.completion_next))
+            .completion_next
+        else if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_accept, self.keys.completion_accept, defaults.completion_accept))
+            .completion_accept
+        else if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_cancel, self.keys.completion_cancel, defaults.completion_cancel))
+            .completion_cancel
+        else
+            null;
+    }
+
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
-        if (self.state.mode != .Help and event.eql(self.keys.quit)) {
+        if (self.state.mode != .Help and self.quitRequestedByEvent(event)) {
             self.should_quit = true;
             self.markDirty(.full);
             return;
@@ -1522,10 +1619,7 @@ pub const Editor = struct {
                 self.notePendingLspChange();
             }
 
-            const is_completion_auto_trigger = event.eql(self.keys.completion_auto_trigger);
-            const is_completion_trigger = event.eql(self.keys.completion_trigger);
-
-            if ((is_completion_auto_trigger or is_completion_trigger) and self.modeAllowsCompletion()) {
+            if (self.completionCommandForEvent(event) != null and self.modeAllowsCompletion()) {
                 if (tab.buf.filename != null) {
                     if (self.runtime.lsp_mgr) |*mgr| {
                         const mc = tab.mainCursor();
@@ -3273,57 +3367,59 @@ pub const Editor = struct {
         if (!self.state.lsp_ui.completion_active or self.state.lsp_ui.completion_items == null) return false;
         const items = self.state.lsp_ui.completionItems();
 
-        if (event.eql(self.keys.completion_previous)) {
-            if (self.state.lsp_ui.completion_selected > 0) {
-                self.state.lsp_ui.completion_selected -= 1;
-            } else if (items.len > 0) {
-                self.state.lsp_ui.completion_selected = items.len - 1;
+        if (self.completionActionCommandForEvent(event)) |command| {
+            switch (command) {
+                .completion_previous => {
+                    if (self.state.lsp_ui.completion_selected > 0) {
+                        self.state.lsp_ui.completion_selected -= 1;
+                    } else if (items.len > 0) {
+                        self.state.lsp_ui.completion_selected = items.len - 1;
+                    }
+                    return true;
+                },
+                .completion_next => {
+                    if (self.state.lsp_ui.completion_selected < items.len - 1) {
+                        self.state.lsp_ui.completion_selected += 1;
+                    } else {
+                        self.state.lsp_ui.completion_selected = 0;
+                    }
+                    return true;
+                },
+                .completion_accept => {
+                    if (items.len == 0) {
+                        self.state.lsp_ui.clearCompletion();
+                        return false;
+                    }
+                    const item = completionItemObject(items[self.state.lsp_ui.completion_selected]) orelse {
+                        self.state.lsp_ui.clearCompletion();
+                        return false;
+                    };
+                    const label = completionItemString(item, "label") orelse {
+                        self.state.lsp_ui.clearCompletion();
+                        return false;
+                    };
+                    const insertText = completionItemString(item, "insertText") orelse label;
+
+                    // Insert the completion
+                    if (self.currentTab()) |tab| {
+                        const mc = tab.mainCursor();
+                        // Simple insertion for now.
+                        // TODO: handle overwrite and snippets.
+                        for (insertText) |c| {
+                            try tab.buf.insertChar(mc.row, mc.col, c);
+                            mc.col += 1;
+                        }
+                    }
+
+                    self.state.lsp_ui.clearCompletion();
+                    return true;
+                },
+                .completion_cancel => {
+                    self.state.lsp_ui.clearCompletion();
+                    return true;
+                },
+                else => unreachable,
             }
-            return true;
-        }
-
-        if (event.eql(self.keys.completion_next)) {
-            if (self.state.lsp_ui.completion_selected < items.len - 1) {
-                self.state.lsp_ui.completion_selected += 1;
-            } else {
-                self.state.lsp_ui.completion_selected = 0;
-            }
-            return true;
-        }
-
-        if (event.eql(self.keys.completion_accept)) {
-            if (items.len == 0) {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            }
-            const item = completionItemObject(items[self.state.lsp_ui.completion_selected]) orelse {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            };
-            const label = completionItemString(item, "label") orelse {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            };
-            const insertText = completionItemString(item, "insertText") orelse label;
-
-            // Insert the completion
-            if (self.currentTab()) |tab| {
-                const mc = tab.mainCursor();
-                // Simple insertion for now.
-                // TODO: handle overwrite and snippets.
-                for (insertText) |c| {
-                    try tab.buf.insertChar(mc.row, mc.col, c);
-                    mc.col += 1;
-                }
-            }
-
-            self.state.lsp_ui.clearCompletion();
-            return true;
-        }
-
-        if (event.eql(self.keys.completion_cancel)) {
-            self.state.lsp_ui.clearCompletion();
-            return true;
         }
 
         switch (event.key) {
@@ -3827,6 +3923,64 @@ test "completion trigger is limited to buffer editing modes" {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());
     }
+}
+
+test "completion trigger keys resolve from normal and insert contexts" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.state.mode = .Normal;
+    try std.testing.expectEqual(commands.CommandId.completion_auto_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = '.' }).?);
+    try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }).?);
+
+    ed.state.mode = .Insert;
+    try std.testing.expectEqual(commands.CommandId.completion_auto_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = '.' }).?);
+    try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }).?);
+
+    ed.config.keybindings.completion_trigger = "ctrl+j";
+    ed.refreshKeybindings();
+    try std.testing.expect(ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }) == null);
+    try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = 'j', .ctrl = true }).?);
+}
+
+test "completion popup controls resolve through completion context" {
+    const allocator = std.testing.allocator;
+    var ed = try makeFastMoveTestEditor(allocator);
+    defer ed.deinit();
+
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .string = try allocator.dupe(u8, "first") });
+    try arr.append(.{ .string = try allocator.dupe(u8, "second") });
+    ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Down }));
+    try std.testing.expectEqual(@as(usize, 1), ed.state.lsp_ui.completion_selected);
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Up }));
+    try std.testing.expectEqual(@as(usize, 0), ed.state.lsp_ui.completion_selected);
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Esc }));
+    try std.testing.expect(!ed.state.lsp_ui.completion_active);
+}
+
+test "completion accept inserts selected item" {
+    const allocator = std.testing.allocator;
+    var ed = try makeFastMoveTestEditor(allocator);
+    defer ed.deinit();
+
+    var item = std.json.ObjectMap{};
+    try item.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, "World") });
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .object = item });
+    ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Enter }));
+    try std.testing.expect(!ed.state.lsp_ui.completion_active);
+
+    const tab = ed.currentTab().?;
+    const line = try tab.buf.lines.items[0].slice(allocator);
+    defer allocator.free(line);
+    try std.testing.expectEqualStrings("Worldalpha", line);
 }
 
 test "insert mode alt-up then character stays in bounds" {

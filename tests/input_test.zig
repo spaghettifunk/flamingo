@@ -28,6 +28,34 @@ fn expectLine(a: std.mem.Allocator, ed: *editor_mod.Editor, row: usize, expected
     try std.testing.expectEqualStrings(expected, s);
 }
 
+fn appendGlobalSearchPathResult(a: std.mem.Allocator, ed: *editor_mod.Editor, path: []const u8) !void {
+    const open_path = try a.dupe(u8, path);
+    errdefer a.free(open_path);
+    const display_path = try a.dupe(u8, path);
+    errdefer a.free(display_path);
+    try ed.state.global_search.results.append(a, .{ .path = .{
+        .open_path = open_path,
+        .display_path = display_path,
+    } });
+}
+
+fn attachFocusedExplorer(a: std.mem.Allocator, io: std.Io, ed: *editor_mod.Editor, root_path: []const u8) !void {
+    ed.state.tree = try explorer_mod.Explorer.init(a, io, root_path);
+    ed.state.explorer_visible = true;
+    ed.state.explorer_focused = true;
+}
+
+fn feedText(ed: *editor_mod.Editor, text: []const u8) !void {
+    for (text) |ch| try feed(ed, &[_]terminal.KeyEvent{th.keyChar(ch)});
+}
+
+fn pickerEntryIndex(ed: *editor_mod.Editor, name: []const u8) ?usize {
+    for (ed.state.filesystem_picker.entries.items, 0..) |entry, index| {
+        if (std.mem.eql(u8, entry.name, name)) return index;
+    }
+    return null;
+}
+
 // ── Mode transitions ──────────────────────────────────────────────────────────
 
 test "Dashboard → filesystem picker via Enter on 'New File'" {
@@ -41,6 +69,158 @@ test "Dashboard → filesystem picker via Enter on 'New File'" {
     try std.testing.expectEqual(editor_mod.EditorMode.FilesystemPicker, ed.state.mode);
     try std.testing.expect(ed.state.filesystem_picker.visible);
     try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+}
+
+test "Dashboard: Up Down and configured movement key change selection" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
+    try std.testing.expectEqual(@as(usize, 4), ed.state.dash.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.dash.selected_index);
+
+    ed.config.keybindings.dashboard_down = "ctrl+j";
+    ed.refreshKeybindings();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.dash.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('j')});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.dash.selected_index);
+}
+
+test "Dashboard: Ctrl+O opens filesystem picker in open-file mode" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('o')});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.FilesystemPicker, ed.state.mode);
+    try std.testing.expect(ed.state.filesystem_picker.visible);
+    try std.testing.expectEqual(.open_file, ed.state.filesystem_picker.mode);
+}
+
+test "FilesystemPicker: Up Down and configured submit key are routed through picker actions" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "opened\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "beta.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+    ed.config.keybindings.prompt_submit = "ctrl+j";
+    ed.refreshKeybindings();
+    try ed.state.filesystem_picker.open(a, io, .open_file, root_path);
+    ed.state.mode = .FilesystemPicker;
+
+    try std.testing.expect(ed.state.filesystem_picker.entries.items.len >= 2);
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.filesystem_picker.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.filesystem_picker.selected_index);
+
+    ed.state.filesystem_picker.selected_index = pickerEntryIndex(&ed, "alpha.txt") orelse return error.MissingPickerEntry;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try std.testing.expectEqual(editor_mod.EditorMode.FilesystemPicker, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('j')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expect(std.mem.endsWith(u8, ed.currentTab().?.buf.filename.?, "alpha.txt"));
+}
+
+test "FilesystemPicker: new-file picker keeps filename text raw after space action" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+    try ed.state.filesystem_picker.open(a, io, .new_file_location, root_path);
+    ed.state.mode = .FilesystemPicker;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar(' ')});
+    try std.testing.expectEqual(.entering_name, ed.state.filesystem_picker.phase);
+
+    try feedText(&ed, "a b");
+    try std.testing.expectEqualStrings("a b", ed.state.filesystem_picker.input.items);
+}
+
+test "FilesystemPicker: open-folder dot selects current folder" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+    try ed.state.filesystem_picker.open(a, io, .open_folder, root_path);
+    ed.state.mode = .FilesystemPicker;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('.')});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(ed.state.explorer_visible);
+    try std.testing.expect(ed.state.explorer_focused);
+    try std.testing.expect(ed.state.project_root != null);
+}
+
+test "OpenFilePrompt: typed path backspace submit and cancel use prompt actions" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "opened\n" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+    const file_path = try std.fs.path.join(a, &.{ root_path, "alpha.txt" });
+    defer a.free(file_path);
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    ed.state.mode = .OpenFilePrompt;
+    try feedText(&ed, file_path);
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
+    try std.testing.expectEqualStrings(file_path[0 .. file_path.len - 1], ed.state.command_buffer.items);
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('t')});
+    try std.testing.expectEqualStrings(file_path, ed.state.command_buffer.items);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expect(std.mem.endsWith(u8, ed.currentTab().?.buf.filename.?, "alpha.txt"));
+
+    ed.state.mode = .OpenFilePrompt;
+    ed.state.command_buffer.clearRetainingCapacity();
+    try feedText(&ed, "ignored");
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
 }
 
 test "Normal → Insert via 'i'" {
@@ -675,6 +855,37 @@ test "Insert: Ctrl+Z undo and Ctrl+Y redo text edit" {
     try expectLine(a, &ed, 0, "x");
 }
 
+test "Insert: configured indent key preserves raw Tab text" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.indent = "ctrl+i";
+    ed.refreshKeybindings();
+    ed.state.mode = .Insert;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
+    try expectLine(a, &ed, 0, "\t");
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('i')});
+    try expectLine(a, &ed, 0, "\t    ");
+}
+
+test "Normal: Ctrl+Z undo and Ctrl+Y redo text edit" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyChar('i'), th.keyChar('x'), th.keySpecial(.Esc) });
+    try expectLine(a, &ed, 0, "x");
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('z')});
+    try expectLine(a, &ed, 0, "");
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('y')});
+    try expectLine(a, &ed, 0, "x");
+}
+
 // ── Command mode ──────────────────────────────────────────────────────────────
 
 test "Command: :q on clean tab closes it" {
@@ -713,6 +924,48 @@ test "Command: :q on dirty buffer opens save confirmation popup" {
     try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
     try std.testing.expectEqual(editor_mod.EditorMode.SaveConfirmation, ed.state.mode);
     try std.testing.expect(ed.state.save_confirmation.visible);
+}
+
+test "SaveConfirmation: cancel and discard use save-confirmation context" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"dirty"});
+    defer ed.deinit();
+
+    ed.currentTab().?.buf.is_dirty = true;
+    ed.state.save_confirmation.open(null);
+    ed.state.mode = .SaveConfirmation;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('n')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.save_confirmation.visible);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expect(ed.currentTab().?.buf.is_dirty);
+
+    ed.state.save_confirmation.open(null);
+    ed.state.mode = .SaveConfirmation;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+    try std.testing.expect(!ed.state.save_confirmation.visible);
+}
+
+test "SaveConfirmation: custom prompt submit preserves default d discard only" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"dirty"});
+    defer ed.deinit();
+    ed.config.keybindings.prompt_submit = "ctrl+j";
+    ed.refreshKeybindings();
+
+    ed.currentTab().?.buf.is_dirty = true;
+    ed.state.save_confirmation.open(null);
+    ed.state.mode = .SaveConfirmation;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expect(ed.state.save_confirmation.visible);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('d')});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+    try std.testing.expect(!ed.state.save_confirmation.visible);
 }
 
 test "Command: :q! force-closes dirty tab" {
@@ -823,6 +1076,45 @@ test "Command popup: tab moves suggestion selection without editing input" {
     try std.testing.expectEqualStrings("w!", ed.state.command_popup.input.items);
 }
 
+test "Command popup: arrows move suggestion selection without editing input" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('w'),
+        th.keySpecial(.Down),
+    });
+    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(?usize, 1), ed.state.command_popup.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
+    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
+    try std.testing.expectEqual(@as(?usize, 0), ed.state.command_popup.selected_index);
+}
+
+test "Command: configured submit key executes command" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    ed.config.keybindings.prompt_submit = "ctrl+j";
+    ed.refreshKeybindings();
+    ed.currentTab().?.buf.is_dirty = false;
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('q'),
+        th.keySpecial(.Enter),
+    });
+    try std.testing.expectEqual(editor_mod.EditorMode.Command, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('j')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
+}
+
 test "Command: :search enters GlobalSearch mode" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -904,6 +1196,19 @@ test "Help: scrolling clamps" {
     try std.testing.expectEqual(@as(usize, 0), ed.state.help_popup.scroll_offset);
 }
 
+test "Help: q closes popup through help context" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    ed.state.help_popup.open();
+    ed.state.mode = .Help;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('q')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.help_popup.visible);
+}
+
 test "GlobalSearch: Esc closes and typing/backspace refreshes query" {
     const a = std.testing.allocator;
     const io = std.testing.io;
@@ -929,6 +1234,44 @@ test "GlobalSearch: Esc closes and typing/backspace refreshes query" {
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
     try std.testing.expect(!ed.state.global_search.visible);
+}
+
+test "GlobalSearch: Tab Down and Up move selected result" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+
+    try ed.state.global_search.open(a, ".");
+    ed.state.mode = .GlobalSearch;
+    try appendGlobalSearchPathResult(a, &ed, "alpha.txt");
+    try appendGlobalSearchPathResult(a, &ed, "beta.txt");
+    ed.state.global_search.selected_index = 0;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
+    try std.testing.expectEqual(@as(?usize, 1), ed.state.global_search.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(?usize, 0), ed.state.global_search.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
+    try std.testing.expectEqual(@as(?usize, 1), ed.state.global_search.selected_index);
+}
+
+test "GlobalSearch: configured select-next key is used" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.config.keybindings.indent = "ctrl+n";
+    ed.refreshKeybindings();
+
+    try ed.state.global_search.open(a, ".");
+    ed.state.mode = .GlobalSearch;
+    try appendGlobalSearchPathResult(a, &ed, "alpha.txt");
+    try appendGlobalSearchPathResult(a, &ed, "beta.txt");
+    ed.state.global_search.selected_index = 0;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('n')});
+    try std.testing.expectEqual(@as(?usize, 1), ed.state.global_search.selected_index);
 }
 
 test "GlobalSearch: Enter on path result opens file" {
@@ -1023,6 +1366,29 @@ test "Search: Down cycles to next match" {
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
     const second_idx = ed.state.search_system.?.active_match_idx;
     try std.testing.expect(first_idx != second_idx);
+}
+
+test "Search: configured next key is used" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{
+        "foo bar",
+        "baz foo",
+        "foo end",
+    });
+    defer ed.deinit();
+    ed.config.keybindings.search_next = "ctrl+n";
+    ed.refreshKeybindings();
+
+    ed.state.mode = .Search;
+    try ed.state.search_buffer.appendSlice(a, "foo");
+    try ed.state.search_system.?.update(&ed.currentTab().?.buf, "foo");
+
+    const first_idx = ed.state.search_system.?.active_match_idx;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(first_idx, ed.state.search_system.?.active_match_idx);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('n')});
+    try std.testing.expect(first_idx != ed.state.search_system.?.active_match_idx);
 }
 
 test "Search: Up cycles to previous match" {
@@ -1185,6 +1551,29 @@ test "Horizontal movement resets preferred column" {
     try std.testing.expectEqual(@as(?usize, null), tab.mainCursor().preferred_col);
 }
 
+test "Normal: PageDown and PageUp move by the visible page" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{
+        "row0",
+        "row1",
+        "row2",
+        "row3",
+        "row4",
+        "row5",
+    });
+    defer ed.deinit();
+    ed.height = 4;
+
+    const tab = ed.currentTab().?;
+    tab.mainCursor().row = 0;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.PageDown)});
+    try std.testing.expect(tab.mainCursor().row > 0);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.PageUp)});
+    try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
+}
+
 test "Option+] cycles to next tab" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
@@ -1335,6 +1724,26 @@ test "Terminal mode Esc blurs terminal but keeps panel visible" {
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
 }
 
+test "Terminal mode scroll controls use terminal context and text passes through" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{""});
+    defer ed.deinit();
+    ed.height = 8;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
+    try ed.terminal_panel.appendOutput("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n");
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.PageUp)});
+    try std.testing.expect(ed.terminal_panel.scroll_offset > 0);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyShift(.End)});
+    try std.testing.expectEqual(@as(usize, 0), ed.terminal_panel.scroll_offset);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('x')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Terminal, ed.state.mode);
+    try std.testing.expect(ed.terminal_panel.focused);
+}
+
 test "Ctrl+E cycles focus between editor explorer and terminal" {
     const a = std.testing.allocator;
     const log = try th.setupLogger(a);
@@ -1435,9 +1844,7 @@ test "Explorer: Option+N opens new file prompt before edit shortcuts" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
-    ed.state.tree = try explorer_mod.Explorer.init(a, io, root_path);
-    ed.state.explorer_visible = true;
-    ed.state.explorer_focused = true;
+    try attachFocusedExplorer(a, io, &ed, root_path);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('n')});
 
@@ -1460,9 +1867,7 @@ test "Explorer: Option+R opens rename prompt" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
-    ed.state.tree = try explorer_mod.Explorer.init(a, io, root_path);
-    ed.state.explorer_visible = true;
-    ed.state.explorer_focused = true;
+    try attachFocusedExplorer(a, io, &ed, root_path);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('r')});
 
@@ -1470,6 +1875,151 @@ test "Explorer: Option+R opens rename prompt" {
     try std.testing.expect(ed.state.prompt_popup.visible);
     try std.testing.expectEqual(prompt_mod.PromptKind.explorer_rename, ed.state.prompt_popup.kind);
     try std.testing.expectEqualStrings("alpha.txt", ed.state.prompt_popup.input.items);
+}
+
+test "Explorer: Up and Down move selection" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "beta.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    try attachFocusedExplorer(a, io, &ed, root_path);
+
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tree.?.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tree.?.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tree.?.selected_index);
+}
+
+test "Explorer: configured movement key remains available" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "beta.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    ed.config.keybindings.explorer_down = "ctrl+j";
+    ed.refreshKeybindings();
+    try attachFocusedExplorer(a, io, &ed, root_path);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tree.?.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('j')});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tree.?.selected_index);
+}
+
+test "Explorer: Option+Delete opens delete prompt" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    try attachFocusedExplorer(a, io, &ed, root_path);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOption(.Delete)});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Prompt, ed.state.mode);
+    try std.testing.expect(ed.state.prompt_popup.visible);
+    try std.testing.expectEqual(prompt_mod.PromptKind.explorer_delete_confirm, ed.state.prompt_popup.kind);
+}
+
+test "ExplorerSearch: query editing selection movement and cancel" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpha.txt", .data = "" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "alpine.txt", .data = "" });
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+    try attachFocusedExplorer(a, io, &ed, root_path);
+
+    try feed(&ed, &[_]terminal.KeyEvent{ th.keyChar('/'), th.keyChar('a'), th.keyChar('l') });
+    try std.testing.expect(ed.state.tree.?.search_active);
+    try std.testing.expectEqualStrings("al", ed.state.tree.?.search_query.items);
+    try std.testing.expect(ed.state.tree.?.search_results.items.len >= 2);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tree.?.search_selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tree.?.search_selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.tree.?.search_selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
+    try std.testing.expectEqualStrings("a", ed.state.tree.?.search_query.items);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expect(!ed.state.tree.?.search_active);
+    try std.testing.expectEqualStrings("", ed.state.tree.?.search_query.items);
+}
+
+test "Prompt: text backspace and cancel use prompt context" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+
+    try ed.state.prompt_popup.open(a, .explorer_rename, "Rename", "alpha.txt", "");
+    ed.state.mode = .Prompt;
+
+    try feedText(&ed, "new");
+    try std.testing.expectEqualStrings("new", ed.state.prompt_popup.input.items);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
+    try std.testing.expectEqualStrings("ne", ed.state.prompt_popup.input.items);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.prompt_popup.visible);
+}
+
+test "Prompt: delete confirmation uses y and n command keys without raw text" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
+    defer ed.deinit();
+
+    try ed.state.prompt_popup.open(a, .explorer_delete_confirm, "Delete", "alpha.txt", "");
+    ed.state.mode = .Prompt;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('n')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.prompt_popup.visible);
+    try std.testing.expectEqualStrings("", ed.state.prompt_popup.input.items);
 }
 
 test "plain Tab inserts indentation when explorer is visible" {

@@ -1,11 +1,14 @@
 const std = @import("std");
 const logz = @import("logz");
+const config = @import("../../config.zig");
 const terminal = @import("../../terminal.zig");
 const editor = @import("../editor.zig");
 const buffer = @import("../model/buffer.zig");
 const explorer = @import("../explorer.zig");
 const global_search = @import("../global_search.zig");
 const actions = @import("../actions.zig");
+const commands = @import("../commands.zig");
+const keybindings = @import("../keybindings.zig");
 const normal_sequence = @import("normal_sequence.zig");
 const navigation = @import("../navigation.zig");
 const filesystem_picker = @import("../filesystem_picker.zig");
@@ -46,6 +49,665 @@ fn matchesMovement(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
     return event.shift and without_shift.eql(expected);
 }
 
+fn commandFromLegacyMovementKeys(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+
+    return if (matchesMovement(event, keys.line_end))
+        .navigation_line_end
+    else if (matchesMovement(event, keys.line_start))
+        .navigation_line_start
+    else if (matchesMovement(event, keys.word_left))
+        .navigation_word_left
+    else if (matchesMovement(event, keys.word_right))
+        .navigation_word_right
+    else if (matchesMovement(event, keys.move_up))
+        .navigation_move_up
+    else if (matchesMovement(event, keys.move_down))
+        .navigation_move_down
+    else if (event.key == .PageUp and !event.ctrl and !event.alt)
+        .navigation_page_up
+    else if (event.key == .PageDown and !event.ctrl and !event.alt)
+        .navigation_page_down
+    else if (matchesMovement(event, keys.move_left))
+        .navigation_move_left
+    else if (matchesMovement(event, keys.move_right))
+        .navigation_move_right
+    else
+        null;
+}
+
+fn commandFromLegacyJumpKeys(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+
+    return if (matches(event, keys.jump_back))
+        .navigation_jump_back
+    else if (matches(event, keys.jump_forward))
+        .navigation_jump_forward
+    else
+        null;
+}
+
+fn keyMatchesDefault(actual: terminal.KeyEvent, default_text: []const u8) bool {
+    return actual.eql(terminal.parseKeyChord(default_text));
+}
+
+fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
+    return switch (context) {
+        .command_line => switch (id) {
+            .command_cancel,
+            .command_backspace,
+            .command_suggestion_next,
+            .command_suggestion_previous,
+            .command_execute,
+            => true,
+            else => false,
+        },
+        .search => switch (id) {
+            .search_cancel,
+            .search_backspace,
+            .search_accept,
+            .search_next_match,
+            .search_previous_match,
+            => true,
+            else => false,
+        },
+        .global_search => switch (id) {
+            .global_search_cancel,
+            .global_search_backspace,
+            .global_search_accept,
+            .global_search_select_next,
+            .global_search_select_previous,
+            => true,
+            else => false,
+        },
+        .explorer => switch (id) {
+            .explorer_move_up,
+            .explorer_move_down,
+            .explorer_open_selected,
+            .explorer_search_open,
+            .explorer_new_file,
+            .explorer_rename,
+            .explorer_delete,
+            => true,
+            else => false,
+        },
+        .explorer_search => switch (id) {
+            .explorer_search_cancel,
+            .explorer_search_backspace,
+            .explorer_move_up,
+            .explorer_move_down,
+            .explorer_open_selected,
+            => true,
+            else => false,
+        },
+        .dashboard => switch (id) {
+            .mode_command,
+            .dashboard_new_file,
+            .dashboard_open_file,
+            .dashboard_open_folder,
+            .dashboard_settings,
+            .dashboard_move_up,
+            .dashboard_move_down,
+            .dashboard_select,
+            .app_quit_flamingo,
+            => true,
+            else => false,
+        },
+        .picker => switch (id) {
+            .picker_cancel,
+            .picker_back,
+            .picker_move_up,
+            .picker_move_down,
+            .picker_accept,
+            => true,
+            else => false,
+        },
+        .picker_new_file => switch (id) {
+            .picker_begin_name_input => true,
+            else => false,
+        },
+        .picker_open_folder => switch (id) {
+            .picker_select_folder,
+            .picker_select_current_folder,
+            => true,
+            else => false,
+        },
+        .open_file_prompt => switch (id) {
+            .open_file_prompt_cancel,
+            .open_file_prompt_backspace,
+            .open_file_prompt_submit,
+            => true,
+            else => false,
+        },
+        .insert => switch (id) {
+            .mode_normal,
+            .editing_insert_newline,
+            .editing_delete_back,
+            .editing_indent,
+            .file_write,
+            .editing_undo,
+            .editing_redo,
+            .editing_select_all,
+            .editing_copy,
+            .editing_cut,
+            .editing_paste,
+            .editing_delete_word_back,
+            .editing_duplicate_line,
+            .editing_delete_line,
+            .editing_add_cursor_above,
+            .editing_add_cursor_below,
+            .navigation_move_up,
+            .navigation_move_down,
+            .navigation_move_left,
+            .navigation_move_right,
+            .navigation_page_up,
+            .navigation_page_down,
+            .navigation_line_start,
+            .navigation_line_end,
+            .navigation_word_left,
+            .navigation_word_right,
+            .completion_auto_trigger,
+            .completion_trigger,
+            => true,
+            else => false,
+        },
+        .terminal => switch (id) {
+            .terminal_unfocus,
+            .terminal_scroll_page_up,
+            .terminal_scroll_page_down,
+            .terminal_scroll_bottom,
+            => true,
+            else => false,
+        },
+        .help => switch (id) {
+            .help_close,
+            .help_scroll_up,
+            .help_scroll_down,
+            .help_page_up,
+            .help_page_down,
+            => true,
+            else => false,
+        },
+        .prompt => switch (id) {
+            .prompt_cancel,
+            .prompt_confirm,
+            .prompt_submit,
+            .prompt_backspace,
+            => true,
+            else => false,
+        },
+        .save_confirmation => switch (id) {
+            .save_confirmation_save,
+            .save_confirmation_discard,
+            .save_confirmation_cancel,
+            => true,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn resolveDefaultContextCommand(ed: *const editor.Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
+    const result = ed.keybinding_registry.resolve(context, keybindings.KeySequence.fromEvent(event));
+    const id = switch (result) {
+        .command => |id| id,
+        else => return null,
+    };
+    return if (commandAllowedInResolvedContext(context, id)) id else null;
+}
+
+fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
+    return switch (context) {
+        .normal => normal_sequence.resolveActionCommand(&ed.keybinding_registry, event),
+        .global => normal_sequence.resolveGlobalActionCommand(&ed.keybinding_registry, event),
+        .command_line,
+        .search,
+        .global_search,
+        .explorer,
+        .explorer_search,
+        .dashboard,
+        .picker,
+        .picker_new_file,
+        .picker_open_folder,
+        .open_file_prompt,
+        .insert,
+        .terminal,
+        .help,
+        .prompt,
+        .save_confirmation,
+        => resolveDefaultContextCommand(ed, context, event),
+        else => null,
+    };
+}
+
+fn registryCommandMatches(ed: *const editor.Editor, context: commands.CommandContext, event: terminal.KeyEvent, id: commands.CommandId) bool {
+    return (resolveRegistryCommand(ed, context, event) orelse return false) == id;
+}
+
+fn modeUsesRegistryContext(mode: editor.EditorMode, context: commands.CommandContext) bool {
+    return switch (context) {
+        .normal => mode == .Normal,
+        .global => true,
+        .command_line => mode == .Command,
+        .search => mode == .Search,
+        .global_search => mode == .GlobalSearch,
+        .explorer, .explorer_search => mode == .Normal or mode == .Insert,
+        .dashboard => mode == .Dashboard,
+        .picker, .picker_new_file, .picker_open_folder => mode == .FilesystemPicker,
+        .open_file_prompt => mode == .OpenFilePrompt,
+        .insert => mode == .Insert,
+        .terminal => mode == .Terminal,
+        .help => mode == .Help,
+        .prompt => mode == .Prompt,
+        .save_confirmation => mode == .SaveConfirmation,
+        else => false,
+    };
+}
+
+fn matchesRegistryOrLegacyCommand(
+    ed: *editor.Editor,
+    event: terminal.KeyEvent,
+    context: commands.CommandContext,
+    id: commands.CommandId,
+    legacy_key: terminal.KeyEvent,
+    default_text: []const u8,
+) bool {
+    if (modeUsesRegistryContext(ed.state.mode, context)) {
+        if (resolveRegistryCommand(ed, context, event)) |resolved| {
+            if (resolved == id) return true;
+        }
+    }
+    return !keyMatchesDefault(legacy_key, default_text) and matches(event, legacy_key);
+}
+
+fn normalMovementKeysAreDefault(ed: *editor.Editor) bool {
+    const defaults = config.KeybindingsConfig{};
+    const keys = ed.keys;
+    return keyMatchesDefault(keys.move_up, defaults.move_up) and
+        keyMatchesDefault(keys.move_down, defaults.move_down) and
+        keyMatchesDefault(keys.move_left, defaults.move_left) and
+        keyMatchesDefault(keys.move_right, defaults.move_right) and
+        keyMatchesDefault(keys.line_start, defaults.line_start) and
+        keyMatchesDefault(keys.line_end, defaults.line_end) and
+        keyMatchesDefault(keys.word_left, defaults.word_left) and
+        keyMatchesDefault(keys.word_right, defaults.word_right);
+}
+
+fn normalJumpKeysAreDefault(ed: *editor.Editor) bool {
+    const defaults = config.KeybindingsConfig{};
+    const keys = ed.keys;
+    return keyMatchesDefault(keys.jump_back, defaults.jump_back) and
+        keyMatchesDefault(keys.jump_forward, defaults.jump_forward);
+}
+
+fn resolveNormalMovementCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    if (normal_sequence.resolveMovementCommand(&ed.keybinding_registry, event)) |command| return command;
+    return if (!normalMovementKeysAreDefault(ed)) commandFromLegacyMovementKeys(ed, event) else null;
+}
+
+fn resolveInsertMovementCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    if (resolveDefaultContextCommand(ed, .insert, event)) |command| {
+        if (switch (command) {
+            .navigation_line_end,
+            .navigation_line_start,
+            .navigation_word_left,
+            .navigation_word_right,
+            .navigation_move_up,
+            .navigation_move_down,
+            .navigation_page_up,
+            .navigation_page_down,
+            .navigation_move_left,
+            .navigation_move_right,
+            => true,
+            else => false,
+        }) return command;
+    }
+    return if (!normalMovementKeysAreDefault(ed)) commandFromLegacyMovementKeys(ed, event) else null;
+}
+
+fn resolveNormalJumpCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    if (normal_sequence.resolveJumpCommand(&ed.keybinding_registry, event)) |command| return command;
+    return if (!normalJumpKeysAreDefault(ed)) commandFromLegacyJumpKeys(ed, event) else null;
+}
+
+fn movementCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    if (ed.state.mode == .Normal) {
+        return resolveNormalMovementCommand(ed, event);
+    }
+    if (ed.state.mode == .Insert) {
+        return resolveInsertMovementCommand(ed, event);
+    }
+    return commandFromLegacyMovementKeys(ed, event);
+}
+
+fn normalSharedActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+    const context: commands.CommandContext = if (ed.state.mode == .Insert) .insert else .normal;
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_select_all, keys.select_all, defaults.select_all))
+        .editing_select_all
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_copy, keys.copy, defaults.copy))
+        .editing_copy
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_cut, keys.cut, defaults.cut))
+        .editing_cut
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_paste, keys.paste, defaults.paste))
+        .editing_paste
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .file_write, keys.save, defaults.save))
+        .file_write
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_undo, keys.undo, defaults.undo))
+        .editing_undo
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_redo, keys.redo, defaults.redo))
+        .editing_redo
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_delete_word_back, keys.delete_word_back, defaults.delete_word_back))
+        .editing_delete_word_back
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_duplicate_line, keys.duplicate_line, defaults.duplicate_line))
+        .editing_duplicate_line
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_delete_line, keys.delete_line, defaults.delete_line))
+        .editing_delete_line
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_add_cursor_above, keys.add_cursor_above, defaults.add_cursor_above))
+        .editing_add_cursor_above
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_add_cursor_below, keys.add_cursor_below, defaults.add_cursor_below))
+        .editing_add_cursor_below
+    else if (matchesRegistryOrLegacyCommand(ed, event, context, .mode_normal, keys.normal_mode, defaults.normal_mode))
+        .mode_normal
+    else
+        null;
+}
+
+fn normalModeActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .normal, .mode_insert, keys.insert_mode, defaults.insert_mode))
+        .mode_insert
+    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .mode_command, keys.command_mode, defaults.command_mode))
+        .mode_command
+    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .mode_search, keys.search_mode, defaults.search_mode))
+        .mode_search
+    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .completion_auto_trigger, keys.completion_auto_trigger, defaults.completion_auto_trigger))
+        .completion_auto_trigger
+    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .completion_trigger, keys.completion_trigger, defaults.completion_trigger))
+        .completion_trigger
+    else
+        null;
+}
+
+fn commandLineActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_cancel, keys.normal_mode, defaults.normal_mode))
+        .command_cancel
+    else if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_backspace, keys.prompt_backspace, defaults.prompt_backspace))
+        .command_backspace
+    else if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_suggestion_next, keys.indent, defaults.indent))
+        .command_suggestion_next
+    else if (registryCommandMatches(ed, .command_line, event, .command_suggestion_previous))
+        .command_suggestion_previous
+    else if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_execute, keys.prompt_submit, defaults.prompt_submit))
+        .command_execute
+    else
+        null;
+}
+
+fn searchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_cancel, keys.normal_mode, defaults.normal_mode))
+        .search_cancel
+    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_backspace, keys.prompt_backspace, defaults.prompt_backspace))
+        .search_backspace
+    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_accept, keys.prompt_submit, defaults.prompt_submit))
+        .search_accept
+    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_next_match, keys.search_next, defaults.search_next))
+        .search_next_match
+    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_previous_match, keys.search_previous, defaults.search_previous))
+        .search_previous_match
+    else
+        null;
+}
+
+fn globalSearchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_cancel, keys.normal_mode, defaults.normal_mode))
+        .global_search_cancel
+    else if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_backspace, keys.prompt_backspace, defaults.prompt_backspace))
+        .global_search_backspace
+    else if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_select_next, keys.indent, defaults.indent))
+        .global_search_select_next
+    else if (registryCommandMatches(ed, .global_search, event, .global_search_select_previous))
+        .global_search_select_previous
+    else if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_accept, keys.prompt_submit, defaults.prompt_submit))
+        .global_search_accept
+    else
+        null;
+}
+
+fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_new_file, keys.explorer_new_file, defaults.explorer_new_file))
+        .explorer_new_file
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_rename, keys.explorer_rename, defaults.explorer_rename))
+        .explorer_rename
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_delete, keys.explorer_delete, defaults.explorer_delete))
+        .explorer_delete
+    else
+        null;
+}
+
+fn explorerActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_search_open, keys.search_mode, defaults.search_mode))
+        .explorer_search_open
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_move_up, keys.explorer_up, defaults.explorer_up))
+        .explorer_move_up
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_move_down, keys.explorer_down, defaults.explorer_down))
+        .explorer_move_down
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_open_selected, keys.explorer_open, defaults.explorer_open))
+        .explorer_open_selected
+    else
+        null;
+}
+
+fn explorerSearchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_search_cancel, keys.normal_mode, defaults.normal_mode))
+        .explorer_search_cancel
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_search_backspace, keys.prompt_backspace, defaults.prompt_backspace))
+        .explorer_search_backspace
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_move_up, keys.explorer_up, defaults.explorer_up))
+        .explorer_move_up
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_move_down, keys.explorer_down, defaults.explorer_down))
+        .explorer_move_down
+    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_open_selected, keys.explorer_open, defaults.explorer_open))
+        .explorer_open_selected
+    else
+        null;
+}
+
+fn dashboardActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .mode_command, keys.command_mode, defaults.command_mode))
+        .mode_command
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_new_file, keys.new_file, defaults.new_file))
+        .dashboard_new_file
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_open_file, keys.open_file, defaults.open_file))
+        .dashboard_open_file
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_open_folder, keys.open_folder, defaults.open_folder))
+        .dashboard_open_folder
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_settings, keys.settings, defaults.settings))
+        .dashboard_settings
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .app_quit_flamingo, keys.quit, defaults.quit))
+        .app_quit_flamingo
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_move_up, keys.dashboard_up, defaults.dashboard_up))
+        .dashboard_move_up
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_move_down, keys.dashboard_down, defaults.dashboard_down))
+        .dashboard_move_down
+    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_select, keys.dashboard_select, defaults.dashboard_select))
+        .dashboard_select
+    else
+        null;
+}
+
+fn pickerActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .picker, .picker_cancel, keys.normal_mode, defaults.normal_mode))
+        .picker_cancel
+    else if (matchesRegistryOrLegacyCommand(ed, event, .picker, .picker_back, keys.prompt_backspace, defaults.prompt_backspace))
+        .picker_back
+    else if (registryCommandMatches(ed, .picker, event, .picker_move_up))
+        .picker_move_up
+    else if (registryCommandMatches(ed, .picker, event, .picker_move_down))
+        .picker_move_down
+    else if (matchesRegistryOrLegacyCommand(ed, event, .picker, .picker_accept, keys.prompt_submit, defaults.prompt_submit))
+        .picker_accept
+    else
+        null;
+}
+
+fn pickerNewFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return if (registryCommandMatches(ed, .picker_new_file, event, .picker_begin_name_input))
+        .picker_begin_name_input
+    else
+        null;
+}
+
+fn pickerOpenFolderActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return if (registryCommandMatches(ed, .picker_open_folder, event, .picker_select_folder))
+        .picker_select_folder
+    else if (registryCommandMatches(ed, .picker_open_folder, event, .picker_select_current_folder))
+        .picker_select_current_folder
+    else
+        null;
+}
+
+fn openFilePromptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .open_file_prompt, .open_file_prompt_cancel, keys.normal_mode, defaults.normal_mode))
+        .open_file_prompt_cancel
+    else if (matchesRegistryOrLegacyCommand(ed, event, .open_file_prompt, .open_file_prompt_backspace, keys.prompt_backspace, defaults.prompt_backspace))
+        .open_file_prompt_backspace
+    else if (matchesRegistryOrLegacyCommand(ed, event, .open_file_prompt, .open_file_prompt_submit, keys.prompt_submit, defaults.prompt_submit))
+        .open_file_prompt_submit
+    else
+        null;
+}
+
+fn insertActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .insert, .editing_insert_newline, keys.insert_newline, defaults.insert_newline))
+        .editing_insert_newline
+    else if (matchesRegistryOrLegacyCommand(ed, event, .insert, .editing_delete_back, keys.delete_back, defaults.delete_back))
+        .editing_delete_back
+    else if (matchesRegistryOrLegacyCommand(ed, event, .insert, .editing_indent, keys.indent, defaults.indent))
+        .editing_indent
+    else
+        null;
+}
+
+fn terminalActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .terminal, .terminal_unfocus, keys.normal_mode, defaults.normal_mode))
+        .terminal_unfocus
+    else if (registryCommandMatches(ed, .terminal, event, .terminal_scroll_page_up))
+        .terminal_scroll_page_up
+    else if (registryCommandMatches(ed, .terminal, event, .terminal_scroll_page_down))
+        .terminal_scroll_page_down
+    else if (registryCommandMatches(ed, .terminal, event, .terminal_scroll_bottom))
+        .terminal_scroll_bottom
+    else
+        null;
+}
+
+fn helpActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+    const normal_mode_is_default = keyMatchesDefault(keys.normal_mode, defaults.normal_mode);
+
+    return if (matchesRegistryOrLegacyCommand(ed, event, .help, .help_close, keys.normal_mode, defaults.normal_mode))
+        .help_close
+    else if (registryCommandMatches(ed, .help, event, .help_close) and
+        (normal_mode_is_default or !keyMatchesDefault(event, defaults.normal_mode)))
+        .help_close
+    else if (registryCommandMatches(ed, .help, event, .help_scroll_up))
+        .help_scroll_up
+    else if (registryCommandMatches(ed, .help, event, .help_scroll_down))
+        .help_scroll_down
+    else if (registryCommandMatches(ed, .help, event, .help_page_up))
+        .help_page_up
+    else if (registryCommandMatches(ed, .help, event, .help_page_down))
+        .help_page_down
+    else
+        null;
+}
+
+fn promptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+    const is_delete_confirm = ed.state.prompt_popup.kind == .explorer_delete_confirm;
+    const normal_mode_is_default = keyMatchesDefault(keys.normal_mode, defaults.normal_mode);
+    const is_normal_mode_key = if (normal_mode_is_default)
+        keyMatchesDefault(event, defaults.normal_mode) and registryCommandMatches(ed, .prompt, event, .prompt_cancel)
+    else
+        event.eql(keys.normal_mode);
+
+    return if (is_normal_mode_key)
+        .prompt_cancel
+    else if (is_delete_confirm and registryCommandMatches(ed, .prompt, event, .prompt_cancel) and
+        !keyMatchesDefault(event, defaults.normal_mode))
+        .prompt_cancel
+    else if (is_delete_confirm and registryCommandMatches(ed, .prompt, event, .prompt_confirm))
+        .prompt_confirm
+    else if (matchesRegistryOrLegacyCommand(ed, event, .prompt, .prompt_submit, keys.prompt_submit, defaults.prompt_submit))
+        .prompt_submit
+    else if (!is_delete_confirm and matchesRegistryOrLegacyCommand(ed, event, .prompt, .prompt_backspace, keys.prompt_backspace, defaults.prompt_backspace))
+        .prompt_backspace
+    else
+        null;
+}
+
+fn saveConfirmationActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
+    const prompt_submit_is_default = keyMatchesDefault(keys.prompt_submit, defaults.prompt_submit);
+    const normal_mode_is_default = keyMatchesDefault(keys.normal_mode, defaults.normal_mode);
+
+    return if (registryCommandMatches(ed, .save_confirmation, event, .save_confirmation_save))
+        .save_confirmation_save
+    else if (matchesRegistryOrLegacyCommand(ed, event, .save_confirmation, .save_confirmation_discard, keys.prompt_submit, defaults.prompt_submit))
+        .save_confirmation_discard
+    else if (registryCommandMatches(ed, .save_confirmation, event, .save_confirmation_discard) and
+        (prompt_submit_is_default or !keyMatchesDefault(event, defaults.prompt_submit)))
+        .save_confirmation_discard
+    else if (matchesRegistryOrLegacyCommand(ed, event, .save_confirmation, .save_confirmation_cancel, keys.normal_mode, defaults.normal_mode))
+        .save_confirmation_cancel
+    else if (registryCommandMatches(ed, .save_confirmation, event, .save_confirmation_cancel) and
+        (normal_mode_is_default or !keyMatchesDefault(event, defaults.normal_mode)))
+        .save_confirmation_cancel
+    else
+        null;
+}
+
 fn clearPendingNormalSequence(ed: *editor.Editor) void {
     ed.state.pending_normal_sequence.clear();
 }
@@ -58,7 +720,7 @@ fn handleNormalSequence(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
         return had_pending_sequence;
     }
 
-    switch (normal_sequence.resolve(sequence)) {
+    switch (normal_sequence.resolve(&ed.keybinding_registry, sequence)) {
         .command => |command| {
             clearPendingNormalSequence(ed);
             try executeNormalCommand(ed, command);
@@ -165,6 +827,158 @@ fn clampAfterFoldChange(ed: *editor.Editor) void {
     tab.scroll_row = tab.buf.clampToVisibleLine(tab.scroll_row);
     ed.clampScroll();
     ed.markDirty(.full);
+}
+
+fn saveCurrentFile(ed: *editor.Editor) !void {
+    if (ed.currentTab()) |tab| {
+        if (tab.buf.filename) |f| {
+            try tab.buf.saveToFile(ed.io, f);
+        }
+    }
+}
+
+fn executeSharedActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    clearPendingNormalSequence(ed);
+    switch (command) {
+        .editing_select_all => actions.selectAll(ed),
+        .editing_copy => try actions.copy(ed),
+        .editing_cut => try actions.cut(ed),
+        .editing_paste => try actions.paste(ed),
+        .file_write => try saveCurrentFile(ed),
+        .editing_undo => try actions.undo(ed),
+        .editing_redo => try actions.redo(ed),
+        .editing_delete_word_back => try actions.deleteWordBack(ed),
+        .editing_duplicate_line => try actions.duplicateLine(ed),
+        .editing_delete_line => try actions.deleteLine(ed),
+        .editing_add_cursor_above => try actions.addCursorAbove(ed),
+        .editing_add_cursor_below => try actions.addCursorBelow(ed),
+        .mode_normal => {
+            actions.clearSelections(ed);
+            if (ed.state.mode == .Insert) ed.state.mode = .Normal;
+        },
+        else => unreachable,
+    }
+}
+
+fn executeNormalModeActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    clearPendingNormalSequence(ed);
+    switch (command) {
+        .mode_insert => ed.state.mode = .Insert,
+        .mode_command => {
+            ed.state.mode = .Command;
+            ed.state.command_buffer.clearRetainingCapacity();
+            try ed.state.command_popup.open(ed.allocator);
+        },
+        .mode_search => {
+            ed.state.mode = .Search;
+            ed.state.search_buffer.clearRetainingCapacity();
+            if (ed.state.search_system) |*s| s.clear();
+        },
+        .completion_auto_trigger, .completion_trigger => {},
+        else => unreachable,
+    }
+}
+
+fn executeCommandLineActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .command_cancel => {
+            clearPendingNormalSequence(ed);
+            ed.state.mode = .Normal;
+            ed.state.command_popup.close();
+        },
+        .command_backspace => try ed.state.command_popup.backspace(ed.allocator),
+        .command_suggestion_next => ed.state.command_popup.tabComplete(),
+        .command_suggestion_previous => ed.state.command_popup.selectPrevious(),
+        .command_execute => {
+            try ed.state.command_popup.acceptSelected(ed.allocator);
+            const command_module = @import("../command.zig");
+            clearPendingNormalSequence(ed);
+            try command_module.execute(ed);
+        },
+        else => unreachable,
+    }
+}
+
+fn closeSearch(ed: *editor.Editor) void {
+    clearPendingNormalSequence(ed);
+    ed.state.mode = .Normal;
+    if (ed.state.search_system) |*s| s.clear();
+    ed.state.search_buffer.clearRetainingCapacity();
+}
+
+fn moveCursorToActiveSearchMatch(ed: *editor.Editor) void {
+    if (ed.state.search_system) |*search_system| {
+        const match = search_system.getActiveMatch() orelse return;
+        const tab = ed.currentTab() orelse return;
+        const mc = tab.mainCursor();
+        mc.row = tab.buf.clampToVisibleLine(match.row);
+        mc.col = @min(match.col, tab.buf.lines.items[mc.row].len());
+        mc.preferred_col = null;
+        ed.clampScroll();
+    }
+}
+
+fn refreshSearchFromBuffer(ed: *editor.Editor) !void {
+    if (ed.currentTab()) |tab| {
+        try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
+        moveCursorToActiveSearchMatch(ed);
+    }
+}
+
+fn executeSearchActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .search_cancel, .search_accept => closeSearch(ed),
+        .search_backspace => {
+            if (ed.state.search_buffer.items.len > 0) {
+                ed.state.search_buffer.shrinkRetainingCapacity(ed.state.search_buffer.items.len - 1);
+                try refreshSearchFromBuffer(ed);
+            }
+        },
+        .search_next_match => {
+            if (ed.state.search_system) |*s| {
+                s.nextMatch();
+                moveCursorToActiveSearchMatch(ed);
+            }
+        },
+        .search_previous_match => {
+            if (ed.state.search_system) |*s| {
+                s.prevMatch();
+                moveCursorToActiveSearchMatch(ed);
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn executeGlobalSearchActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .global_search_cancel => {
+            clearPendingNormalSequence(ed);
+            ed.state.global_search.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.markDirty(.full);
+        },
+        .global_search_backspace => {
+            if (ed.state.global_search.input.items.len > 0) {
+                ed.state.global_search.input.shrinkRetainingCapacity(ed.state.global_search.input.items.len - 1);
+                try refreshGlobalSearchOrReport(ed);
+                ed.markDirty(.full);
+            }
+        },
+        .global_search_select_next => {
+            ed.state.global_search.selectNext();
+            ed.markDirty(.full);
+        },
+        .global_search_select_previous => {
+            ed.state.global_search.selectPrevious();
+            ed.markDirty(.full);
+        },
+        .global_search_accept => {
+            clearPendingNormalSequence(ed);
+            try acceptGlobalSearchResult(ed);
+        },
+        else => unreachable,
+    }
 }
 
 const GlobalSearchAction = union(enum) {
@@ -290,6 +1104,277 @@ fn applyPickerResult(ed: *editor.Editor, result: filesystem_picker.PickerResult)
     ed.markDirty(.full);
 }
 
+fn executeDashboardSelectedAction(ed: *editor.Editor) !void {
+    switch (ed.state.dash.selectedAction()) {
+        .NewFile => try openDashboardPicker(ed, .new_file_location),
+        .OpenFile => try openDashboardPicker(ed, .open_file),
+        .OpenFolder => try openDashboardPicker(ed, .open_folder),
+        .Quit => ed.should_quit = true,
+        else => {},
+    }
+}
+
+fn executeDashboardActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .mode_command => {
+            clearPendingNormalSequence(ed);
+            ed.state.mode = .Command;
+            ed.state.command_buffer.clearRetainingCapacity();
+            try ed.state.command_popup.open(ed.allocator);
+        },
+        .dashboard_new_file => try openDashboardPicker(ed, .new_file_location),
+        .dashboard_open_file => try openDashboardPicker(ed, .open_file),
+        .dashboard_open_folder => try openDashboardPicker(ed, .open_folder),
+        .dashboard_settings => {},
+        .app_quit_flamingo => ed.should_quit = true,
+        .dashboard_move_up => ed.state.dash.moveUp(),
+        .dashboard_move_down => ed.state.dash.moveDown(),
+        .dashboard_select => try executeDashboardSelectedAction(ed),
+        else => unreachable,
+    }
+}
+
+fn executePickerActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .picker_cancel => {
+            clearPendingNormalSequence(ed);
+            ed.state.filesystem_picker.close(ed.allocator);
+            ed.state.mode = .Dashboard;
+            ed.markDirty(.full);
+        },
+        .picker_back => {
+            try ed.state.filesystem_picker.backspace(ed.allocator, ed.io);
+            ed.markDirty(.full);
+        },
+        .picker_move_up => {
+            ed.state.filesystem_picker.moveUp();
+            ed.markDirty(.full);
+        },
+        .picker_move_down => {
+            ed.state.filesystem_picker.moveDown();
+            ed.markDirty(.full);
+        },
+        .picker_accept => {
+            if (try ed.state.filesystem_picker.accept(ed.allocator, ed.io)) |result| {
+                try applyPickerResult(ed, result);
+            }
+            ed.markDirty(.full);
+        },
+        .picker_begin_name_input => {
+            ed.state.filesystem_picker.beginNameInput();
+            ed.markDirty(.full);
+        },
+        .picker_select_folder => {
+            if (try ed.state.filesystem_picker.selectFolder(ed.allocator)) |result| {
+                try applyPickerResult(ed, result);
+            }
+        },
+        .picker_select_current_folder => {
+            if (try ed.state.filesystem_picker.selectCurrentFolder(ed.allocator)) |result| {
+                try applyPickerResult(ed, result);
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn executeOpenFilePromptActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .open_file_prompt_cancel => {
+            clearPendingNormalSequence(ed);
+            ed.state.mode = .Dashboard;
+        },
+        .open_file_prompt_backspace => {
+            if (ed.state.command_buffer.items.len > 0) {
+                ed.state.command_buffer.shrinkRetainingCapacity(ed.state.command_buffer.items.len - 1);
+            }
+        },
+        .open_file_prompt_submit => {
+            if (ed.state.command_buffer.items.len > 0) {
+                if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.state.command_buffer.items)) |b| {
+                    try navigation.recordCurrentJump(ed);
+                    try ed.addTab(b);
+                    clearPendingNormalSequence(ed);
+                    ed.state.mode = .Normal;
+                    ed.state.explorer_focused = false;
+                } else |_| {
+                    ed.state.error_message = "Could not open file";
+                    clearPendingNormalSequence(ed);
+                    ed.state.mode = .Dashboard;
+                }
+            } else {
+                clearPendingNormalSequence(ed);
+                ed.state.mode = .Dashboard;
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn executeInsertActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .editing_insert_newline => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                try tab.buf.insertNewline(mc.row, mc.col);
+                mc.row += 1;
+                mc.col = 0;
+                mc.preferred_col = null;
+            }
+        },
+        .editing_delete_back => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                const row = mc.row;
+                var prev_len: usize = 0;
+                if (row > 0) {
+                    prev_len = tab.buf.lines.items[row - 1].len();
+                }
+
+                if (try tab.buf.deleteCharBack(mc.row, mc.col)) {
+                    mc.row -= 1;
+                    mc.col = prev_len;
+                } else {
+                    if (mc.col > 0) mc.col -= 1;
+                }
+                mc.preferred_col = null;
+            }
+        },
+        .editing_indent => {
+            if (ed.currentTab()) |tab| {
+                const mc = tab.mainCursor();
+                clampCursorToBuffer(tab, mc);
+                tab.buf.beginUndoGroup();
+                defer tab.buf.endUndoGroup();
+                for (0..4) |_| {
+                    try tab.buf.insertChar(mc.row, mc.col, ' ');
+                    mc.col += 1;
+                }
+                mc.preferred_col = null;
+            }
+        },
+        else => unreachable,
+    }
+}
+
+fn executeTerminalActionCommand(ed: *editor.Editor, command: commands.CommandId) void {
+    const body_height = ed.terminalPanelHeight() -| 1;
+    switch (command) {
+        .terminal_unfocus => {
+            clearPendingNormalSequence(ed);
+            enterNormalFromTerminal(ed);
+            ed.markDirty(.full);
+        },
+        .terminal_scroll_page_up => {
+            ed.terminal_panel.scrollUp(if (body_height > 0) body_height else 1, body_height);
+            ed.markDirty(.partial);
+        },
+        .terminal_scroll_page_down => {
+            ed.terminal_panel.scrollDown(if (body_height > 0) body_height else 1, body_height);
+            ed.markDirty(.partial);
+        },
+        .terminal_scroll_bottom => {
+            ed.terminal_panel.scrollToBottom();
+            ed.markDirty(.partial);
+        },
+        else => unreachable,
+    }
+}
+
+fn executeHelpActionCommand(ed: *editor.Editor, command: commands.CommandId) void {
+    switch (command) {
+        .help_close => {
+            clearPendingNormalSequence(ed);
+            ed.state.help_popup.close();
+            ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+            ed.markDirty(.full);
+        },
+        .help_scroll_up => {
+            ed.state.help_popup.scrollUp(1);
+            ed.markDirty(.full);
+        },
+        .help_scroll_down => {
+            ed.state.help_popup.scrollDown(1, ed.helpPopupBodyRows());
+            ed.markDirty(.full);
+        },
+        .help_page_up => {
+            const rows = ed.helpPopupBodyRows();
+            ed.state.help_popup.scrollUp(rows);
+            ed.markDirty(.full);
+        },
+        .help_page_down => {
+            const rows = ed.helpPopupBodyRows();
+            ed.state.help_popup.scrollDown(rows, rows);
+            ed.markDirty(.full);
+        },
+        else => unreachable,
+    }
+}
+
+fn executePromptActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .prompt_cancel => {
+            clearPendingNormalSequence(ed);
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.markDirty(.full);
+        },
+        .prompt_confirm, .prompt_submit => {
+            try applyPrompt(ed);
+            ed.markDirty(.full);
+        },
+        .prompt_backspace => {
+            ed.state.prompt_popup.backspace();
+            ed.markDirty(.full);
+        },
+        else => unreachable,
+    }
+}
+
+fn executeSaveConfirmationActionCommand(ed: *editor.Editor, command: commands.CommandId) void {
+    switch (command) {
+        .save_confirmation_save => {
+            if (ed.currentTab()) |tab| {
+                if (tab.buf.filename) |f| {
+                    tab.buf.saveToFile(ed.io, f) catch {
+                        ed.state.error_message = "Failed to save file";
+                        ed.state.save_confirmation.close();
+                        ed.state.mode = .Normal;
+                        ed.markDirty(.full);
+                        return;
+                    };
+                } else {
+                    ed.state.error_message = "No file name — use :w <filename> first";
+                    ed.state.save_confirmation.close();
+                    ed.state.mode = .Normal;
+                    ed.markDirty(.full);
+                    return;
+                }
+            }
+            ed.state.save_confirmation.close();
+            ed.closeTab();
+            if (ed.state.quitting_all) {
+                ed.processQuitAll();
+            }
+        },
+        .save_confirmation_discard => {
+            ed.state.save_confirmation.close();
+            if (ed.currentTab()) |tab| tab.buf.is_dirty = false;
+            ed.closeTab();
+            if (ed.state.quitting_all) {
+                ed.processQuitAll();
+            }
+        },
+        .save_confirmation_cancel => {
+            ed.state.save_confirmation.close();
+            ed.state.quitting_all = false;
+            ed.state.mode = .Normal;
+            ed.markDirty(.full);
+        },
+        else => unreachable,
+    }
+}
+
 fn openExplorerPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
     const tree = if (ed.state.tree) |*tree| tree else return;
     if (tree.search_active) {
@@ -313,6 +1398,85 @@ fn openExplorerPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
     try ed.state.prompt_popup.open(ed.allocator, kind, title, context_path, initial);
     ed.state.mode = .Prompt;
     ed.markDirty(.full);
+}
+
+fn openExplorerSelected(ed: *editor.Editor) !void {
+    const tree = if (ed.state.tree) |*tree| tree else return;
+    if (tree.nodes.items.len == 0) return;
+
+    const node = tree.nodes.items[tree.selected_index];
+    if (node.is_dir) {
+        tree.toggleExpand() catch {};
+    } else {
+        if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, node.absolute_path)) |b| {
+            try navigation.recordCurrentJump(ed);
+            try ed.addTab(b);
+            ed.state.explorer_focused = false;
+            ed.state.mode = .Normal;
+        } else |err| {
+            logz.err().fmt("msg", "failed to open file {s}: {s}", .{ node.absolute_path, @errorName(err) }).log();
+            ed.state.error_message = "Could not open file";
+        }
+    }
+}
+
+fn openExplorerSearchSelected(ed: *editor.Editor) !void {
+    const tree = if (ed.state.tree) |*tree| tree else return;
+    if (tree.selectedSearchResult()) |result| {
+        const path = try ed.allocator.dupe(u8, result.absolute_path);
+        defer ed.allocator.free(path);
+        const is_dir = result.is_dir;
+
+        try tree.finishSearch();
+        if (is_dir) {
+            tree.toggleExpand() catch {};
+        } else {
+            if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, path)) |b| {
+                try navigation.recordCurrentJump(ed);
+                try ed.addTab(b);
+                ed.state.explorer_focused = false;
+                ed.state.mode = .Normal;
+            } else |err| {
+                logz.err().fmt("msg", "failed to open file {s}: {s}", .{ path, @errorName(err) }).log();
+                ed.state.error_message = "Could not open file";
+            }
+        }
+    } else {
+        tree.finishSearch() catch {};
+    }
+}
+
+fn executeExplorerFileActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    clearPendingNormalSequence(ed);
+    switch (command) {
+        .explorer_new_file => try openExplorerPrompt(ed, .explorer_new_file),
+        .explorer_rename => try openExplorerPrompt(ed, .explorer_rename),
+        .explorer_delete => try openExplorerPrompt(ed, .explorer_delete_confirm),
+        else => unreachable,
+    }
+}
+
+fn executeExplorerActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const tree = if (ed.state.tree) |*tree| tree else return;
+    switch (command) {
+        .explorer_search_open => try tree.startSearch(),
+        .explorer_move_up => tree.moveUp(),
+        .explorer_move_down => tree.moveDown(),
+        .explorer_open_selected => try openExplorerSelected(ed),
+        else => unreachable,
+    }
+}
+
+fn executeExplorerSearchActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const tree = if (ed.state.tree) |*tree| tree else return;
+    switch (command) {
+        .explorer_search_cancel => tree.cancelSearch(),
+        .explorer_search_backspace => try tree.backspaceSearch(),
+        .explorer_move_up => tree.moveUp(),
+        .explorer_move_down => tree.moveDown(),
+        .explorer_open_selected => try openExplorerSearchSelected(ed),
+        else => unreachable,
+    }
 }
 
 fn promptPath(ed: *editor.Editor, base: []const u8, input: []const u8) ![]u8 {
@@ -444,27 +1608,8 @@ fn cyclePanelFocus(ed: *editor.Editor) !bool {
 }
 
 fn handleTerminalInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
-    if (matches(event, ed.keys.normal_mode)) {
-        clearPendingNormalSequence(ed);
-        enterNormalFromTerminal(ed);
-        ed.markDirty(.full);
-        return;
-    }
-
-    const body_height = ed.terminalPanelHeight() -| 1;
-    if (event.key == .PageUp and !event.ctrl and !event.alt) {
-        ed.terminal_panel.scrollUp(if (body_height > 0) body_height else 1, body_height);
-        ed.markDirty(.partial);
-        return;
-    }
-    if (event.key == .PageDown and !event.ctrl and !event.alt) {
-        ed.terminal_panel.scrollDown(if (body_height > 0) body_height else 1, body_height);
-        ed.markDirty(.partial);
-        return;
-    }
-    if (event.key == .End and event.shift and !event.ctrl and !event.alt) {
-        ed.terminal_panel.scrollToBottom();
-        ed.markDirty(.partial);
+    if (terminalActionCommandForEvent(ed, event)) |command| {
+        executeTerminalActionCommand(ed, command);
         return;
     }
 
@@ -482,28 +1627,8 @@ fn handleTerminalInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 }
 
 fn handleHelpInput(ed: *editor.Editor, event: terminal.KeyEvent) void {
-    const keys = ed.keys;
-    if (matches(event, keys.normal_mode) or
-        (event.key == .Char and event.char == 'q' and !event.ctrl and !event.alt))
-    {
-        clearPendingNormalSequence(ed);
-        ed.state.help_popup.close();
-        ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
-        ed.markDirty(.full);
-    } else if (event.key == .Up and !event.ctrl and !event.alt) {
-        ed.state.help_popup.scrollUp(1);
-        ed.markDirty(.full);
-    } else if (event.key == .Down and !event.ctrl and !event.alt) {
-        ed.state.help_popup.scrollDown(1, ed.helpPopupBodyRows());
-        ed.markDirty(.full);
-    } else if (event.key == .PageUp and !event.ctrl and !event.alt) {
-        const rows = ed.helpPopupBodyRows();
-        ed.state.help_popup.scrollUp(rows);
-        ed.markDirty(.full);
-    } else if (event.key == .PageDown and !event.ctrl and !event.alt) {
-        const rows = ed.helpPopupBodyRows();
-        ed.state.help_popup.scrollDown(rows, rows);
-        ed.markDirty(.full);
+    if (helpActionCommandForEvent(ed, event)) |command| {
+        executeHelpActionCommand(ed, command);
     }
 }
 
@@ -513,13 +1638,14 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     const keys = ed.keys;
+    const defaults = config.KeybindingsConfig{};
 
     if (ed.state.mode == .Help) {
         handleHelpInput(ed, event);
         return;
     }
 
-    if (matches(event, keys.toggle_terminal)) {
+    if (matchesRegistryOrLegacyCommand(ed, event, .global, .terminal_toggle, keys.toggle_terminal, defaults.toggle_terminal)) {
         clearPendingNormalSequence(ed);
         if (ed.terminal_panel.visible) {
             hideTerminal(ed);
@@ -529,7 +1655,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    if (matches(event, keys.toggle_explorer)) {
+    if (matchesRegistryOrLegacyCommand(ed, event, .global, .explorer_toggle, keys.toggle_explorer, defaults.toggle_explorer)) {
         clearPendingNormalSequence(ed);
         if (ed.state.tree == null) {
             ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
@@ -546,7 +1672,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    if (matches(event, keys.switch_focus)) {
+    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_cycle_panel_focus, keys.switch_focus, defaults.switch_focus)) {
         clearPendingNormalSequence(ed);
         if (try cyclePanelFocus(ed)) return;
     }
@@ -556,7 +1682,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    if (matches(event, keys.close_tab)) {
+    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_close_tab, keys.close_tab, defaults.close_tab)) {
         clearPendingNormalSequence(ed);
         if (ed.state.mode != .Dashboard) {
             // If the buffer has unsaved changes, show the confirmation popup
@@ -575,105 +1701,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null and
         (ed.state.mode == .Normal or ed.state.mode == .Insert))
     {
-        if (matches(event, keys.explorer_new_file)) {
-            clearPendingNormalSequence(ed);
-            try openExplorerPrompt(ed, .explorer_new_file);
-            return;
-        }
-        if (matches(event, keys.explorer_rename)) {
-            clearPendingNormalSequence(ed);
-            try openExplorerPrompt(ed, .explorer_rename);
-            return;
-        }
-        if (matches(event, keys.explorer_delete)) {
-            clearPendingNormalSequence(ed);
-            try openExplorerPrompt(ed, .explorer_delete_confirm);
-            return;
-        }
-    }
-
-    if (matches(event, keys.next_tab)) {
-        clearPendingNormalSequence(ed);
-        ed.nextTab();
-        return;
-    }
-
-    if (matches(event, keys.previous_tab)) {
-        clearPendingNormalSequence(ed);
-        ed.prevTab();
-        return;
-    }
-
-    // --- Global Actions (Normal & Insert) ---
-    if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
-        if (matches(event, keys.select_all)) {
-            clearPendingNormalSequence(ed);
-            actions.selectAll(ed);
-            return;
-        }
-        if (matches(event, keys.copy)) {
-            clearPendingNormalSequence(ed);
-            try actions.copy(ed);
-            return;
-        }
-        if (matches(event, keys.cut)) {
-            clearPendingNormalSequence(ed);
-            try actions.cut(ed);
-            return;
-        }
-        if (matches(event, keys.paste)) {
-            clearPendingNormalSequence(ed);
-            try actions.paste(ed);
-            return;
-        }
-        if (matches(event, keys.save)) {
-            clearPendingNormalSequence(ed);
-            if (ed.currentTab()) |tab| {
-                if (tab.buf.filename) |f| {
-                    try tab.buf.saveToFile(ed.io, f);
-                }
-            }
-            return;
-        }
-        if (matches(event, keys.undo)) {
-            clearPendingNormalSequence(ed);
-            try actions.undo(ed);
-            return;
-        }
-        if (matches(event, keys.redo)) {
-            clearPendingNormalSequence(ed);
-            try actions.redo(ed);
-            return;
-        }
-        if (matches(event, keys.delete_word_back)) {
-            clearPendingNormalSequence(ed);
-            try actions.deleteWordBack(ed);
-            return;
-        }
-        if (matches(event, keys.duplicate_line)) {
-            clearPendingNormalSequence(ed);
-            try actions.duplicateLine(ed);
-            return;
-        }
-        if (matches(event, keys.delete_line)) {
-            clearPendingNormalSequence(ed);
-            try actions.deleteLine(ed);
-            return;
-        }
-        if (matches(event, keys.add_cursor_above)) {
-            clearPendingNormalSequence(ed);
-            try actions.addCursorAbove(ed);
-            return;
-        }
-        if (matches(event, keys.add_cursor_below)) {
-            clearPendingNormalSequence(ed);
-            try actions.addCursorBelow(ed);
-            return;
-        }
-        if (matches(event, keys.normal_mode)) {
-            clearPendingNormalSequence(ed);
-            actions.clearSelections(ed);
-            if (ed.state.mode == .Insert) ed.state.mode = .Normal;
+        if (explorerFileActionCommandForEvent(ed, event)) |command| {
+            try executeExplorerFileActionCommand(ed, command);
             return;
         }
     }
@@ -681,146 +1710,60 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null) {
         if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
             if (ed.state.tree.?.search_active) {
-                if (matches(event, keys.normal_mode)) {
-                    ed.state.tree.?.cancelSearch();
-                    return;
-                } else if (matches(event, keys.prompt_backspace)) {
-                    try ed.state.tree.?.backspaceSearch();
-                    return;
-                } else if (matches(event, keys.explorer_up)) {
-                    ed.state.tree.?.moveUp();
-                    return;
-                } else if (matches(event, keys.explorer_down)) {
-                    ed.state.tree.?.moveDown();
-                    return;
-                } else if (matches(event, keys.explorer_open)) {
-                    if (ed.state.tree.?.selectedSearchResult()) |result| {
-                        const path = try ed.allocator.dupe(u8, result.absolute_path);
-                        defer ed.allocator.free(path);
-                        const is_dir = result.is_dir;
-
-                        try ed.state.tree.?.finishSearch();
-                        if (is_dir) {
-                            ed.state.tree.?.toggleExpand() catch {};
-                        } else {
-                            if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, path)) |b| {
-                                try navigation.recordCurrentJump(ed);
-                                try ed.addTab(b);
-                                ed.state.explorer_focused = false;
-                                ed.state.mode = .Normal;
-                            } else |err| {
-                                logz.err().fmt("msg", "failed to open file {s}: {s}", .{ path, @errorName(err) }).log();
-                                ed.state.error_message = "Could not open file";
-                            }
-                        }
-                    } else {
-                        ed.state.tree.?.finishSearch() catch {};
-                    }
+                if (explorerSearchActionCommandForEvent(ed, event)) |command| {
+                    try executeExplorerSearchActionCommand(ed, command);
                     return;
                 } else if (event.key == .Char and !event.ctrl and !event.alt) {
                     try ed.state.tree.?.appendSearchChar(event.char);
                     return;
                 }
-            } else if (matches(event, keys.search_mode)) {
-                try ed.state.tree.?.startSearch();
-                return;
-            } else if (matches(event, keys.explorer_up)) {
-                ed.state.tree.?.moveUp();
-                return;
-            } else if (matches(event, keys.explorer_down)) {
-                ed.state.tree.?.moveDown();
-                return;
-            } else if (matches(event, keys.explorer_open)) {
-                if (ed.state.tree.?.nodes.items.len > 0) {
-                    const node = ed.state.tree.?.nodes.items[ed.state.tree.?.selected_index];
-                    if (node.is_dir) {
-                        ed.state.tree.?.toggleExpand() catch {};
-                    } else {
-                        if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, node.absolute_path)) |b| {
-                            try navigation.recordCurrentJump(ed);
-                            try ed.addTab(b);
-                            ed.state.explorer_focused = false;
-                            ed.state.mode = .Normal;
-                        } else |err| {
-                            logz.err().fmt("msg", "failed to open file {s}: {s}", .{ node.absolute_path, @errorName(err) }).log();
-                            ed.state.error_message = "Could not open file";
-                        }
-                    }
-                }
+            } else if (explorerActionCommandForEvent(ed, event)) |command| {
+                try executeExplorerActionCommand(ed, command);
                 return;
             }
         }
     }
 
+    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_next_tab, keys.next_tab, defaults.next_tab)) {
+        clearPendingNormalSequence(ed);
+        ed.nextTab();
+        return;
+    }
+
+    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_previous_tab, keys.previous_tab, defaults.previous_tab)) {
+        clearPendingNormalSequence(ed);
+        ed.prevTab();
+        return;
+    }
+
+    // --- Global Actions (Normal & Insert) ---
+    if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
+        if (normalSharedActionCommandForEvent(ed, event)) |command| {
+            try executeSharedActionCommand(ed, command);
+            return;
+        }
+    }
+
     switch (ed.state.mode) {
         .Dashboard => {
-            if (matches(event, keys.command_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Command;
-                ed.state.command_buffer.clearRetainingCapacity();
-                try ed.state.command_popup.open(ed.allocator);
-                return;
-            }
-            const action =
-                if (matches(event, keys.new_file))
-                    .NewFile
-                else if (matches(event, keys.open_file))
-                    .OpenFile
-                else if (matches(event, keys.open_folder))
-                    .OpenFolder
-                else if (matches(event, keys.settings))
-                    .Settings
-                else if (matches(event, keys.quit))
-                    .Quit
-                else if (matches(event, keys.dashboard_up)) blk: {
-                    ed.state.dash.moveUp();
-                    break :blk .None;
-                } else if (matches(event, keys.dashboard_down)) blk: {
-                    ed.state.dash.moveDown();
-                    break :blk .None;
-                } else if (matches(event, keys.dashboard_select))
-                    ed.state.dash.selectedAction()
-                else
-                    .None;
-
-            switch (action) {
-                .NewFile => {
-                    try openDashboardPicker(ed, .new_file_location);
-                },
-                .OpenFile => {
-                    try openDashboardPicker(ed, .open_file);
-                },
-                .OpenFolder => {
-                    try openDashboardPicker(ed, .open_folder);
-                },
-                .Quit => ed.should_quit = true,
-                else => {},
+            if (dashboardActionCommandForEvent(ed, event)) |command| {
+                try executeDashboardActionCommand(ed, command);
             }
         },
         .Normal => {
-            if (matches(event, keys.jump_back)) {
+            if (resolveNormalJumpCommand(ed, event)) |jump_command| {
                 clearPendingNormalSequence(ed);
-                _ = try navigation.jumpBack(ed);
-            } else if (matches(event, keys.jump_forward)) {
-                clearPendingNormalSequence(ed);
-                _ = try navigation.jumpForward(ed);
+                switch (jump_command) {
+                    .navigation_jump_back => _ = try navigation.jumpBack(ed),
+                    .navigation_jump_forward => _ = try navigation.jumpForward(ed),
+                    else => unreachable,
+                }
             } else if (try handleNormalSequence(ed, event)) {
                 // Handled
             } else if (try handleMovement(ed, event)) {
                 // Handled
-            } else if (matches(event, keys.insert_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Insert;
-            } else if (matches(event, keys.command_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Command;
-                ed.state.command_buffer.clearRetainingCapacity();
-                try ed.state.command_popup.open(ed.allocator);
-            } else if (matches(event, keys.search_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Search;
-                ed.state.search_buffer.clearRetainingCapacity();
-                if (ed.state.search_system) |*s| s.clear();
+            } else if (normalModeActionCommandForEvent(ed, event)) |command| {
+                try executeNormalModeActionCommand(ed, command);
             }
 
             // Keep cursor within line bounds
@@ -839,248 +1782,69 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         .Insert => {
             if (try handleMovement(ed, event)) {
                 // Handled
-            } else if (matches(event, keys.normal_mode)) {
-                ed.state.mode = .Normal;
-            } else if (matches(event, keys.insert_newline)) {
-                if (ed.currentTab()) |tab| {
-                    const mc = tab.mainCursor();
-                    try tab.buf.insertNewline(mc.row, mc.col);
-                    mc.row += 1;
-                    mc.col = 0;
-                    mc.preferred_col = null;
-                }
-            } else if (matches(event, keys.delete_back)) {
-                if (ed.currentTab()) |tab| {
-                    const mc = tab.mainCursor();
-                    const row = mc.row;
-                    var prev_len: usize = 0;
-                    if (row > 0) {
-                        prev_len = tab.buf.lines.items[row - 1].len();
-                    }
-
-                    if (try tab.buf.deleteCharBack(mc.row, mc.col)) {
-                        mc.row -= 1;
-                        mc.col = prev_len;
-                    } else {
-                        if (mc.col > 0) mc.col -= 1;
-                    }
-                    mc.preferred_col = null;
-                }
+            } else if (insertActionCommandForEvent(ed, event)) |command| {
+                try executeInsertActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 if (ed.currentTab()) |tab| {
                     const mc = tab.mainCursor();
                     clampCursorToBuffer(tab, mc);
-                    if (matches(event, keys.indent)) {
-                        tab.buf.beginUndoGroup();
-                        defer tab.buf.endUndoGroup();
-                        for (0..4) |_| {
-                            try tab.buf.insertChar(mc.row, mc.col, ' ');
-                            mc.col += 1;
-                        }
-                    } else {
-                        try tab.buf.insertChar(mc.row, mc.col, event.char);
-                        mc.col += 1;
-                    }
+                    try tab.buf.insertChar(mc.row, mc.col, event.char);
+                    mc.col += 1;
                     mc.preferred_col = null;
                 }
             }
         },
         .Command => {
-            if (matches(event, keys.normal_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Normal;
-                ed.state.command_popup.close();
-            } else if (matches(event, keys.prompt_backspace)) {
-                try ed.state.command_popup.backspace(ed.allocator);
-            } else if (matches(event, keys.indent)) {
-                ed.state.command_popup.tabComplete();
-            } else if (event.key == .Down) {
-                ed.state.command_popup.selectNext();
-            } else if (event.key == .Up) {
-                ed.state.command_popup.selectPrevious();
-            } else if (matches(event, keys.prompt_submit)) {
-                try ed.state.command_popup.acceptSelected(ed.allocator);
-                const command = @import("../command.zig");
-                clearPendingNormalSequence(ed);
-                try command.execute(ed);
+            if (commandLineActionCommandForEvent(ed, event)) |command| {
+                try executeCommandLineActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.command_popup.appendChar(ed.allocator, event.char);
             }
         },
         .OpenFilePrompt => {
-            if (matches(event, keys.normal_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Dashboard;
-            } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.state.command_buffer.items.len > 0) {
-                    ed.state.command_buffer.shrinkRetainingCapacity(ed.state.command_buffer.items.len - 1);
-                }
-            } else if (matches(event, keys.prompt_submit)) {
-                if (ed.state.command_buffer.items.len > 0) {
-                    if (buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.state.command_buffer.items)) |b| {
-                        try navigation.recordCurrentJump(ed);
-                        try ed.addTab(b);
-                        clearPendingNormalSequence(ed);
-                        ed.state.mode = .Normal;
-                        ed.state.explorer_focused = false;
-                    } else |_| {
-                        ed.state.error_message = "Could not open file";
-                        clearPendingNormalSequence(ed);
-                        ed.state.mode = .Dashboard;
-                    }
-                } else {
-                    clearPendingNormalSequence(ed);
-                    ed.state.mode = .Dashboard;
-                }
+            if (openFilePromptActionCommandForEvent(ed, event)) |command| {
+                try executeOpenFilePromptActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.command_buffer.append(ed.allocator, event.char);
             }
         },
         .FilesystemPicker => {
-            if (matches(event, keys.normal_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.filesystem_picker.close(ed.allocator);
-                ed.state.mode = .Dashboard;
-                ed.markDirty(.full);
-            } else if (matches(event, keys.prompt_backspace)) {
-                try ed.state.filesystem_picker.backspace(ed.allocator, ed.io);
-                ed.markDirty(.full);
-            } else if (ed.state.filesystem_picker.mode == .new_file_location and ed.state.filesystem_picker.phase == .browsing and event.key == .Char and event.char == ' ' and !event.ctrl and !event.alt) {
-                ed.state.filesystem_picker.beginNameInput();
-                ed.markDirty(.full);
-            } else if (ed.state.filesystem_picker.mode == .open_folder and event.key == .Char and event.char == ' ' and !event.ctrl and !event.alt) {
-                if (try ed.state.filesystem_picker.selectFolder(ed.allocator)) |result| {
-                    try applyPickerResult(ed, result);
+            if (pickerActionCommandForEvent(ed, event)) |command| {
+                try executePickerActionCommand(ed, command);
+            } else if (ed.state.filesystem_picker.mode == .new_file_location and
+                ed.state.filesystem_picker.phase == .browsing)
+            {
+                if (pickerNewFileActionCommandForEvent(ed, event)) |command| {
+                    try executePickerActionCommand(ed, command);
                 }
-            } else if (ed.state.filesystem_picker.mode == .open_folder and event.key == .Char and event.char == '.' and !event.ctrl and !event.alt) {
-                if (try ed.state.filesystem_picker.selectCurrentFolder(ed.allocator)) |result| {
-                    try applyPickerResult(ed, result);
+            } else if (ed.state.filesystem_picker.mode == .open_folder) {
+                if (pickerOpenFolderActionCommandForEvent(ed, event)) |command| {
+                    try executePickerActionCommand(ed, command);
                 }
-            } else if (event.key == .Up) {
-                ed.state.filesystem_picker.moveUp();
-                ed.markDirty(.full);
-            } else if (event.key == .Down) {
-                ed.state.filesystem_picker.moveDown();
-                ed.markDirty(.full);
-            } else if (matches(event, keys.prompt_submit)) {
-                if (try ed.state.filesystem_picker.accept(ed.allocator, ed.io)) |result| {
-                    try applyPickerResult(ed, result);
-                }
-                ed.markDirty(.full);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.filesystem_picker.appendChar(ed.allocator, event.char);
                 ed.markDirty(.full);
             }
         },
         .Prompt => {
-            if (matches(event, keys.normal_mode) or (event.key == .Char and (event.char == 'n' or event.char == 'N') and ed.state.prompt_popup.kind == .explorer_delete_confirm)) {
-                clearPendingNormalSequence(ed);
-                ed.state.prompt_popup.close(ed.allocator);
-                ed.state.mode = .Normal;
-                ed.markDirty(.full);
-            } else if (ed.state.prompt_popup.kind == .explorer_delete_confirm and event.key == .Char and (event.char == 'y' or event.char == 'Y')) {
-                try applyPrompt(ed);
-                ed.markDirty(.full);
-            } else if (matches(event, keys.prompt_submit)) {
-                try applyPrompt(ed);
-                ed.markDirty(.full);
-            } else if (matches(event, keys.prompt_backspace) and ed.state.prompt_popup.kind != .explorer_delete_confirm) {
-                ed.state.prompt_popup.backspace();
-                ed.markDirty(.full);
+            if (promptActionCommandForEvent(ed, event)) |command| {
+                try executePromptActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt and ed.state.prompt_popup.kind != .explorer_delete_confirm) {
                 try ed.state.prompt_popup.appendChar(ed.allocator, event.char);
                 ed.markDirty(.full);
             }
         },
         .Search => {
-            if (matches(event, keys.normal_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Normal;
-                if (ed.state.search_system) |*s| s.clear();
-                ed.state.search_buffer.clearRetainingCapacity();
-            } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.state.search_buffer.items.len > 0) {
-                    ed.state.search_buffer.shrinkRetainingCapacity(ed.state.search_buffer.items.len - 1);
-                    if (ed.currentTab()) |tab| {
-                        try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
-                        if (ed.state.search_system.?.getActiveMatch()) |m| {
-                            const mc = tab.mainCursor();
-                            mc.row = tab.buf.clampToVisibleLine(m.row);
-                            mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
-                            mc.preferred_col = null;
-                            ed.clampScroll();
-                        }
-                    }
-                }
-            } else if (matches(event, keys.prompt_submit)) {
-                clearPendingNormalSequence(ed);
-                ed.state.mode = .Normal;
-                if (ed.state.search_system) |*s| s.clear();
-                ed.state.search_buffer.clearRetainingCapacity();
-            } else if (matches(event, keys.search_next)) {
-                if (ed.state.search_system) |*s| {
-                    s.nextMatch();
-                    if (s.getActiveMatch()) |m| {
-                        if (ed.currentTab()) |tab| {
-                            const mc = tab.mainCursor();
-                            mc.row = tab.buf.clampToVisibleLine(m.row);
-                            mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
-                            mc.preferred_col = null;
-                            ed.clampScroll();
-                        }
-                    }
-                }
-            } else if (matches(event, keys.search_previous)) {
-                if (ed.state.search_system) |*s| {
-                    s.prevMatch();
-                    if (s.getActiveMatch()) |m| {
-                        if (ed.currentTab()) |tab| {
-                            const mc = tab.mainCursor();
-                            mc.row = tab.buf.clampToVisibleLine(m.row);
-                            mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
-                            mc.preferred_col = null;
-                            ed.clampScroll();
-                        }
-                    }
-                }
+            if (searchActionCommandForEvent(ed, event)) |command| {
+                try executeSearchActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.search_buffer.append(ed.allocator, event.char);
-                if (ed.currentTab()) |tab| {
-                    try ed.state.search_system.?.update(&tab.buf, ed.state.search_buffer.items);
-                    if (ed.state.search_system.?.getActiveMatch()) |m| {
-                        const mc = tab.mainCursor();
-                        mc.row = tab.buf.clampToVisibleLine(m.row);
-                        mc.col = @min(m.col, tab.buf.lines.items[mc.row].len());
-                        mc.preferred_col = null;
-                        ed.clampScroll();
-                    }
-                }
+                try refreshSearchFromBuffer(ed);
             }
         },
         .GlobalSearch => {
-            if (matches(event, keys.normal_mode)) {
-                clearPendingNormalSequence(ed);
-                ed.state.global_search.close(ed.allocator);
-                ed.state.mode = .Normal;
-                ed.markDirty(.full);
-            } else if (matches(event, keys.prompt_backspace)) {
-                if (ed.state.global_search.input.items.len > 0) {
-                    ed.state.global_search.input.shrinkRetainingCapacity(ed.state.global_search.input.items.len - 1);
-                    try refreshGlobalSearchOrReport(ed);
-                    ed.markDirty(.full);
-                }
-            } else if (matches(event, keys.indent)) {
-                ed.state.global_search.selectNext();
-                ed.markDirty(.full);
-            } else if (event.key == .Down) {
-                ed.state.global_search.selectNext();
-                ed.markDirty(.full);
-            } else if (event.key == .Up) {
-                ed.state.global_search.selectPrevious();
-                ed.markDirty(.full);
-            } else if (matches(event, keys.prompt_submit)) {
-                clearPendingNormalSequence(ed);
-                try acceptGlobalSearchResult(ed);
+            if (globalSearchActionCommandForEvent(ed, event)) |command| {
+                try executeGlobalSearchActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.global_search.input.append(ed.allocator, event.char);
                 try refreshGlobalSearchOrReport(ed);
@@ -1091,55 +1855,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             handleHelpInput(ed, event);
         },
         .SaveConfirmation => {
-            // S / s  → save then close, D / d or Enter → discard, Esc / n → cancel
-            if (event.key == .Char and !event.ctrl and !event.alt and
-                (event.char == 's' or event.char == 'S'))
-            {
-                // Save then close tab
-                if (ed.currentTab()) |tab| {
-                    if (tab.buf.filename) |f| {
-                        tab.buf.saveToFile(ed.io, f) catch {
-                            ed.state.error_message = "Failed to save file";
-                            ed.state.save_confirmation.close();
-                            ed.state.mode = .Normal;
-                            ed.markDirty(.full);
-                            return;
-                        };
-                    } else {
-                        // No filename — cannot save; fall through to error
-                        ed.state.error_message = "No file name — use :w <filename> first";
-                        ed.state.save_confirmation.close();
-                        ed.state.mode = .Normal;
-                        ed.markDirty(.full);
-                        return;
-                    }
-                }
-                ed.state.save_confirmation.close();
-                ed.closeTab();
-                if (ed.state.quitting_all) {
-                    ed.processQuitAll();
-                }
-            } else if ((event.key == .Char and !event.ctrl and !event.alt and
-                (event.char == 'd' or event.char == 'D')) or
-                matches(event, keys.prompt_submit))
-            {
-                // Discard changes and close
-                ed.state.save_confirmation.close();
-                // Mark buffer clean so closeTab does not attempt a guard check
-                if (ed.currentTab()) |tab| tab.buf.is_dirty = false;
-                ed.closeTab();
-                if (ed.state.quitting_all) {
-                    ed.processQuitAll();
-                }
-            } else if (matches(event, keys.normal_mode) or
-                (event.key == .Char and !event.ctrl and !event.alt and
-                    (event.char == 'n' or event.char == 'N')))
-            {
-                // Cancel — return to Normal mode without closing
-                ed.state.save_confirmation.close();
-                ed.state.quitting_all = false;
-                ed.state.mode = .Normal;
-                ed.markDirty(.full);
+            if (saveConfirmationActionCommandForEvent(ed, event)) |command| {
+                executeSaveConfirmationActionCommand(ed, command);
             }
         },
         .Terminal => {
@@ -1150,7 +1867,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
 pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const tab = ed.currentTab() orelse return false;
-    const keys = ed.keys;
+    const movement_command = movementCommandForEvent(ed, event) orelse return false;
     const page_rows = @max(ed.editorVisibleRows(), 1);
     if (tab.buf.lines.items.len == 0) return false;
 
@@ -1168,37 +1885,37 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
             cursor.selection_start = null;
         }
 
-        if (matchesMovement(event, keys.line_end)) {
+        if (movement_command == .navigation_line_end) {
             cursor.col = tab.buf.lines.items[cursor.row].len();
             cursor.preferred_col = null;
             handled = true;
-        } else if (matchesMovement(event, keys.line_start)) {
+        } else if (movement_command == .navigation_line_start) {
             cursor.col = 0;
             cursor.preferred_col = null;
             handled = true;
-        } else if (matchesMovement(event, keys.word_left)) {
+        } else if (movement_command == .navigation_word_left) {
             try tab.buf.jumpWordLeft(&cursor.row, &cursor.col);
             cursor.preferred_col = null;
             handled = true;
-        } else if (matchesMovement(event, keys.word_right)) {
+        } else if (movement_command == .navigation_word_right) {
             try tab.buf.jumpWordRight(&cursor.row, &cursor.col);
             cursor.preferred_col = null;
             handled = true;
-        } else if (matchesMovement(event, keys.move_up)) {
+        } else if (movement_command == .navigation_move_up) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
             cursor.row = tab.buf.prevVisibleLine(cursor.row);
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
-        } else if (matchesMovement(event, keys.move_down)) {
+        } else if (movement_command == .navigation_move_down) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
             cursor.row = tab.buf.nextVisibleLine(cursor.row);
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
-        } else if (event.key == .PageUp and !event.ctrl and !event.alt) {
+        } else if (movement_command == .navigation_page_up) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
             for (0..page_rows) |_| {
@@ -1209,7 +1926,7 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
-        } else if (event.key == .PageDown and !event.ctrl and !event.alt) {
+        } else if (movement_command == .navigation_page_down) {
             const preferred_col = cursor.preferred_col orelse cursor.col;
             cursor.preferred_col = preferred_col;
             for (0..page_rows) |_| {
@@ -1220,11 +1937,11 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
             const new_line_len = tab.buf.lines.items[cursor.row].len();
             cursor.col = @min(preferred_col, new_line_len);
             handled = true;
-        } else if (matchesMovement(event, keys.move_left)) {
+        } else if (movement_command == .navigation_move_left) {
             if (cursor.col > 0) cursor.col -= 1;
             cursor.preferred_col = null;
             handled = true;
-        } else if (matchesMovement(event, keys.move_right)) {
+        } else if (movement_command == .navigation_move_right) {
             const line = tab.buf.lines.items[cursor.row];
             if (cursor.col < line.len()) cursor.col += 1;
             cursor.preferred_col = null;

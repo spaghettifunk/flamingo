@@ -2,6 +2,7 @@ const std = @import("std");
 const config = @import("config.zig");
 const logger = @import("logger.zig");
 const editor = @import("editor/editor.zig");
+const keybindings = @import("editor/keybindings.zig");
 const terminal = @import("terminal.zig");
 
 const c = @cImport({
@@ -20,6 +21,14 @@ pub fn main(init: std.process.Init) !void {
 
     const cfg = result.value;
     try config.validate(&cfg);
+    var keybinding_diagnostics = keybindings.BuildDiagnostics{};
+    defer keybinding_diagnostics.deinit(allocator);
+    var resolved_keybindings = config.buildKeybindingRegistry(allocator, &cfg, &keybinding_diagnostics) catch |err| {
+        keybinding_diagnostics.print();
+        return err;
+    };
+    resolved_keybindings.deinit(allocator);
+    keybinding_diagnostics.print();
 
     // initiate logger
     try logger.init(io, allocator, cfg.debug);
