@@ -9,10 +9,13 @@ const global_search = @import("global_search.zig");
 const commands = @import("commands.zig");
 const command_keybindings = @import("keybindings.zig");
 const normal_sequence = @import("input_router/normal_sequence.zig");
+const viewport_mod = @import("navigation/viewport.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
+const line_render = @import("renderer/line_render.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
 const popup = @import("renderer/popup.zig");
+const search_popups = @import("renderer/search_popups.zig");
 const statusline = @import("renderer/statusline.zig");
 const tabbar = @import("renderer/tabbar.zig");
 const lsp_manager = @import("../lsp/manager.zig");
@@ -107,14 +110,7 @@ const RuntimeKeyDispatch = struct {
     movement_handled: bool,
 };
 
-pub const HorizontalScrollCommand = enum {
-    left_small,
-    right_small,
-    left_half,
-    right_half,
-    cursor_start,
-    cursor_end,
-};
+pub const HorizontalScrollCommand = viewport_mod.HorizontalScrollCommand;
 
 const TabBarLayout = tabbar.TabBarLayout;
 const TabLabel = tabbar.TabLabel;
@@ -131,45 +127,13 @@ const RenderContext = struct {
 const CommandPopupGeometry = popup.CommandPopupGeometry;
 const FilesystemPickerGeometry = popup.FilesystemPickerGeometry;
 
-const command_popup_title = " Cmdline ";
-const global_search_popup_title = " Search ";
 const help_popup_title = " Help ";
 const horizontal_line = "─";
 
-const GlobalSearchRenderRow = union(enum) {
-    header: []const u8,
-    path: usize,
-    content: usize,
-};
+const GlobalSearchRenderRow = search_popups.GlobalSearchRenderRow;
 
-const SelectionRange = struct {
-    start_col: usize,
-    end_col: usize,
-
-    fn contains(self: SelectionRange, col: usize) bool {
-        return col >= self.start_col and col < self.end_col;
-    }
-};
-
-const LineRenderState = struct {
-    line: *const buffer.Line,
-    content_width: usize,
-    syntax_cursor: syntax.HighlightRunCursor,
-    search_match: ?search.Match,
-    active_match_col: ?usize,
-    selection_ranges: []const SelectionRange,
-
-    fn syntaxStyleAt(self: *LineRenderState, col: usize) ?syntax.Style {
-        return self.syntax_cursor.styleAt(col);
-    }
-
-    fn isSelected(self: *const LineRenderState, col: usize) bool {
-        for (self.selection_ranges) |range| {
-            if (range.contains(col)) return true;
-        }
-        return false;
-    }
-};
+const SelectionRange = line_render.SelectionRange;
+const LineRenderState = line_render.LineRenderState;
 
 const TextSnapshot = struct {
     revision: u64,
@@ -1199,40 +1163,24 @@ pub const Editor = struct {
         };
     }
 
-    fn bufferViewportGeometry(self: *const Editor) struct { start_col: usize, width: usize } {
-        var buf_start_col: usize = 1;
-        var buf_width: usize = self.width;
-
-        if (self.state.explorer_visible and self.state.tree != null) {
-            const exp_width = (self.width * @as(usize, self.config.explorer.width_percentage)) / 100;
-            if (exp_width > 0) {
-                buf_start_col = exp_width + 2;
-                buf_width = self.width -| (exp_width + 1);
-            }
-        }
-
-        return .{ .start_col = buf_start_col, .width = buf_width };
+    fn bufferViewportGeometry(self: *const Editor) viewport_mod.BufferViewportGeometry {
+        return viewport_mod.bufferViewportGeometry(self);
     }
 
     pub fn terminalPanelHeight(self: *const Editor) usize {
-        if (!self.terminal_panel.visible) return 0;
-        return terminal_panel_mod.panelHeight(self.height);
+        return viewport_mod.terminalPanelHeight(self);
     }
 
     fn statusRowIndex(self: *const Editor) usize {
-        const panel_height = self.terminalPanelHeight();
-        if (self.height == 0) return 0;
-        return self.height - panel_height - 1;
+        return viewport_mod.statusRowIndex(self);
     }
 
     fn statusTerminalRow(self: *const Editor) usize {
-        return self.statusRowIndex() + 1;
+        return viewport_mod.statusTerminalRow(self);
     }
 
     pub fn editorVisibleRows(self: *const Editor) usize {
-        const top_reserved = 2;
-        const bot_reserved = 1 + self.terminalPanelHeight();
-        return if (self.height > top_reserved + bot_reserved) self.height - (top_reserved + bot_reserved) else 0;
+        return viewport_mod.editorVisibleRows(self);
     }
 
     fn terminalCursorScreenPosition(self: *Editor) struct { row: usize, col: usize } {
@@ -1491,55 +1439,15 @@ pub const Editor = struct {
         content_width: usize,
         selection_storage: *[64]SelectionRange,
     ) LineRenderState {
-        const search_match = if (self.state.search_buffer.items.len > 0)
-            if (self.state.search_system) |s| s.matchForRow(buffer_line_idx) else null
-        else
-            null;
-        const active_match_col = if (self.state.search_buffer.items.len > 0)
-            if (self.state.search_system) |s|
-                if (s.activeMatchRow()) |active_row|
-                    if (active_row == buffer_line_idx) s.getActiveMatch().?.col else null
-                else
-                    null
-            else
-                null
-        else
-            null;
-
-        const selection_ranges = buildSelectionRanges(tab, buffer_line_idx, selection_storage);
-        return .{
-            .line = &tab.buf.lines.items[buffer_line_idx],
-            .content_width = content_width,
-            .syntax_cursor = tab.syntax_highlighter.highlightRunCursor(buffer_line_idx),
-            .search_match = search_match,
-            .active_match_col = active_match_col,
-            .selection_ranges = selection_ranges,
-        };
+        return line_render.buildLineRenderState(self, tab, buffer_line_idx, content_width, selection_storage);
     }
 
     fn buildSelectionRanges(tab: *const Tab, row: usize, storage: *[64]SelectionRange) []const SelectionRange {
-        var count: usize = 0;
-        for (tab.cursors.items) |cursor| {
-            const range = selectionRangeForRow(cursor, row) orelse continue;
-            if (count == storage.len) break;
-            storage[count] = range;
-            count += 1;
-        }
-        return storage[0..count];
+        return line_render.buildSelectionRanges(tab, row, storage);
     }
 
     fn selectionRangeForRow(cursor: Cursor, row: usize) ?SelectionRange {
-        const ss = cursor.selection_start orelse return null;
-        const s_row = @min(ss.row, cursor.row);
-        const e_row = @max(ss.row, cursor.row);
-        const s_col = if (ss.row < cursor.row) ss.col else if (ss.row > cursor.row) cursor.col else @min(ss.col, cursor.col);
-        const e_col = if (ss.row < cursor.row) cursor.col else if (ss.row > cursor.row) ss.col else @max(ss.col, cursor.col);
-
-        if (row > s_row and row < e_row) return .{ .start_col = 0, .end_col = std.math.maxInt(usize) };
-        if (row == s_row and row == e_row) return .{ .start_col = s_col, .end_col = e_col };
-        if (row == s_row) return .{ .start_col = s_col, .end_col = std.math.maxInt(usize) };
-        if (row == e_row) return .{ .start_col = 0, .end_col = e_col };
-        return null;
+        return line_render.selectionRangeForRow(cursor, row);
     }
 
     fn queueSyntaxParseForCurrentTab(self: *Editor) !void {
@@ -1590,128 +1498,40 @@ pub const Editor = struct {
     }
 
     fn textViewportWidthForTab(self: *const Editor, tab: *const Tab) usize {
-        const viewport = self.bufferViewportGeometry();
-        const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
-        return viewport.width -| gutter_width;
+        return viewport_mod.textViewportWidthForTab(self, tab);
     }
 
     fn horizontalScrollForCursor(cursor_col: usize, scroll_col: usize, visible_width: usize) usize {
-        if (visible_width == 0) return scroll_col;
-        if (cursor_col < scroll_col) return cursor_col;
-        if (cursor_col >= scroll_col +| visible_width) return cursor_col - visible_width + 1;
-        return scroll_col;
+        return viewport_mod.horizontalScrollForCursor(cursor_col, scroll_col, visible_width);
     }
 
     fn visibleCursorCol(cursor_col: usize, scroll_col: usize, visible_width: usize) usize {
-        if (visible_width == 0 or cursor_col <= scroll_col) return 0;
-        return @min(cursor_col - scroll_col, visible_width - 1);
+        return viewport_mod.visibleCursorCol(cursor_col, scroll_col, visible_width);
     }
 
     fn maxVisibleLineLen(tab: *const Tab, visible_rows: usize) usize {
-        const mc = tab.cursors.items[tab.main_cursor_idx];
-        var max_len: usize = if (mc.row < tab.buf.lines.items.len) tab.buf.lines.items[mc.row].len() else 0;
-        if (tab.buf.lines.items.len == 0) return max_len;
-        var row = tab.buf.clampToVisibleLine(tab.scroll_row);
-        var remaining = visible_rows;
-        while (remaining > 0 and row < tab.buf.lines.items.len) : (remaining -= 1) {
-            max_len = @max(max_len, tab.buf.lines.items[row].len());
-            const next = tab.buf.nextVisibleLine(row);
-            if (next == row) break;
-            row = next;
-        }
-        return max_len;
+        return viewport_mod.maxVisibleLineLen(tab, visible_rows);
     }
 
     fn visibleLineOffset(tab: *const Tab, start_line: usize, target_line: usize, max_rows: usize) ?usize {
-        if (tab.buf.lines.items.len == 0) return null;
-        var row = tab.buf.clampToVisibleLine(start_line);
-        const target = tab.buf.clampToVisibleLine(target_line);
-        var offset: usize = 0;
-        while (offset < max_rows and row < tab.buf.lines.items.len) : (offset += 1) {
-            if (row == target) return offset;
-            const next = tab.buf.nextVisibleLine(row);
-            if (next == row) break;
-            row = next;
-        }
-        return null;
+        return viewport_mod.visibleLineOffset(tab, start_line, target_line, max_rows);
     }
 
     fn visibleViewportEndLine(tab: *const Tab, start_line: usize, row_count: usize) usize {
-        if (tab.buf.lines.items.len == 0) return 0;
-        var row = tab.buf.clampToVisibleLine(start_line);
-        var last = row;
-        var remaining = row_count;
-        while (remaining > 0 and row < tab.buf.lines.items.len) : (remaining -= 1) {
-            last = row;
-            const next = tab.buf.nextVisibleLine(row);
-            if (next == row) break;
-            row = next;
-        }
-        return @min(last + 1, tab.buf.lines.items.len);
+        return viewport_mod.visibleViewportEndLine(tab, start_line, row_count);
     }
 
     fn clampHorizontalScrollToVisibleLines(self: *Editor, tab: *Tab, visible_width: usize) void {
-        const visible_rows = @max(self.editorVisibleRows(), 1);
-        const max_len = maxVisibleLineLen(tab, visible_rows);
-        if (visible_width == 0) {
-            tab.scroll_col = @min(tab.scroll_col, max_len);
-            return;
-        }
-        const max_scroll = max_len -| (visible_width - 1);
-        tab.scroll_col = @min(tab.scroll_col, max_scroll);
+        viewport_mod.clampHorizontalScrollToVisibleLines(self, tab, visible_width);
     }
 
     pub fn applyHorizontalScrollCommand(self: *Editor, command: HorizontalScrollCommand) void {
-        const tab = self.currentTab() orelse return;
-        const mc = tab.mainCursor();
-        const visible_width = self.textViewportWidthForTab(tab);
-        if (visible_width == 0) return;
-
-        const small_step = @max(@as(usize, 1), visible_width / 8);
-        const half_step = @max(@as(usize, 1), visible_width / 2);
-        switch (command) {
-            .left_small => tab.scroll_col -|= small_step,
-            .right_small => tab.scroll_col +|= small_step,
-            .left_half => tab.scroll_col -|= half_step,
-            .right_half => tab.scroll_col +|= half_step,
-            .cursor_start => tab.scroll_col = mc.col,
-            .cursor_end => tab.scroll_col = mc.col -| (visible_width - 1),
-        }
-        self.clampHorizontalScrollToVisibleLines(tab, visible_width);
+        viewport_mod.applyHorizontalScrollCommand(self, command);
     }
 
-    /// Adjust scroll state so the main cursor is always within the visible viewport.
+    /// Adjust scroll state so the main cursor is always within the visible viewport_mod.
     pub fn clampScroll(self: *Editor) void {
-        const tab = self.currentTab() orelse return;
-        const mc = tab.mainCursor();
-        const before_scroll_row = tab.scroll_row;
-        const before_scroll_col = tab.scroll_col;
-        const visible_rows = @max(self.editorVisibleRows(), 1);
-        mc.row = tab.buf.clampToVisibleLine(mc.row);
-        if (mc.row < tab.buf.lines.items.len) {
-            mc.col = @min(mc.col, tab.buf.lines.items[mc.row].len());
-        }
-        tab.scroll_row = tab.buf.clampToVisibleLine(tab.scroll_row);
-        if (mc.row < tab.scroll_row) {
-            tab.scroll_row = mc.row;
-        } else if (visibleLineOffset(tab, tab.scroll_row, mc.row, visible_rows) == null) {
-            var row = mc.row;
-            var remaining = visible_rows -| 1;
-            while (remaining > 0) : (remaining -= 1) {
-                const prev = tab.buf.prevVisibleLine(row);
-                if (prev == row) break;
-                row = prev;
-            }
-            tab.scroll_row = row;
-        }
-        const visible_width = self.textViewportWidthForTab(tab);
-        tab.scroll_col = horizontalScrollForCursor(mc.col, tab.scroll_col, visible_width);
-        self.clampHorizontalScrollToVisibleLines(tab, visible_width);
-        if (self.active_keypress_trace) |trace| {
-            trace.viewport_scrolled = trace.viewport_scrolled or
-                before_scroll_row != tab.scroll_row or
-                before_scroll_col != tab.scroll_col;
-        }
+        viewport_mod.clampScroll(self);
     }
 
     fn getTabLabel(tabs: []const Tab, tab: *const Tab) TabLabel {
@@ -1764,132 +1584,31 @@ pub const Editor = struct {
     }
 
     fn commandPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
-        return self.popupGeometry(
-            self.state.command_popup.visible,
-            self.state.command_popup.suggestions.items.len,
-            self.state.command_popup.input.items.len > 0,
-            6,
-        );
+        return search_popups.commandPopupGeometry(self);
     }
 
     fn globalSearchPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
-        const render_row_count = globalSearchRenderRowCount(self.state.global_search.results.items);
-        const max_visible_items: usize = if (render_row_count > 6) 12 else 6;
-        return self.popupGeometry(
-            self.state.global_search.visible,
-            render_row_count,
-            self.state.global_search.input.items.len > 0,
-            max_visible_items,
-        );
+        return search_popups.globalSearchPopupGeometry(self);
     }
 
     fn isSameContentDisplayPath(a: global_search.GlobalSearchResult, b: global_search.GlobalSearchResult) bool {
-        return switch (a) {
-            .content => |a_content| switch (b) {
-                .content => |b_content| std.mem.eql(u8, a_content.display_path, b_content.display_path),
-                .path => false,
-            },
-            .path => false,
-        };
+        return search_popups.isSameContentDisplayPath(a, b);
     }
 
     fn globalSearchRenderRowCount(results: []const global_search.GlobalSearchResult) usize {
-        var count: usize = 0;
-        var i: usize = 0;
-        while (i < results.len) {
-            switch (results[i]) {
-                .path => {
-                    count += 1;
-                    i += 1;
-                },
-                .content => {
-                    const group_start = i;
-                    count += 1; // file header
-                    while (i < results.len and isSameContentDisplayPath(results[i], results[group_start])) : (i += 1) {
-                        count += 1;
-                    }
-                },
-            }
-        }
-        return count;
+        return search_popups.globalSearchRenderRowCount(results);
     }
 
     fn globalSearchRenderRowAt(results: []const global_search.GlobalSearchResult, render_row: usize) ?GlobalSearchRenderRow {
-        var row: usize = 0;
-        var i: usize = 0;
-        while (i < results.len) {
-            switch (results[i]) {
-                .path => {
-                    if (row == render_row) return .{ .path = i };
-                    row += 1;
-                    i += 1;
-                },
-                .content => |content| {
-                    const group_path = content.display_path;
-                    if (row == render_row) return .{ .header = group_path };
-                    row += 1;
-                    while (i < results.len) : (i += 1) {
-                        switch (results[i]) {
-                            .content => |group_content| {
-                                if (!std.mem.eql(u8, group_content.display_path, group_path)) break;
-                                if (row == render_row) return .{ .content = i };
-                                row += 1;
-                            },
-                            .path => break,
-                        }
-                    }
-                },
-            }
-        }
-        return null;
+        return search_popups.globalSearchRenderRowAt(results, render_row);
     }
 
     fn selectedGlobalSearchRenderRow(results: []const global_search.GlobalSearchResult, selected_index: ?usize) ?usize {
-        const selected = selected_index orelse return null;
-        var row: usize = 0;
-        var i: usize = 0;
-        while (i < results.len) {
-            switch (results[i]) {
-                .path => {
-                    if (i == selected) return row;
-                    row += 1;
-                    i += 1;
-                },
-                .content => |content| {
-                    const group_path = content.display_path;
-                    row += 1; // header
-                    while (i < results.len) : (i += 1) {
-                        switch (results[i]) {
-                            .content => |group_content| {
-                                if (!std.mem.eql(u8, group_content.display_path, group_path)) break;
-                                if (i == selected) return row;
-                                row += 1;
-                            },
-                            .path => break,
-                        }
-                    }
-                },
-            }
-        }
-        return null;
+        return search_popups.selectedGlobalSearchRenderRow(results, selected_index);
     }
 
     fn adjustGlobalSearchRenderScroll(self: *Editor, view_height: usize) void {
-        if (view_height == 0) return;
-        const total_rows = globalSearchRenderRowCount(self.state.global_search.results.items);
-        if (total_rows == 0) {
-            self.state.global_search.scroll_offset = 0;
-            return;
-        }
-        if (self.state.global_search.scroll_offset >= total_rows) {
-            self.state.global_search.scroll_offset = total_rows - 1;
-        }
-        const selected_row = selectedGlobalSearchRenderRow(self.state.global_search.results.items, self.state.global_search.selected_index) orelse return;
-        if (selected_row < self.state.global_search.scroll_offset) {
-            self.state.global_search.scroll_offset = selected_row;
-        } else if (selected_row >= self.state.global_search.scroll_offset + view_height) {
-            self.state.global_search.scroll_offset = selected_row - view_height + 1;
-        }
+        search_popups.adjustGlobalSearchRenderScroll(self, view_height);
     }
 
     fn pickerTitle(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
@@ -2143,37 +1862,7 @@ pub const Editor = struct {
     }
 
     fn renderVirtualCommandPopup(self: *Editor) void {
-        const geom = self.commandPopupGeometry() orelse return;
-        const popup_state = &self.state.command_popup;
-        const inner_width = geom.width - 2;
-
-        self.drawVirtualPopupTop(geom, command_popup_title, .command_popup_border);
-
-        const input_row = geom.row + 1;
-        self.drawVirtualPopupRow(input_row, geom.col, geom.width, .command_popup_border, .command_popup);
-        self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
-        const input_space = inner_width -| 3;
-        const shown_input = popup_state.input.items[0..@min(popup_state.input.items.len, input_space)];
-        self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
-
-        const separator_row = geom.row + 2;
-        self.drawVirtualPopupSeparator(separator_row, geom.col, geom.width, .command_popup_border);
-
-        for (0..geom.suggestion_count) |i| {
-            const row = geom.row + 3 + i;
-            const style: render_mod.RenderStyle = if (popup_state.selected_index != null and popup_state.selected_index.? == i)
-                .command_popup_selected
-            else
-                .command_popup;
-            self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, style);
-            var suggestion_buf: [128]u8 = undefined;
-            const suggestion = popup_state.suggestions.items[i].displayText(&suggestion_buf);
-            const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
-            self.renderer.screen.writeText(row, geom.col + 2, shown, style);
-        }
-
-        const bottom_row = geom.row + 3 + geom.suggestion_count;
-        self.drawVirtualPopupBottom(bottom_row, geom.col, geom.width, .command_popup_border);
+        search_popups.renderVirtualCommandPopup(self);
     }
 
     fn writeVirtualTruncated(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle) void {
@@ -2181,72 +1870,19 @@ pub const Editor = struct {
     }
 
     fn globalSearchFileStyle(selected: bool) render_mod.RenderStyle {
-        return if (selected) .global_search_file_selected else .global_search_file;
+        return search_popups.globalSearchFileStyle(selected);
     }
 
     fn globalSearchResultStyle(selected: bool) render_mod.RenderStyle {
-        return if (selected) .global_search_result_selected else .global_search_result;
+        return search_popups.globalSearchResultStyle(selected);
     }
 
     fn renderVirtualGlobalSearchRowText(self: *Editor, row: usize, start_col: usize, end_col: usize, render_row: GlobalSearchRenderRow, results: []const global_search.GlobalSearchResult, selected: bool) void {
-        var col = start_col;
-        switch (render_row) {
-            .header => |display_path| {
-                self.writeVirtualTruncated(row, &col, end_col, display_path, globalSearchFileStyle(false));
-            },
-            .path => |result_index| {
-                const path = results[result_index].path;
-                self.writeVirtualTruncated(row, &col, end_col, path.display_path, globalSearchFileStyle(selected));
-            },
-            .content => |result_index| {
-                const content = results[result_index].content;
-                const style = globalSearchResultStyle(selected);
-                self.writeVirtualTruncated(row, &col, end_col, "  ", style);
-                var location_buf: [48]u8 = undefined;
-                const location = std.fmt.bufPrint(&location_buf, "{d}:{d}  ", .{ content.row + 1, content.col + 1 }) catch "";
-                self.writeVirtualTruncated(row, &col, end_col, location, style);
-                self.writeVirtualTruncated(row, &col, end_col, content.snippet, style);
-            },
-        }
+        search_popups.renderVirtualGlobalSearchRowText(self, row, start_col, end_col, render_row, results, selected);
     }
 
     fn renderVirtualGlobalSearchPopup(self: *Editor) void {
-        const geom = self.globalSearchPopupGeometry() orelse return;
-        const popup_state = &self.state.global_search;
-        const inner_width = geom.width - 2;
-
-        self.drawVirtualPopupTop(geom, global_search_popup_title, .global_search_popup_border);
-
-        const input_row = geom.row + 1;
-        self.drawVirtualPopupRow(input_row, geom.col, geom.width, .global_search_popup_border, .command_popup);
-        self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
-        const input_space = inner_width -| 3;
-        const shown_input = popup_state.input.items[0..@min(popup_state.input.items.len, input_space)];
-        self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
-
-        const separator_row = geom.row + 2;
-        self.drawVirtualPopupSeparator(separator_row, geom.col, geom.width, .global_search_popup_border);
-
-        self.adjustGlobalSearchRenderScroll(geom.suggestion_count);
-        for (0..geom.suggestion_count) |offset| {
-            const render_row_index = self.state.global_search.scroll_offset + offset;
-            const render_row = globalSearchRenderRowAt(popup_state.results.items, render_row_index) orelse break;
-            const row = geom.row + 3 + offset;
-            const selected = switch (render_row) {
-                .path => |result_index| popup_state.selected_index != null and popup_state.selected_index.? == result_index,
-                .content => |result_index| popup_state.selected_index != null and popup_state.selected_index.? == result_index,
-                .header => false,
-            };
-            const style: render_mod.RenderStyle = if (selected)
-                .command_popup_selected
-            else
-                .command_popup;
-            self.drawVirtualPopupRow(row, geom.col, geom.width, .global_search_popup_border, style);
-            self.renderVirtualGlobalSearchRowText(row, geom.col + 2, geom.col + geom.width - 1, render_row, popup_state.results.items, selected);
-        }
-
-        const bottom_row = geom.row + 3 + geom.suggestion_count;
-        self.drawVirtualPopupBottom(bottom_row, geom.col, geom.width, .global_search_popup_border);
+        search_popups.renderVirtualGlobalSearchPopup(self);
     }
 
     fn renderVirtualFilesystemPickerPopup(self: *Editor) void {
@@ -2649,73 +2285,7 @@ pub const Editor = struct {
     }
 
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, ctx: RenderContext) void {
-        const trace = self.active_keypress_trace;
-        if (trace) |keypress_trace| keypress_trace.visible_rows += 1;
-
-        const start_col = ctx.buf_start_col -| 1;
-        const mc = tab.mainCursor();
-        const is_current = buffer_line_idx == mc.row;
-        const line_num = buffer_line_idx + 1;
-
-        var gutter_buf: [32]u8 = undefined;
-        const num_digits = @max(buffer.countDigits(tab.buf.lines.items.len), 2);
-        const gutter = std.fmt.bufPrint(&gutter_buf, "{d}", .{line_num}) catch "";
-        var gutter_col: usize = 1;
-        if (num_digits > gutter.len) {
-            gutter_col += num_digits - gutter.len;
-        }
-        self.renderer.screen.writeText(row, start_col + gutter_col, gutter, if (is_current) .gutter_current else .dim);
-
-        const content_col = start_col + ctx.gutter_width;
-        const content_width = ctx.buf_width -| ctx.gutter_width;
-        const line = tab.buf.lines.items[buffer_line_idx];
-        const line_len = line.len();
-
-        var selection_storage: [64]SelectionRange = undefined;
-        var line_state = self.buildLineRenderState(tab, buffer_line_idx, content_width, &selection_storage);
-
-        var char_idx: usize = tab.scroll_col;
-        var m_idx: usize = 0;
-        if (line_state.search_match) |m| {
-            while (m_idx < m.indices.len and m.indices[m_idx] < tab.scroll_col) : (m_idx += 1) {}
-        }
-        const end_col = @min(line_len, tab.scroll_col +| content_width);
-        while (char_idx < end_col) : (char_idx += 1) {
-            const ch = line.byteAt(char_idx) orelse ' ';
-            if (trace) |keypress_trace| {
-                keypress_trace.visible_chars += 1;
-                keypress_trace.line_byte_reads += 1;
-            }
-            var style: render_mod.RenderStyle = if (line_state.syntaxStyleAt(char_idx)) |syntax_style|
-                renderStyleFromSyntax(syntax_style)
-            else
-                .normal;
-
-            if (line_state.isSelected(char_idx)) {
-                style = .selection;
-            }
-
-            const is_match = if (line_state.search_match) |m| m_idx < m.indices.len and m.indices[m_idx] == char_idx else false;
-            if (is_match) {
-                if (line_state.active_match_col != null and line_state.active_match_col.? == char_idx) {
-                    style = .search_active;
-                } else {
-                    style = .search_match;
-                }
-                m_idx += 1;
-            }
-
-            self.renderer.screen.set(row, content_col + (char_idx - tab.scroll_col), ch, style);
-        }
-
-        if (tab.buf.foldStartingAt(buffer_line_idx)) |fold| {
-            var marker_buf: [48]u8 = undefined;
-            const marker = std.fmt.bufPrint(&marker_buf, "  ⋯ {d} lines folded", .{fold.end_line - fold.start_line}) catch "";
-            const marker_offset = line_len -| tab.scroll_col;
-            if (tab.scroll_col <= line_len and marker_offset < content_width) {
-                self.renderer.screen.writeText(row, content_col + marker_offset, marker, .dim);
-            }
-        }
+        line_render.renderVirtualLine(self, tab, buffer_line_idx, row, ctx);
     }
 
     fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
@@ -2801,18 +2371,7 @@ pub const Editor = struct {
     }
 
     fn renderStyleFromSyntax(style: syntax.Style) render_mod.RenderStyle {
-        return switch (style) {
-            .keyword => .keyword,
-            .string => .string,
-            .comment => .comment,
-            .number => .number,
-            .constant => .constant,
-            .type => .type_name,
-            .function => .function_name,
-            .property => .property,
-            .operator => .operator,
-            .punctuation => .punctuation,
-        };
+        return line_render.renderStyleFromSyntax(style);
     }
 
     fn diagnosticUri(value: std.json.Value) ?[]const u8 {
