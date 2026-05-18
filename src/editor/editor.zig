@@ -13,6 +13,8 @@ const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
 const popup = @import("renderer/popup.zig");
+const statusline = @import("renderer/statusline.zig");
+const tabbar = @import("renderer/tabbar.zig");
 const lsp_manager = @import("../lsp/manager.zig");
 const logger = @import("../logger.zig");
 const tab_mod = @import("model/tab.zig");
@@ -28,8 +30,6 @@ const terminal_panel_mod = @import("terminal_panel.zig");
 
 const max_fifo_events_per_idle_tick = 8;
 const syntax_parse_idle_delay_ns = 50 * std.time.ns_per_ms;
-const tab_prefix_width = 2;
-const tab_separator = " | ";
 
 pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
@@ -116,48 +116,9 @@ pub const HorizontalScrollCommand = enum {
     cursor_end,
 };
 
-const StatusFieldCache = struct {
-    terminal_col: usize = 0,
-    width: usize = 0,
-    valid: bool = false,
-};
-
-const StatusLayoutCache = struct {
-    width: usize = 0,
-    height: usize = 0,
-    cursor: StatusFieldCache = .{},
-    percent: StatusFieldCache = .{},
-    last_cursor_row: usize = 0,
-    last_cursor_col: usize = 0,
-    last_percent: usize = 0,
-    valid: bool = false,
-
-    fn invalidate(self: *StatusLayoutCache) void {
-        self.* = .{};
-    }
-};
-
-const TabBarLayout = struct {
-    total_width: usize,
-    scroll_col: usize,
-    content_start_col: usize,
-    content_width: usize,
-    has_hidden_left: bool,
-    has_hidden_right: bool,
-};
-
-const RightStatusLayout = struct {
-    text: []const u8,
-    cursor_offset: usize = 0,
-    cursor_width: usize = 0,
-    cursor_valid: bool = false,
-    percent_offset: usize = 0,
-    percent_width: usize = 0,
-    percent_valid: bool = false,
-    cursor_row: usize = 0,
-    cursor_col: usize = 0,
-    percent: usize = 0,
-};
+const TabBarLayout = tabbar.TabBarLayout;
+const TabLabel = tabbar.TabLabel;
+const RightStatusLayout = statusline.RightStatusLayout;
 
 const RenderContext = struct {
     tab: ?*Tab,
@@ -243,7 +204,7 @@ pub const Editor = struct {
     should_quit: bool = false,
     is_deinitialized: bool = false,
     last_status_minute: i64 = -1,
-    status_cache: StatusLayoutCache = .{},
+    status_cache: statusline.StatusLayoutCache = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
         return initWithRuntimeOptions(allocator, io, cfg, .{});
@@ -1312,215 +1273,67 @@ pub const Editor = struct {
     }
 
     fn buildStatusText(self: *Editor, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
-        if (self.state.mode == .Search) {
-            if (self.state.search_system) |s| {
-                if (s.matches.items.len > 0) {
-                    return try std.fmt.bufPrint(buf, "/{s} ({d}/{d})", .{ self.state.search_buffer.items, (s.active_match_idx orelse 0) + 1, s.matches.items.len });
-                }
-                return try std.fmt.bufPrint(buf, "/{s} (no matches)", .{self.state.search_buffer.items});
-            }
-            return try std.fmt.bufPrint(buf, "/{s}", .{self.state.search_buffer.items});
-        }
-        if (self.state.error_message) |err_msg| {
-            return try std.fmt.bufPrint(buf, "{s}", .{err_msg});
-        }
-
-        const mode_str = switch (self.state.mode) {
-            .Command => "COMMAND",
-            .GlobalSearch => "GLOBAL SEARCH",
-            .Help => "HELP",
-            .FilesystemPicker => "FILES",
-            .Prompt => "PROMPT",
-            .Insert => "INSERT",
-            .Search => "SEARCH",
-            .Terminal => "TERMINAL",
-            else => "NORMAL",
-        };
-        if (tab) |t| {
-            const diag_count = if (t.buf.filename) |fname| self.state.lsp_ui.diagnosticCountForFile(fname) else 0;
-            if (diag_count > 0) {
-                return try std.fmt.bufPrint(buf, " {s}   {d}  {d}:{d} ", .{ mode_str, diag_count, t.mainCursor().row + 1, t.mainCursor().col + 1 });
-            }
-            return try std.fmt.bufPrint(buf, " {s}  {d}:{d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1 });
-        }
-        return try std.fmt.bufPrint(buf, " {s}  No file open ", .{mode_str});
+        return statusline.buildStatusText(self, tab, buf);
     }
 
     fn statusModeLabel(self: *const Editor) []const u8 {
-        return switch (self.state.mode) {
-            .Insert => "INSERT",
-            .Command => "COMMAND",
-            .Search => "SEARCH",
-            .GlobalSearch => "GLOBAL",
-            .Help => "HELP",
-            .FilesystemPicker => "FILES",
-            .Prompt => "PROMPT",
-            .Terminal => "TERM",
-            else => "NORMAL",
-        };
+        return statusline.statusModeLabel(self);
     }
 
     fn statusModeStyle(self: *const Editor) render_mod.RenderStyle {
-        return switch (self.state.mode) {
-            .Insert => .status_mode_insert,
-            .Command, .FilesystemPicker, .Prompt, .Help, .Terminal => .status_mode_command,
-            .Search, .GlobalSearch => .status_mode_search,
-            else => .status_mode_normal,
-        };
+        return statusline.statusModeStyle(self);
     }
 
     fn statusModeSepStyle(self: *const Editor) render_mod.RenderStyle {
-        return switch (self.state.mode) {
-            .Insert => .status_sep_insert,
-            .Command, .FilesystemPicker, .Prompt, .Help, .Terminal => .status_sep_command,
-            .Search, .GlobalSearch => .status_sep_search,
-            else => .status_sep_normal,
-        };
+        return statusline.statusModeSepStyle(self);
     }
 
     fn fileIconForName(name: []const u8) []const u8 {
-        return file_icons.iconForFileName(name);
+        return statusline.fileIconForName(name);
     }
 
     fn statusFilePath(self: *const Editor, tab: ?*Tab) []const u8 {
-        var filename = if (tab) |t| t.buf.filename orelse "unsaved" else "No file";
-        if (self.state.git_snapshot) |snapshot| {
-            if (snapshot.root_path) |root| {
-                if (std.mem.startsWith(u8, filename, root)) {
-                    var rel = filename[root.len..];
-                    if (rel.len > 0 and (rel[0] == '/' or rel[0] == std.fs.path.sep)) rel = rel[1..];
-                    if (rel.len > 0) return rel;
-                }
-            }
-        }
-        while (std.mem.startsWith(u8, filename, "./")) filename = filename[2..];
-        return filename;
+        return statusline.statusFilePath(self, tab);
     }
 
     fn statusContext(self: *const Editor) ?[]const u8 {
-        if (self.state.mode == .Prompt) return @tagName(self.state.prompt_popup.kind);
-        if (self.state.mode == .Command) return "command";
-        if (self.state.mode == .Help) return "help";
-        if (self.state.mode == .Search) return "search";
-        if (self.state.mode == .GlobalSearch) return "global_search";
-        if (self.terminal_panel.visible) return if (self.terminal_panel.focused) "terminal focused" else "terminal";
-        return null;
+        return statusline.statusContext(self);
     }
 
     fn currentMinute(self: *const Editor) i64 {
-        const ns = std.Io.Timestamp.now(self.io, .real).nanoseconds;
-        return @intCast(@divTrunc(ns, std.time.ns_per_min));
+        return statusline.currentMinute(self);
     }
 
     fn clockText(self: *const Editor, buf: *[16]u8) []const u8 {
-        const ns = std.Io.Timestamp.now(self.io, .real).nanoseconds;
-        const secs: u64 = @intCast(@max(@divTrunc(ns, std.time.ns_per_s), 0));
-        const day = (std.time.epoch.EpochSeconds{ .secs = secs }).getDaySeconds();
-        return std.fmt.bufPrint(buf, " {d:0>2}:{d:0>2}", .{ day.getHoursIntoDay(), day.getMinutesIntoHour() }) catch " --:--";
+        return statusline.clockText(self, buf);
     }
 
     fn cacheRightStatusLayout(self: *Editor, right: RightStatusLayout, text_start_terminal_col: usize, text_available: usize) void {
-        self.status_cache = .{
-            .width = self.width,
-            .height = self.height,
-            .last_cursor_row = right.cursor_row,
-            .last_cursor_col = right.cursor_col,
-            .last_percent = right.percent,
-            .valid = true,
-        };
-        if (right.cursor_valid and right.cursor_offset + right.cursor_width <= text_available) {
-            self.status_cache.cursor = .{
-                .terminal_col = text_start_terminal_col + right.cursor_offset,
-                .width = right.cursor_width,
-                .valid = true,
-            };
-        }
-        if (right.percent_valid and right.percent_offset + right.percent_width <= text_available) {
-            self.status_cache.percent = .{
-                .terminal_col = text_start_terminal_col + right.percent_offset,
-                .width = right.percent_width,
-                .valid = true,
-            };
-        }
+        statusline.cacheRightStatusLayout(self, right, text_start_terminal_col, text_available);
     }
 
     fn buildRightStatus(self: *Editor, tab: ?*Tab, buf: *[192]u8) ![]const u8 {
-        return (try self.buildRightStatusLayout(tab, buf)).text;
+        return statusline.buildRightStatus(self, tab, buf);
     }
 
     fn buildRightStatusLayout(self: *Editor, tab: ?*Tab, buf: *[192]u8) !RightStatusLayout {
-        const cursor_field_width = 12;
-        const percent_field_width = 4;
-
-        var layout = RightStatusLayout{ .text = "" };
-        var idx: usize = 0;
-        var cells: usize = 0;
-
-        var clock_buf: [16]u8 = undefined;
-        const clock = self.clockText(&clock_buf);
-        if (tab) |t| {
-            const mc = t.mainCursor();
-            const total_lines = t.buf.lines.items.len;
-            const pct = statusScrollPercent(mc.row, total_lines);
-            const diag_count = if (t.buf.filename) |fname| self.state.lsp_ui.diagnosticCountForFile(fname) else 0;
-            if (diag_count > 0) {
-                try appendStatusFmt(buf, &idx, &cells, "  {d}  ", .{diag_count});
-            }
-            try appendStatusFmt(buf, &idx, &cells, "◇ {d}  ", .{total_lines});
-
-            layout.percent_offset = cells;
-            layout.percent_width = percent_field_width;
-            layout.percent_valid = true;
-            layout.percent = pct;
-            try appendStatusFieldFmt(buf, &idx, &cells, percent_field_width, "{d}%", .{pct});
-            try appendStatusText(buf, &idx, &cells, "  ");
-
-            layout.cursor_offset = cells;
-            layout.cursor_width = cursor_field_width;
-            layout.cursor_valid = true;
-            layout.cursor_row = mc.row;
-            layout.cursor_col = mc.col;
-            try appendStatusFieldFmt(buf, &idx, &cells, cursor_field_width, "{d}:{d}", .{ mc.row + 1, mc.col + 1 });
-            try appendStatusFmt(buf, &idx, &cells, "  {s} ", .{clock});
-
-            layout.text = buf[0..idx];
-            return layout;
-        }
-        try appendStatusFmt(buf, &idx, &cells, " {s} ", .{clock});
-        layout.text = buf[0..idx];
-        return layout;
+        return statusline.buildRightStatusLayout(self, tab, buf);
     }
 
     fn appendStatusText(buf: *[192]u8, idx: *usize, cells: *usize, text: []const u8) !void {
-        if (idx.* + text.len > buf.len) return error.NoSpaceLeft;
-        @memcpy(buf[idx.* .. idx.* + text.len], text);
-        idx.* += text.len;
-        cells.* += render_mod.displayCellCount(text);
+        return statusline.appendStatusText(buf, idx, cells, text);
     }
 
     fn appendStatusFmt(buf: *[192]u8, idx: *usize, cells: *usize, comptime fmt: []const u8, args: anytype) !void {
-        const part = try std.fmt.bufPrint(buf[idx.*..], fmt, args);
-        idx.* += part.len;
-        cells.* += render_mod.displayCellCount(part);
+        return statusline.appendStatusFmt(buf, idx, cells, fmt, args);
     }
 
     fn appendStatusFieldFmt(buf: *[192]u8, idx: *usize, cells: *usize, width: usize, comptime fmt: []const u8, args: anytype) !void {
-        const part = try std.fmt.bufPrint(buf[idx.*..], fmt, args);
-        idx.* += part.len;
-        const part_cells = render_mod.displayCellCount(part);
-        cells.* += part_cells;
-        if (part_cells < width) {
-            const pad = width - part_cells;
-            if (idx.* + pad > buf.len) return error.NoSpaceLeft;
-            @memset(buf[idx.* .. idx.* + pad], ' ');
-            idx.* += pad;
-            cells.* += pad;
-        }
+        return statusline.appendStatusFieldFmt(buf, idx, cells, width, fmt, args);
     }
 
     fn statusScrollPercent(row: usize, total_lines: usize) usize {
-        if (total_lines <= 1) return 100;
-        return @min(@as(usize, 100), ((row + 1) * 100) / total_lines);
+        return statusline.statusScrollPercent(row, total_lines);
     }
 
     fn resolveDefaultContextCommand(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1901,167 +1714,40 @@ pub const Editor = struct {
         }
     }
 
-    const TabLabel = struct {
-        parent: ?[]const u8,
-        basename: []const u8,
-        len: usize,
-    };
-
     fn getTabLabel(tabs: []const Tab, tab: *const Tab) TabLabel {
-        const filename = tab.buf.filename orelse "unsaved";
-        const basename = std.fs.path.basename(filename);
-        var has_duplicate = false;
-        for (tabs) |*other_tab| {
-            if (other_tab == tab) continue;
-            const other_filename = other_tab.buf.filename orelse "unsaved";
-            if (std.mem.eql(u8, std.fs.path.basename(other_filename), basename)) {
-                has_duplicate = true;
-                break;
-            }
-        }
-        var parent: ?[]const u8 = null;
-        var len = basename.len;
-        if (has_duplicate and tab.buf.filename != null) {
-            if (std.fs.path.dirname(filename)) |dir| {
-                parent = std.fs.path.basename(dir);
-                len += parent.?.len + 1; // +1 for the separator '/'
-            }
-        }
-        return .{ .parent = parent, .basename = basename, .len = len };
+        return tabbar.getTabLabel(tabs, tab);
     }
 
     fn tabLabelWidth(tabs: []const Tab, tab: *const Tab) usize {
-        const label = getTabLabel(tabs, tab);
-        var width = tab_prefix_width + label.len + tab_separator.len;
-        if (tab.buf.is_dirty) width += 2;
-        return width;
+        return tabbar.tabLabelWidth(tabs, tab);
     }
 
     fn totalTabBarWidth(tabs: []const Tab) usize {
-        var total: usize = 0;
-        for (tabs) |*tab| total += tabLabelWidth(tabs, tab);
-        return total;
+        return tabbar.totalTabBarWidth(tabs);
     }
 
     fn tabStartCol(tabs: []const Tab, index: usize) usize {
-        var start: usize = 0;
-        for (tabs[0..index]) |*tab| start += tabLabelWidth(tabs, tab);
-        return start;
+        return tabbar.tabStartCol(tabs, index);
     }
 
     fn clampTabBarScroll(scroll_col: *usize, total_width: usize, available_width: usize) void {
-        if (available_width == 0 or total_width <= available_width) {
-            scroll_col.* = 0;
-            return;
-        }
-        scroll_col.* = @min(scroll_col.*, total_width - available_width);
+        tabbar.clampTabBarScroll(scroll_col, total_width, available_width);
     }
 
     fn ensureActiveTabVisible(tabs: []const Tab, active_index: usize, available_width: usize, scroll_col: *usize) void {
-        if (tabs.len == 0 or available_width == 0 or active_index >= tabs.len) {
-            scroll_col.* = 0;
-            return;
-        }
-
-        const total_width = totalTabBarWidth(tabs);
-        clampTabBarScroll(scroll_col, total_width, available_width);
-
-        const active_start = tabStartCol(tabs, active_index);
-        const active_end = active_start + tabLabelWidth(tabs, &tabs[active_index]);
-        if (active_start < scroll_col.*) {
-            scroll_col.* = active_start;
-        } else if (active_end > scroll_col.* + available_width) {
-            scroll_col.* = active_end - available_width;
-        }
-
-        clampTabBarScroll(scroll_col, total_width, available_width);
+        tabbar.ensureActiveTabVisible(tabs, active_index, available_width, scroll_col);
     }
 
     fn prepareTabBarLayout(self: *Editor, width: usize) TabBarLayout {
-        const tabs = self.state.tabs.items;
-        const total_width = totalTabBarWidth(tabs);
-        if (tabs.len == 0 or width == 0) {
-            self.state.tab_bar_scroll_col = 0;
-            return .{
-                .total_width = total_width,
-                .scroll_col = 0,
-                .content_start_col = 0,
-                .content_width = 0,
-                .has_hidden_left = false,
-                .has_hidden_right = false,
-            };
-        }
-
-        var has_hidden_left = self.state.tab_bar_scroll_col > 0;
-        var has_hidden_right = false;
-        var content_width = width;
-
-        for (0..4) |_| {
-            const reserved = @as(usize, @intFromBool(has_hidden_left)) + @as(usize, @intFromBool(has_hidden_right));
-            content_width = width -| reserved;
-            ensureActiveTabVisible(tabs, self.state.active_tab_index, content_width, &self.state.tab_bar_scroll_col);
-
-            const next_hidden_left = self.state.tab_bar_scroll_col > 0;
-            const next_hidden_right = total_width > self.state.tab_bar_scroll_col + content_width;
-            if (next_hidden_left == has_hidden_left and next_hidden_right == has_hidden_right) break;
-            has_hidden_left = next_hidden_left;
-            has_hidden_right = next_hidden_right;
-        }
-
-        const reserved = @as(usize, @intFromBool(has_hidden_left)) + @as(usize, @intFromBool(has_hidden_right));
-        content_width = width -| reserved;
-        ensureActiveTabVisible(tabs, self.state.active_tab_index, content_width, &self.state.tab_bar_scroll_col);
-        has_hidden_left = self.state.tab_bar_scroll_col > 0;
-        has_hidden_right = total_width > self.state.tab_bar_scroll_col + content_width;
-
-        return .{
-            .total_width = total_width,
-            .scroll_col = self.state.tab_bar_scroll_col,
-            .content_start_col = @intFromBool(has_hidden_left),
-            .content_width = content_width,
-            .has_hidden_left = has_hidden_left,
-            .has_hidden_right = has_hidden_right,
-        };
+        return tabbar.prepareTabBarLayout(self.state.tabs.items, self.state.active_tab_index, width, &self.state.tab_bar_scroll_col);
     }
 
     fn writeVirtualClippedText(self: *Editor, row: usize, dest_base_col: usize, text_start_col: usize, viewport_start: usize, viewport_end: usize, text: []const u8, style: render_mod.RenderStyle) void {
-        const text_end_col = text_start_col + text.len;
-        const draw_start = @max(text_start_col, viewport_start);
-        const draw_end = @min(text_end_col, viewport_end);
-        if (draw_start >= draw_end) return;
-
-        const skip = draw_start - text_start_col;
-        const len = draw_end - draw_start;
-        self.renderer.screen.writeText(row, dest_base_col + draw_start - viewport_start, text[skip .. skip + len], style);
+        tabbar.writeVirtualClippedText(&self.renderer.screen, row, dest_base_col, text_start_col, viewport_start, viewport_end, text, style);
     }
 
     fn writeVirtualClippedTabLabel(self: *Editor, row: usize, dest_base_col: usize, label_start_col: usize, viewport_start: usize, viewport_end: usize, tab: *const Tab, active: bool) void {
-        const basename_style: render_mod.RenderStyle = if (active) .gutter_current else .dim;
-        const prefix_style: render_mod.RenderStyle = .dim;
-
-        const prefix = if (active) "> " else "  ";
-        const label = getTabLabel(self.state.tabs.items, tab);
-        var col = label_start_col;
-
-        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, prefix, basename_style);
-        col += prefix.len;
-
-        if (label.parent) |parent| {
-            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, parent, prefix_style);
-            col += parent.len;
-            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, "/", prefix_style);
-            col += 1;
-        }
-
-        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, label.basename, basename_style);
-        col += label.basename.len;
-
-        if (tab.buf.is_dirty) {
-            self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, " ●", .terminal_green);
-            col += 2;
-        }
-
-        self.writeVirtualClippedText(row, dest_base_col, col, viewport_start, viewport_end, tab_separator, .dim);
+        tabbar.writeVirtualClippedTabLabel(&self.renderer.screen, self.state.tabs.items, row, dest_base_col, label_start_col, viewport_start, viewport_end, tab, active);
     }
 
     fn popupGeometry(self: *const Editor, visible: bool, item_count: usize, show_items: bool, max_visible_items: usize) ?CommandPopupGeometry {
@@ -2453,33 +2139,7 @@ pub const Editor = struct {
     fn renderVirtualTabs(self: *Editor, ctx: RenderContext) void {
         if (self.height == 0 or ctx.buf_width == 0) return;
         const start_col = ctx.buf_start_col -| 1;
-        if (self.state.tabs.items.len == 0) {
-            for (0..ctx.buf_width) |offset| self.renderer.screen.setGlyph(1, start_col + offset, horizontal_line, .dim);
-            return;
-        }
-
-        const layout = self.prepareTabBarLayout(ctx.buf_width);
-        if (layout.has_hidden_left) {
-            self.renderer.screen.set(0, start_col, '<', .dim);
-        }
-        if (layout.content_width > 0) {
-            const viewport_start = layout.scroll_col;
-            const viewport_end = viewport_start + layout.content_width;
-            var label_start: usize = 0;
-            for (self.state.tabs.items, 0..) |*tab, i| {
-                const label_width = tabLabelWidth(self.state.tabs.items, tab);
-                if (label_start >= viewport_end) break;
-                if (label_start + label_width > viewport_start) {
-                    self.writeVirtualClippedTabLabel(0, start_col + layout.content_start_col, label_start, viewport_start, viewport_end, tab, i == self.state.active_tab_index);
-                }
-                label_start += label_width;
-            }
-        }
-        if (layout.has_hidden_right) {
-            self.renderer.screen.set(0, start_col + ctx.buf_width - 1, '>', .dim);
-        }
-
-        for (0..ctx.buf_width) |offset| self.renderer.screen.setGlyph(1, start_col + offset, horizontal_line, .dim);
+        tabbar.renderVirtualTabs(&self.renderer.screen, self.state.tabs.items, self.state.active_tab_index, &self.state.tab_bar_scroll_col, ctx.buf_width, start_col);
     }
 
     fn renderVirtualCommandPopup(self: *Editor) void {
@@ -3059,74 +2719,15 @@ pub const Editor = struct {
     }
 
     fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
-        if (self.height == 0 or (self.state.mode == .Dashboard and self.state.error_message == null)) return;
-        const row = self.statusRowIndex();
-        self.renderer.screen.fillRow(row, ' ', .status_bg);
-
-        var col: usize = 0;
-        self.writeVirtualStatusLeft(row, &col, ctx.tab);
-
-        var right_buf: [192]u8 = undefined;
-        const right = self.buildRightStatusLayout(ctx.tab, &right_buf) catch RightStatusLayout{ .text = "" };
-        const right_cells = render_mod.displayCellCount(right.text) + 1;
-        if (right_cells < self.width) {
-            const start = self.width - right_cells;
-            self.renderer.screen.writeText(row, start, "", .status_sep_right);
-            self.renderer.screen.writeText(row, start + 1, right.text, .status_right);
-            self.cacheRightStatusLayout(right, start + 2, right_cells - 1);
-        } else {
-            self.status_cache.invalidate();
-        }
+        statusline.renderVirtualStatus(self, ctx, self.statusRowIndex());
     }
 
     fn writeVirtualStatusText(self: *Editor, row: usize, col: *usize, text: []const u8, style: render_mod.RenderStyle) void {
-        if (col.* >= self.width) return;
-        self.renderer.screen.writeText(row, col.*, text, style);
-        col.* += @min(render_mod.displayCellCount(text), self.width - col.*);
+        statusline.writeVirtualStatusText(self, row, col, text, style);
     }
 
     fn writeVirtualStatusLeft(self: *Editor, row: usize, col: *usize, tab: ?*Tab) void {
-        if (self.state.error_message) |err| {
-            self.writeVirtualStatusText(row, col, " ERROR ", .status_error);
-            self.writeVirtualStatusText(row, col, "", .status_sep_error);
-            self.writeVirtualStatusText(row, col, " ", .status_file);
-            self.writeVirtualStatusText(row, col, err, .status_file);
-            return;
-        }
-        if (self.state.mode == .OpenFilePrompt) {
-            self.writeVirtualStatusText(row, col, " FILES ", .status_mode_command);
-            self.writeVirtualStatusText(row, col, "", .status_sep_command);
-            self.writeVirtualStatusText(row, col, " Open file: ", .status_file);
-            self.writeVirtualStatusText(row, col, self.state.command_buffer.items, .status_file);
-            return;
-        }
-
-        var mode_buf: [32]u8 = undefined;
-        const mode = std.fmt.bufPrint(&mode_buf, " {s} ", .{self.statusModeLabel()}) catch " NORMAL ";
-        self.writeVirtualStatusText(row, col, mode, self.statusModeStyle());
-        self.writeVirtualStatusText(row, col, "", self.statusModeSepStyle());
-
-        if (self.state.git_snapshot) |snapshot| {
-            if (snapshot.branch) |branch| {
-                var branch_buf: [96]u8 = undefined;
-                const branch_text = std.fmt.bufPrint(&branch_buf, "  {s} ", .{branch}) catch "";
-                self.writeVirtualStatusText(row, col, branch_text, .status_branch);
-                self.writeVirtualStatusText(row, col, "", .status_sep_branch);
-            }
-        }
-
-        var file_buf: [192]u8 = undefined;
-        const file_path = self.statusFilePath(tab);
-        const file_text = std.fmt.bufPrint(&file_buf, " {s} {s} ", .{ fileIconForName(file_path), file_path }) catch "";
-        self.writeVirtualStatusText(row, col, file_text, .status_file);
-
-        if (self.statusContext()) |context| {
-            self.writeVirtualStatusText(row, col, "", .status_sep_file);
-            var context_buf: [96]u8 = undefined;
-            const context_text = std.fmt.bufPrint(&context_buf, " ◆ {s} ", .{context}) catch "";
-            self.writeVirtualStatusText(row, col, context_text, .status_context);
-        }
-        self.writeVirtualStatusText(row, col, "", .status_sep_context);
+        statusline.writeVirtualStatusLeft(self, row, col, tab);
     }
 
     fn setVirtualCursor(self: *Editor, ctx: RenderContext) void {
