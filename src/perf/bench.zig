@@ -72,9 +72,11 @@ pub fn main(init: std.process.Init) !void {
         ed.state.explorer_focused = false;
         ed.state.lsp_ui.completion_active = false;
         ed.state.search_buffer.clearRetainingCapacity();
+        const move_down = ed.keyEventForCommand(.normal, .navigation_move_down).?;
+        const move_up = ed.keyEventForCommand(.normal, .navigation_move_up).?;
 
         for (0..frames) |i| {
-            const key = if (i % 2 == 0) ed.keys.move_down else ed.keys.move_up;
+            const key = if (i % 2 == 0) move_down else move_up;
             out.clearRetainingCapacity();
             const start = perf.nowNs();
             _ = try ed.renderBenchmarkCursorMove(&out.writer, key);

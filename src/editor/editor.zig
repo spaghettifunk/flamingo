@@ -6,6 +6,9 @@ const buffer = @import("model/buffer.zig");
 const input = @import("input_router/router.zig");
 const search = @import("search.zig");
 const global_search = @import("global_search.zig");
+const commands = @import("commands.zig");
+const command_keybindings = @import("keybindings.zig");
+const normal_sequence = @import("input_router/normal_sequence.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
@@ -16,7 +19,6 @@ const state_mod = @import("state/state.zig");
 const jump_history = @import("state/jump_history.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
-const keybindings = @import("input_router/keybindings.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
 const help_mod = @import("help.zig");
 const file_icons = @import("file_icons.zig");
@@ -32,7 +34,6 @@ pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
 pub const Cursor = tab_mod.Cursor;
 pub const Tab = tab_mod.Tab;
-pub const ResolvedKeybindings = keybindings.ResolvedKeybindings;
 const max_movement_coalesce_batch_count = 64;
 
 const CoalescedMovement = enum {
@@ -233,7 +234,7 @@ const KeypressProfilePosition = struct {
 
 pub const Editor = struct {
     config: config.Config,
-    keys: ResolvedKeybindings,
+    keybinding_registry: command_keybindings.Registry,
     allocator: std.mem.Allocator,
     io: std.Io,
     state: state_mod.EditorState,
@@ -261,12 +262,16 @@ pub const Editor = struct {
     pub fn initWithRuntimeOptions(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, runtime_options: runtime_mod.EditorRuntime.Options) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
+        var keybinding_diagnostics = command_keybindings.BuildDiagnostics{};
+        defer keybinding_diagnostics.deinit(allocator);
+        var keybinding_registry = try config.buildKeybindingRegistry(allocator, &cfg, &keybinding_diagnostics);
+        errdefer keybinding_registry.deinit(allocator);
 
         return Editor{
             .allocator = allocator,
             .io = io,
             .config = cfg,
-            .keys = ResolvedKeybindings.init(cfg.keybindings),
+            .keybinding_registry = keybinding_registry,
             .state = state_mod.EditorState.init(allocator),
             .terminal_panel = terminal_panel_mod.TerminalPanel.init(allocator),
             .runtime = runtime,
@@ -280,6 +285,7 @@ pub const Editor = struct {
         self.is_deinitialized = true;
 
         self.terminal_panel.deinit();
+        self.keybinding_registry.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
         self.state.deinit(self.allocator);
         self.renderer.deinit(self.allocator);
@@ -291,7 +297,20 @@ pub const Editor = struct {
     }
 
     pub fn refreshKeybindings(self: *Editor) void {
-        self.keys = ResolvedKeybindings.init(self.config.keybindings);
+        var diagnostics = command_keybindings.BuildDiagnostics{};
+        defer diagnostics.deinit(self.allocator);
+        const rebuilt = config.buildKeybindingRegistry(self.allocator, &self.config, &diagnostics) catch return;
+        self.keybinding_registry.deinit(self.allocator);
+        self.keybinding_registry = rebuilt;
+    }
+
+    pub fn keyEventForCommand(self: *const Editor, context: commands.CommandContext, id: commands.CommandId) ?terminal.KeyEvent {
+        for (self.keybinding_registry.bindings) |binding| {
+            if (binding.context == context and binding.command == id and binding.sequence.len == 1) {
+                return binding.sequence.chords[0].toEvent();
+            }
+        }
+        return null;
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
@@ -797,18 +816,28 @@ pub const Editor = struct {
         };
         if (!allowed_key) return null;
 
-        if (event.eql(self.keys.move_up)) return .up;
-        if (event.eql(self.keys.move_down)) return .down;
-        if (event.eql(self.keys.move_left)) return .left;
-        if (event.eql(self.keys.move_right)) return .right;
-        return null;
+        const context: commands.CommandContext = if (self.state.mode == .Insert) .insert else .normal;
+        const command = self.resolveDefaultContextCommand(context, event) orelse return null;
+        return switch (command) {
+            .navigation_move_up => .up,
+            .navigation_move_down => .down,
+            .navigation_move_left => .left,
+            .navigation_move_right => .right,
+            else => null,
+        };
     }
 
     fn matchesNonSimpleMovement(self: *Editor, event: terminal.KeyEvent) bool {
-        return event.eql(self.keys.line_start) or
-            event.eql(self.keys.line_end) or
-            event.eql(self.keys.word_left) or
-            event.eql(self.keys.word_right);
+        const context: commands.CommandContext = if (self.state.mode == .Insert) .insert else .normal;
+        const command = self.resolveDefaultContextCommand(context, event) orelse return false;
+        return switch (command) {
+            .navigation_line_start,
+            .navigation_line_end,
+            .navigation_word_left,
+            .navigation_word_right,
+            => true,
+            else => false,
+        };
     }
 
     fn coalescingStopReasonAfterMovement(self: *Editor, snapshot: MovementCoalesceSnapshot) ?MovementCoalesceStopReason {
@@ -1193,24 +1222,30 @@ pub const Editor = struct {
     fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
         if (event.key == .PageUp or event.key == .PageDown) return true;
 
-        return movementEventMatches(event, self.keys.move_up) or
-            movementEventMatches(event, self.keys.move_down) or
-            movementEventMatches(event, self.keys.move_left) or
-            movementEventMatches(event, self.keys.move_right) or
-            movementEventMatches(event, self.keys.line_start) or
-            movementEventMatches(event, self.keys.line_end) or
-            movementEventMatches(event, self.keys.word_left) or
-            movementEventMatches(event, self.keys.word_right) or
-            movementEventMatches(event, self.keys.explorer_up) or
-            movementEventMatches(event, self.keys.explorer_down);
-    }
-
-    fn movementEventMatches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
-        if (event.eql(expected)) return true;
-
         var without_shift = event;
         without_shift.shift = false;
-        return event.shift and without_shift.eql(expected);
+        const context: commands.CommandContext = if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null)
+            if (self.state.tree.?.search_active) .explorer_search else .explorer
+        else if (self.state.mode == .Insert)
+            .insert
+        else
+            .normal;
+
+        const command = self.resolveDefaultContextCommand(context, without_shift) orelse return false;
+        return switch (command) {
+            .navigation_move_up,
+            .navigation_move_down,
+            .navigation_move_left,
+            .navigation_move_right,
+            .navigation_line_start,
+            .navigation_line_end,
+            .navigation_word_left,
+            .navigation_word_right,
+            .explorer_move_up,
+            .explorer_move_down,
+            => true,
+            else => false,
+        };
     }
 
     fn bufferViewportGeometry(self: *const Editor) struct { start_col: usize, width: usize } {
@@ -1498,8 +1533,57 @@ pub const Editor = struct {
         return @min(@as(usize, 100), ((row + 1) * 100) / total_lines);
     }
 
+    fn resolveDefaultContextCommand(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
+        const result = self.keybinding_registry.resolve(context, command_keybindings.KeySequence.fromEvent(event));
+        return switch (result) {
+            .command => |command| command,
+            else => null,
+        };
+    }
+
+    fn registryCommandMatches(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent, id: commands.CommandId) bool {
+        return (self.resolveDefaultContextCommand(context, event) orelse return false) == id;
+    }
+
+    fn quitRequestedByEvent(self: *const Editor, event: terminal.KeyEvent) bool {
+        if (self.registryCommandMatches(.global, event, .app_quit_flamingo)) return true;
+        if (self.state.mode == .Normal) {
+            const command = normal_sequence.resolveGlobalActionCommand(&self.keybinding_registry, event) orelse return false;
+            return command == .app_quit_flamingo;
+        }
+        return false;
+    }
+
+    fn completionCommandForEvent(self: *const Editor, event: terminal.KeyEvent) ?commands.CommandId {
+        const context: commands.CommandContext = switch (self.state.mode) {
+            .Normal => .normal,
+            .Insert => .insert,
+            else => return null,
+        };
+
+        const command = self.resolveDefaultContextCommand(context, event) orelse return null;
+        return switch (command) {
+            .completion_auto_trigger,
+            .completion_trigger,
+            => command,
+            else => null,
+        };
+    }
+
+    fn completionActionCommandForEvent(self: *const Editor, event: terminal.KeyEvent) ?commands.CommandId {
+        const command = self.resolveDefaultContextCommand(.completion, event) orelse return null;
+        return switch (command) {
+            .completion_previous,
+            .completion_next,
+            .completion_accept,
+            .completion_cancel,
+            => command,
+            else => null,
+        };
+    }
+
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
-        if (self.state.mode != .Help and event.eql(self.keys.quit)) {
+        if (self.state.mode != .Help and self.quitRequestedByEvent(event)) {
             self.should_quit = true;
             self.markDirty(.full);
             return;
@@ -1522,10 +1606,7 @@ pub const Editor = struct {
                 self.notePendingLspChange();
             }
 
-            const is_completion_auto_trigger = event.eql(self.keys.completion_auto_trigger);
-            const is_completion_trigger = event.eql(self.keys.completion_trigger);
-
-            if ((is_completion_auto_trigger or is_completion_trigger) and self.modeAllowsCompletion()) {
+            if (self.completionCommandForEvent(event) != null and self.modeAllowsCompletion()) {
                 if (tab.buf.filename != null) {
                     if (self.runtime.lsp_mgr) |*mgr| {
                         const mc = tab.mainCursor();
@@ -2255,7 +2336,7 @@ pub const Editor = struct {
         const usable_height = bottom_row + 1;
         if (usable_height < 6) return null;
 
-        const content_height = self.state.help_popup.totalRows() + 4;
+        const content_height = self.state.help_popup.totalRows(&self.keybinding_registry) + 4;
         const target_height = @min(@max(@as(usize, 8), (usable_height * 65) / 100), @as(usize, 24));
         const panel_height = @min(usable_height, @min(content_height, target_height));
         if (panel_height < 6) return null;
@@ -2449,7 +2530,8 @@ pub const Editor = struct {
             else
                 .command_popup;
             self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, style);
-            const suggestion = popup.suggestions.items[i].name();
+            var suggestion_buf: [128]u8 = undefined;
+            const suggestion = popup.suggestions.items[i].displayText(&suggestion_buf);
             const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
             self.renderer.screen.writeText(row, geom.col + 2, shown, style);
         }
@@ -2655,16 +2737,16 @@ pub const Editor = struct {
         const geom = self.helpPopupGeometry() orelse return;
         const body_rows = @max(@as(usize, 1), geom.height -| 4);
         const inner_end = geom.col + geom.width - 1;
-        self.state.help_popup.clampScroll(body_rows);
+        self.state.help_popup.clampScroll(&self.keybinding_registry, body_rows);
 
         self.drawPickerTop(geom, help_popup_title, .command_popup_border);
 
-        const key_width: usize = if (geom.width < 42) 10 else 16;
+        const key_width: usize = if (geom.width < 42) 14 else 24;
         var body_row: usize = geom.row + 1;
         for (0..body_rows) |offset| {
             const source_row = self.state.help_popup.scroll_offset + offset;
             const row = body_row + offset;
-            const help_row = self.state.help_popup.rowAt(source_row);
+            const help_row = self.state.help_popup.rowAt(&self.keybinding_registry, source_row);
             switch (help_row orelse {
                 self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
                 continue;
@@ -2672,12 +2754,15 @@ pub const Editor = struct {
                 .category => |category| {
                     self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_selected_focus);
                     var col = geom.col + 2;
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, category.title(), .explorer_selected_focus, false);
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, help_mod.categoryTitle(category), .explorer_selected_focus, false);
                 },
-                .entry => |entry| {
+                .command => |command| {
                     self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
                     var col = geom.col + 2;
-                    const key_text = help_mod.keyText(entry, self.config.keybindings);
+                    var key_buf: [192]u8 = undefined;
+                    var description_buf: [256]u8 = undefined;
+                    const key_text = help_mod.formatCommandKeys(command.meta, &self.keybinding_registry, &key_buf);
+                    const description = help_mod.formatCommandDescription(command.meta, &description_buf);
                     const key_start = col;
                     self.writeVirtualTruncatedCells(row, &col, @min(inner_end, key_start + key_width), key_text, .command_popup_prompt, false);
                     if (col < key_start + key_width and col < inner_end) {
@@ -2686,7 +2771,7 @@ pub const Editor = struct {
                         }
                     }
                     self.writeVirtualTruncatedCells(row, &col, inner_end, "  ", .explorer_bg, false);
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, entry.description, .command_popup, false);
+                    self.writeVirtualTruncatedCells(row, &col, inner_end, description, .command_popup, false);
                 },
             }
         }
@@ -3273,57 +3358,59 @@ pub const Editor = struct {
         if (!self.state.lsp_ui.completion_active or self.state.lsp_ui.completion_items == null) return false;
         const items = self.state.lsp_ui.completionItems();
 
-        if (event.eql(self.keys.completion_previous)) {
-            if (self.state.lsp_ui.completion_selected > 0) {
-                self.state.lsp_ui.completion_selected -= 1;
-            } else if (items.len > 0) {
-                self.state.lsp_ui.completion_selected = items.len - 1;
+        if (self.completionActionCommandForEvent(event)) |command| {
+            switch (command) {
+                .completion_previous => {
+                    if (self.state.lsp_ui.completion_selected > 0) {
+                        self.state.lsp_ui.completion_selected -= 1;
+                    } else if (items.len > 0) {
+                        self.state.lsp_ui.completion_selected = items.len - 1;
+                    }
+                    return true;
+                },
+                .completion_next => {
+                    if (self.state.lsp_ui.completion_selected < items.len - 1) {
+                        self.state.lsp_ui.completion_selected += 1;
+                    } else {
+                        self.state.lsp_ui.completion_selected = 0;
+                    }
+                    return true;
+                },
+                .completion_accept => {
+                    if (items.len == 0) {
+                        self.state.lsp_ui.clearCompletion();
+                        return false;
+                    }
+                    const item = completionItemObject(items[self.state.lsp_ui.completion_selected]) orelse {
+                        self.state.lsp_ui.clearCompletion();
+                        return false;
+                    };
+                    const label = completionItemString(item, "label") orelse {
+                        self.state.lsp_ui.clearCompletion();
+                        return false;
+                    };
+                    const insertText = completionItemString(item, "insertText") orelse label;
+
+                    // Insert the completion
+                    if (self.currentTab()) |tab| {
+                        const mc = tab.mainCursor();
+                        // Simple insertion for now.
+                        // TODO: handle overwrite and snippets.
+                        for (insertText) |c| {
+                            try tab.buf.insertChar(mc.row, mc.col, c);
+                            mc.col += 1;
+                        }
+                    }
+
+                    self.state.lsp_ui.clearCompletion();
+                    return true;
+                },
+                .completion_cancel => {
+                    self.state.lsp_ui.clearCompletion();
+                    return true;
+                },
+                else => unreachable,
             }
-            return true;
-        }
-
-        if (event.eql(self.keys.completion_next)) {
-            if (self.state.lsp_ui.completion_selected < items.len - 1) {
-                self.state.lsp_ui.completion_selected += 1;
-            } else {
-                self.state.lsp_ui.completion_selected = 0;
-            }
-            return true;
-        }
-
-        if (event.eql(self.keys.completion_accept)) {
-            if (items.len == 0) {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            }
-            const item = completionItemObject(items[self.state.lsp_ui.completion_selected]) orelse {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            };
-            const label = completionItemString(item, "label") orelse {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            };
-            const insertText = completionItemString(item, "insertText") orelse label;
-
-            // Insert the completion
-            if (self.currentTab()) |tab| {
-                const mc = tab.mainCursor();
-                // Simple insertion for now.
-                // TODO: handle overwrite and snippets.
-                for (insertText) |c| {
-                    try tab.buf.insertChar(mc.row, mc.col, c);
-                    mc.col += 1;
-                }
-            }
-
-            self.state.lsp_ui.clearCompletion();
-            return true;
-        }
-
-        if (event.eql(self.keys.completion_cancel)) {
-            self.state.lsp_ui.clearCompletion();
-            return true;
         }
 
         switch (event.key) {
@@ -3342,6 +3429,87 @@ pub const Editor = struct {
     }
 };
 
+fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
+    return makeFastMoveTestEditorWithLineCount(allocator, 4);
+}
+
+fn defaultKeyForCommand(ed: *const Editor, context: commands.CommandContext, id: commands.CommandId) terminal.KeyEvent {
+    return ed.keyEventForCommand(context, id) orelse unreachable;
+}
+
+fn installTestKeybindingOverrides(ed: *Editor, overrides: []const command_keybindings.UserBindingOverride) !void {
+    var diagnostics = command_keybindings.BuildDiagnostics{};
+    defer diagnostics.deinit(ed.allocator);
+    var registry = try command_keybindings.Registry.fromDefaultsAndConfig(ed.allocator, overrides, &.{}, &diagnostics);
+    errdefer registry.deinit(ed.allocator);
+    try std.testing.expect(!diagnostics.hasErrors());
+    ed.keybinding_registry.deinit(ed.allocator);
+    ed.keybinding_registry = registry;
+}
+
+fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count: usize) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const seed_lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
+    for (0..line_count) |i| {
+        const line = if (i < seed_lines.len) seed_lines[i] else "filler";
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    try ed.addTab(buf);
+    ed.state.mode = .Normal;
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.render_dirty = false;
+    ed.state.force_full_render = false;
+    return ed;
+}
+
+fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    foo();",
+        "}",
+        "after();",
+    };
+    for (lines) |line| {
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    try ed.addTab(buf);
+    ed.state.mode = .Normal;
+    ed.width = 80;
+    ed.height = 12;
+    return ed;
+}
+
+pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
+    var editor = try Editor.init(allocator, io, cfg);
+    defer editor.deinit();
+    try editor.run();
+}
+
+fn addNamedTestTab(state: *state_mod.EditorState, allocator: std.mem.Allocator, name: []const u8) !void {
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    try buf.setFilename(name);
+    try std.testing.expect(try state.addTab(allocator, buf));
+}
+
 test "Editor.calculateGutterWidth" {
     const cfg = config.Config{};
     var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
@@ -3356,13 +3524,6 @@ test "Editor.calculateGutterWidth" {
     // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
-}
-
-fn addNamedTestTab(state: *state_mod.EditorState, allocator: std.mem.Allocator, name: []const u8) !void {
-    var buf = try buffer.Buffer.init(allocator);
-    errdefer buf.deinit();
-    try buf.setFilename(name);
-    try std.testing.expect(try state.addTab(allocator, buf));
 }
 
 test "tab bar scroll follows active tab with variable label widths" {
@@ -3630,9 +3791,11 @@ test "virtual renderer and movement respect folded lines" {
 
     tab.mainCursor().row = 0;
     tab.mainCursor().col = 0;
-    try std.testing.expect(try input.handleMovement(&ed, ed.keys.move_down));
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const up = defaultKeyForCommand(&ed, .normal, .navigation_move_up);
+    try std.testing.expect(try input.handleMovement(&ed, down));
     try std.testing.expectEqual(@as(usize, 3), tab.mainCursor().row);
-    try std.testing.expect(try input.handleMovement(&ed, ed.keys.move_up));
+    try std.testing.expect(try input.handleMovement(&ed, up));
     try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
 }
 
@@ -3640,27 +3803,30 @@ test "movement coalescing helper accepts repeated plain Down" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
 
     try std.testing.expectEqual(CoalescedMovement.down, candidate.movement);
-    try std.testing.expect(ed.coalescingStopReasonForNext(candidate, ed.keys.move_down, 1) == null);
+    try std.testing.expect(ed.coalescingStopReasonForNext(candidate, down, 1) == null);
 }
 
 test "movement coalescing stores different movement for next input" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const up = defaultKeyForCommand(&ed, .normal, .navigation_move_up);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
 
     try std.testing.expectEqual(
         MovementCoalesceStopReason.different_key,
-        ed.coalescingStopReasonForNext(candidate, ed.keys.move_up, 1).?,
+        ed.coalescingStopReasonForNext(candidate, up, 1).?,
     );
 }
 
@@ -3668,7 +3834,8 @@ test "movement coalescing stores printable input for next input" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
@@ -3698,7 +3865,8 @@ test "movement coalescing rejects prompt and overlay modes" {
 
     for (rejected_modes) |mode| {
         ed.state.mode = mode;
-        switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+        const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+        switch (ed.movementCoalescingEligibilityBefore(down)) {
             .eligible => return error.ExpectedCoalescingRejection,
             .blocked => {},
         }
@@ -3710,9 +3878,10 @@ test "movement coalescing rejects completion and focused explorer" {
     defer ed.deinit();
 
     ed.state.lsp_ui.completion_active = true;
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
     try std.testing.expectEqual(
         MovementCoalesceStopReason.overlay_active,
-        switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+        switch (ed.movementCoalescingEligibilityBefore(down)) {
             .eligible => return error.ExpectedCoalescingRejection,
             .blocked => |reason| reason,
         },
@@ -3723,7 +3892,7 @@ test "movement coalescing rejects completion and focused explorer" {
     ed.state.explorer_focused = true;
     try std.testing.expectEqual(
         MovementCoalesceStopReason.overlay_active,
-        switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+        switch (ed.movementCoalescingEligibilityBefore(down)) {
             .eligible => return error.ExpectedCoalescingRejection,
             .blocked => |reason| reason,
         },
@@ -3734,14 +3903,15 @@ test "movement coalescing stops at max batch count" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
 
     try std.testing.expectEqual(
         MovementCoalesceStopReason.max_batch,
-        ed.coalescingStopReasonForNext(candidate, ed.keys.move_down, max_movement_coalesce_batch_count).?,
+        ed.coalescingStopReasonForNext(candidate, down, max_movement_coalesce_batch_count).?,
     );
 }
 
@@ -3749,10 +3919,17 @@ test "movement coalescing rejects ambiguous non-simple movement binding" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    ed.config.keybindings.line_start = "down";
-    ed.refreshKeybindings();
+    try installTestKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = command_keybindings.keySpecial(.Down),
+            .command = .navigation_line_start,
+            .replace_default_sequence = command_keybindings.altKey(.Down),
+        },
+    });
 
-    switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => return error.ExpectedCoalescingRejection,
         .blocked => {},
     }
@@ -3762,18 +3939,20 @@ test "pending key is processed before reading terminal input" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    ed.pending_key = ed.keys.move_up;
+    const up = defaultKeyForCommand(&ed, .normal, .navigation_move_up);
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    ed.pending_key = up;
     var reader = std.Io.Reader.fixed("\x1b[B");
     var metrics = perf.FrameMetrics{};
 
     const first = try ed.readInputKey(&reader, &metrics);
     try std.testing.expect(first.from_pending);
-    try std.testing.expect(first.event.eql(ed.keys.move_up));
+    try std.testing.expect(first.event.eql(up));
     try std.testing.expect(ed.pending_key == null);
 
     const second = try ed.readInputKey(&reader, &metrics);
     try std.testing.expect(!second.from_pending);
-    try std.testing.expect(second.event.eql(ed.keys.move_down));
+    try std.testing.expect(second.event.eql(down));
 }
 
 test "normal-mode hjkl movement can coalesce only when bound to movement" {
@@ -3786,8 +3965,14 @@ test "normal-mode hjkl movement can coalesce only when bound to movement" {
         .blocked => {},
     }
 
-    ed.config.keybindings.move_down = "j";
-    ed.refreshKeybindings();
+    try installTestKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = command_keybindings.keyChar('j'),
+            .command = .navigation_move_down,
+            .replace_default_sequence = command_keybindings.keySpecial(.Down),
+        },
+    });
     switch (ed.movementCoalescingEligibilityBefore(j)) {
         .eligible => |candidate| try std.testing.expectEqual(CoalescedMovement.down, candidate.movement),
         .blocked => return error.ExpectedCoalescingEligibility,
@@ -3829,6 +4014,76 @@ test "completion trigger is limited to buffer editing modes" {
     }
 }
 
+test "completion trigger keys resolve from normal and insert contexts" {
+    var ed = try makeFastMoveTestEditor(std.testing.allocator);
+    defer ed.deinit();
+
+    ed.state.mode = .Normal;
+    try std.testing.expectEqual(commands.CommandId.completion_auto_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = '.' }).?);
+    try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }).?);
+
+    ed.state.mode = .Insert;
+    try std.testing.expectEqual(commands.CommandId.completion_auto_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = '.' }).?);
+    try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }).?);
+
+    try installTestKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = command_keybindings.ctrlChar('j'),
+            .command = .completion_trigger,
+            .replace_default_sequence = command_keybindings.ctrlChar(' '),
+        },
+        .{
+            .context = .insert,
+            .sequence = command_keybindings.ctrlChar('j'),
+            .command = .completion_trigger,
+            .replace_default_sequence = command_keybindings.ctrlChar(' '),
+        },
+    });
+    try std.testing.expect(ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }) == null);
+    try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = 'j', .ctrl = true }).?);
+}
+
+test "completion popup controls resolve through completion context" {
+    const allocator = std.testing.allocator;
+    var ed = try makeFastMoveTestEditor(allocator);
+    defer ed.deinit();
+
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .string = try allocator.dupe(u8, "first") });
+    try arr.append(.{ .string = try allocator.dupe(u8, "second") });
+    ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Down }));
+    try std.testing.expectEqual(@as(usize, 1), ed.state.lsp_ui.completion_selected);
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Up }));
+    try std.testing.expectEqual(@as(usize, 0), ed.state.lsp_ui.completion_selected);
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Esc }));
+    try std.testing.expect(!ed.state.lsp_ui.completion_active);
+}
+
+test "completion accept inserts selected item" {
+    const allocator = std.testing.allocator;
+    var ed = try makeFastMoveTestEditor(allocator);
+    defer ed.deinit();
+
+    var item = std.json.ObjectMap{};
+    try item.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, "World") });
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .object = item });
+    ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
+
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Enter }));
+    try std.testing.expect(!ed.state.lsp_ui.completion_active);
+
+    const tab = ed.currentTab().?;
+    const line = try tab.buf.lines.items[0].slice(allocator);
+    defer allocator.free(line);
+    try std.testing.expectEqualStrings("Worldalpha", line);
+}
+
 test "insert mode alt-up then character stays in bounds" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
@@ -3848,64 +4103,4 @@ test "insert mode alt-up then character stays in bounds" {
     defer std.testing.allocator.free(line);
     try std.testing.expectEqualStrings("alphax", line);
     try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
-}
-
-fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
-    return makeFastMoveTestEditorWithLineCount(allocator, 4);
-}
-
-fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count: usize) !Editor {
-    var ed = try Editor.init(allocator, std.testing.io, .{});
-    errdefer ed.deinit();
-
-    var buf = try buffer.Buffer.init(allocator);
-    errdefer buf.deinit();
-    var first = buf.lines.orderedRemove(0);
-    first.deinit();
-
-    const seed_lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
-    for (0..line_count) |i| {
-        const line = if (i < seed_lines.len) seed_lines[i] else "filler";
-        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
-    }
-
-    try ed.addTab(buf);
-    ed.state.mode = .Normal;
-    ed.width = 80;
-    ed.height = 24;
-    ed.state.render_dirty = false;
-    ed.state.force_full_render = false;
-    return ed;
-}
-
-fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
-    var ed = try Editor.init(allocator, std.testing.io, .{});
-    errdefer ed.deinit();
-
-    var buf = try buffer.Buffer.init(allocator);
-    errdefer buf.deinit();
-    var first = buf.lines.orderedRemove(0);
-    first.deinit();
-
-    const lines = [_][]const u8{
-        "fn main() {",
-        "    foo();",
-        "}",
-        "after();",
-    };
-    for (lines) |line| {
-        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
-    }
-
-    try ed.addTab(buf);
-    ed.state.mode = .Normal;
-    ed.width = 80;
-    ed.height = 12;
-    return ed;
-}
-
-pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
-    var editor = try Editor.init(allocator, io, cfg);
-    defer editor.deinit();
-    try editor.run();
 }

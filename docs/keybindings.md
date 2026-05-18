@@ -173,3 +173,34 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | **Command Prompt** | `:` |
 | **Navigate Options** | `Up / Down` |
 | **Select Option** | `Enter` |
+
+---
+
+## Configuring Keybindings
+
+Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys to canonical command names from `src/editor/commands.zig`:
+
+```toml
+[keybindings.normal]
+"gg" = "navigation.goto_file_start"
+"G" = "navigation.goto_file_end"
+"ctrl+s" = "file.write"
+
+[keybindings.insert]
+"esc" = "mode.normal"
+"ctrl+s" = "file.write"
+
+[keybindings.command_line]
+"enter" = "command.execute"
+"tab" = "command.suggestion_next"
+"esc" = "command.cancel"
+
+[keybindings.normal.unbind]
+keys = ["ctrl+w"]
+```
+
+Supported key spellings include plain sequences like `gg` and `zM`, modifiers like `ctrl+s`, `C-S-k`, `alt+delete`, `shift+tab`, and special keys like `enter`, `esc`, `tab`, `backspace`, arrows, `pageup`, `pagedown`, `home`, `end`, and `space`.
+
+Old flat `[keybindings]` fields have been removed. Use context-specific tables such as `[keybindings.normal]`, `[keybindings.insert]`, and `[keybindings.command_line]`. Printable editor text, prompt text, and terminal PTY input are raw input rather than command keybindings.
+
+The `:help` popup is generated from the same command metadata and resolved keybinding registry, so overrides and unbinds are reflected there automatically. The command popup also uses command metadata for names, aliases, and descriptions.
