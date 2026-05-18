@@ -9,6 +9,7 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] `homebrew` formula for installation
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
 - [x] UI overhaul using nerdfonts
+- [ ] git Graphs and commit history panel
 
 ## Performance TODO
 

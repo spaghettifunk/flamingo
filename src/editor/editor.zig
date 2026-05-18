@@ -30,14 +30,13 @@ const state_mod = @import("state/state.zig");
 const jump_history = @import("state/jump_history.zig");
 const key_profile = @import("runtime/key_profile.zig");
 const movement_coalesce = @import("runtime/movement_coalesce.zig");
+const runtime_background = @import("runtime/background.zig");
+const runtime_loop = @import("runtime/loop.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
 const prompt_popup = @import("prompt_popup.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
-
-const max_fifo_events_per_idle_tick = 8;
-const syntax_parse_idle_delay_ns = 50 * std.time.ns_per_ms;
 
 pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
@@ -50,18 +49,8 @@ const MovementCoalesceSnapshot = movement_coalesce.MovementCoalesceSnapshot;
 const CoalescingCandidate = movement_coalesce.CoalescingCandidate;
 const MovementCoalesceEligibility = movement_coalesce.MovementCoalesceEligibility;
 
-const InputKeyRead = struct {
-    event: terminal.KeyEvent,
-    read_start_ns: u64,
-    read_elapsed_ns: u64,
-    from_pending: bool = false,
-};
-
-const RuntimeKeyDispatch = struct {
-    update_end_ns: u64,
-    update_elapsed_ns: u64,
-    movement_handled: bool,
-};
+const InputKeyRead = runtime_loop.InputKeyRead;
+const RuntimeKeyDispatch = runtime_loop.RuntimeKeyDispatch;
 
 pub const HorizontalScrollCommand = viewport_mod.HorizontalScrollCommand;
 
@@ -273,21 +262,7 @@ pub const Editor = struct {
     }
 
     pub fn run(self: *Editor) !void {
-        const stdout = std.Io.File.stdout();
-        const stdin = std.Io.File.stdin();
-        var stdout_buf: [0]u8 = .{};
-        var stdin_buf: [1]u8 = undefined;
-        var stdout_writer = stdout.writerStreaming(self.io, &stdout_buf);
-        var stdin_reader = stdin.readerStreaming(self.io, &stdin_buf);
-
-        try terminal.enableRawMode(self.io);
-        defer terminal.disableRawMode();
-
-        const size = try terminal.getSize();
-        self.width = size.cols;
-        self.height = size.rows;
-
-        try self.runWithIO(&stdin_reader.interface, &stdout_writer.interface);
+        return runtime_loop.run(self);
     }
 
     /// Run the editor event loop with explicit reader/writer.
@@ -295,257 +270,15 @@ pub const Editor = struct {
     /// (synthetic key bytes) and an `ArrayList` writer (capture render output)
     /// without touching a real TTY.
     pub fn runWithIO(self: *Editor, reader: anytype, raw_writer: anytype) !void {
-        var render_buffer = std.ArrayListUnmanaged(u8).empty;
-        var aw = std.Io.Writer.Allocating.fromArrayList(self.allocator, &render_buffer);
-        defer aw.deinit();
-        const writer = &aw.writer;
-        var last_input_ns: ?u64 = null;
-
-        while (!self.should_quit) {
-            const loop_start = perf.nowNs();
-            var metrics = perf.FrameMetrics{};
-
-            var handled_input = false;
-            var last_update_end_ns: ?u64 = null;
-            var key_trace_storage = perf.KeypressTrace{};
-            var key_trace: ?*perf.KeypressTrace = null;
-            var key_start_ns: u64 = 0;
-            var key_name_buf: [32]u8 = undefined;
-            var input_count: usize = 0;
-            while (input_count < 128) : (input_count += 1) {
-                const key_read = try self.readInputKey(reader, &metrics);
-                const event = key_read.event;
-                if (event.key == .None) break;
-                handled_input = true;
-                metrics.input_events += 1;
-
-                var batch_count: usize = 1;
-                var pending_key_stored = false;
-                var coalesce_stop_reason: MovementCoalesceStopReason = .not_eligible;
-                var coalescing_candidate: ?CoalescingCandidate = null;
-                switch (self.movementCoalescingEligibilityBefore(event)) {
-                    .eligible => |candidate| {
-                        coalescing_candidate = candidate;
-                        coalesce_stop_reason = .none;
-                    },
-                    .blocked => |reason| coalesce_stop_reason = reason,
-                }
-
-                if (self.keypress_profiler.enabled) {
-                    key_start_ns = key_read.read_start_ns;
-                    const key_name = formatKeyName(event, &key_name_buf);
-                    key_trace_storage = self.initKeypressTrace(event, key_name);
-                    key_trace_storage.read_ns = key_read.read_elapsed_ns;
-                    key_trace = &key_trace_storage;
-                }
-
-                const render_after_event = self.shouldRenderAfterInputEvent(event);
-                if (render_after_event) {
-                    metrics.cursor_move_events += 1;
-                }
-
-                const dispatch = try self.dispatchRuntimeKeyForLoop(event, key_trace, &metrics);
-                metrics.input_to_update_ns += dispatch.update_end_ns - key_read.read_start_ns;
-                last_update_end_ns = dispatch.update_end_ns;
-                last_input_ns = dispatch.update_end_ns;
-
-                if (coalescing_candidate) |candidate| {
-                    if (!dispatch.movement_handled) {
-                        coalesce_stop_reason = .not_eligible;
-                    } else if (self.coalescingStopReasonAfterMovement(candidate.snapshot)) |reason| {
-                        coalesce_stop_reason = reason;
-                    } else {
-                        while (batch_count < max_movement_coalesce_batch_count and !self.should_quit) {
-                            const drain_read_start = perf.nowNs();
-                            const next_event = terminal.readKey(reader) catch |err| {
-                                coalesce_stop_reason = .read_error;
-                                if (key_trace) |trace| trace.coalesce_stop_reason = coalesce_stop_reason.name();
-                                return err;
-                            };
-                            const drain_read_elapsed = perf.elapsedNs(drain_read_start);
-                            metrics.add(.input_poll, drain_read_elapsed);
-                            if (key_trace) |trace| trace.read_ns += drain_read_elapsed;
-
-                            if (self.coalescingStopReasonForNext(candidate, next_event, batch_count)) |reason| {
-                                coalesce_stop_reason = reason;
-                                if (next_event.key != .None) {
-                                    std.debug.assert(self.pending_key == null);
-                                    self.pending_key = next_event;
-                                    pending_key_stored = true;
-                                }
-                                break;
-                            }
-
-                            batch_count += 1;
-                            metrics.input_events += 1;
-
-                            const next_render_after_event = self.shouldRenderAfterInputEvent(next_event);
-                            if (next_render_after_event) {
-                                metrics.cursor_move_events += 1;
-                            }
-
-                            const next_dispatch = try self.dispatchRuntimeKeyForLoop(next_event, key_trace, &metrics);
-                            metrics.input_to_update_ns += next_dispatch.update_end_ns - drain_read_start;
-                            last_update_end_ns = next_dispatch.update_end_ns;
-                            last_input_ns = next_dispatch.update_end_ns;
-
-                            if (!next_dispatch.movement_handled) {
-                                coalesce_stop_reason = .not_eligible;
-                                break;
-                            }
-                            if (self.coalescingStopReasonAfterMovement(candidate.snapshot)) |reason| {
-                                coalesce_stop_reason = reason;
-                                break;
-                            }
-                        }
-                        if (batch_count >= max_movement_coalesce_batch_count and coalesce_stop_reason == .none) {
-                            coalesce_stop_reason = .max_batch;
-                        } else if (coalesce_stop_reason == .none) {
-                            coalesce_stop_reason = .no_pending_input;
-                        }
-                    }
-                }
-
-                if (key_trace) |trace| {
-                    trace.batch_count = batch_count;
-                    trace.coalesced = batch_count > 1;
-                    trace.pending_key_stored = pending_key_stored;
-                    trace.coalesce_stop_reason = coalesce_stop_reason.name();
-                }
-
-                if (self.should_quit) break;
-                // Paint after the first input event, or after a bounded coalesced
-                // movement batch when repeated movement keys were already queued.
-                break;
-            }
-
-            if (!handled_input) {
-                const events_start = perf.nowNs();
-                try self.processBackgroundEvents(max_fifo_events_per_idle_tick);
-                metrics.add(.event_processing, perf.elapsedNs(events_start));
-
-                const update_start = perf.nowNs();
-                try self.flushPendingLspChanges(false);
-                self.updateStatusClockDirty();
-                metrics.add(.update_state, perf.elapsedNs(update_start));
-            }
-
-            self.refreshTerminalSize();
-
-            if (self.state.render_dirty) {
-                if (key_trace) |trace| {
-                    trace.dirty = self.keypressDirtyState();
-                }
-                aw.clearRetainingCapacity();
-
-                if (key_trace) |trace| {
-                    trace.reject = "none";
-                }
-
-                const previous_render_trace = self.active_keypress_trace;
-                self.active_keypress_trace = key_trace;
-                defer self.active_keypress_trace = previous_render_trace;
-
-                const frame_start = perf.nowNs();
-                if (key_trace) |trace| {
-                    trace.render = .virtual;
-                    trace.render_path_reason = "virtual";
-                }
-                try self.renderVirtual(writer, &metrics);
-                const render_elapsed = perf.elapsedNs(frame_start);
-                metrics.add(.build_frame, render_elapsed);
-                if (key_trace) |trace| {
-                    trace.render_ns += render_elapsed;
-                }
-                metrics.render_kind = if (self.state.force_full_render) .full else .partial;
-
-                const flush_start = perf.nowNs();
-                if (last_update_end_ns) |update_end| {
-                    metrics.update_to_flush_ns += flush_start - update_end;
-                }
-                const bytes = aw.written().len;
-                try raw_writer.writeAll(aw.written());
-                const write_elapsed = perf.elapsedNs(flush_start);
-                metrics.add(.flush_output, write_elapsed);
-                self.runtime.updateFrameCapacityFps(metrics.get(.build_frame) + metrics.get(.flush_output));
-                metrics.rendered = true;
-                metrics.bytes_emitted = bytes;
-                metrics.write_count = 1;
-                if (key_trace) |trace| {
-                    trace.write_ns += write_elapsed;
-                    trace.bytes_emitted = bytes;
-                    trace.total_ns = perf.elapsedNs(key_start_ns);
-                }
-                self.state.render_dirty = false;
-                self.state.force_full_render = false;
-            }
-
-            if (!handled_input) {
-                const syntax_request_start = perf.nowNs();
-                const can_queue_syntax = if (last_input_ns) |last_input|
-                    syntax_request_start - last_input >= syntax_parse_idle_delay_ns
-                else
-                    true;
-                if (can_queue_syntax) {
-                    try self.queueSyntaxParseForCurrentTab();
-                }
-                metrics.add(.update_state, perf.elapsedNs(syntax_request_start));
-            }
-
-            metrics.add(.total_loop, perf.elapsedNs(loop_start));
-            self.runtime.perf_sampler.observe(metrics);
-
-            if (handled_input) {
-                if (key_trace) |trace| {
-                    if (trace.total_ns == 0 and key_start_ns != 0) {
-                        trace.total_ns = perf.elapsedNs(key_start_ns);
-                    }
-                    self.keypress_profiler.observe(trace.*);
-                }
-            }
-
-            if (!self.state.render_dirty and !handled_input) {
-                perf.sleepNs(1 * std.time.ns_per_ms);
-            }
-        }
-
-        try self.flushPendingLspChanges(true);
-        self.runtime.perf_sampler.flush();
-        aw.clearRetainingCapacity();
-        try terminal.clearScreen(writer);
-        try terminal.moveCursor(writer, 1, 1);
-        try raw_writer.writeAll(aw.written());
+        return runtime_loop.runWithIO(self, reader, raw_writer);
     }
 
     fn readInputKey(self: *Editor, reader: anytype, metrics: *perf.FrameMetrics) !InputKeyRead {
-        const read_start = perf.nowNs();
-        if (self.pending_key) |event| {
-            self.pending_key = null;
-            return .{
-                .event = event,
-                .read_start_ns = read_start,
-                .read_elapsed_ns = 0,
-                .from_pending = true,
-            };
-        }
-
-        const event = try terminal.readKey(reader);
-        const read_elapsed = perf.elapsedNs(read_start);
-        metrics.add(.input_poll, read_elapsed);
-        return .{
-            .event = event,
-            .read_start_ns = read_start,
-            .read_elapsed_ns = read_elapsed,
-        };
+        return runtime_loop.readInputKey(self, reader, metrics);
     }
 
     fn refreshTerminalSize(self: *Editor) void {
-        const size = terminal.getSize() catch return;
-        if (self.width == size.cols and self.height == size.rows) return;
-        self.width = size.cols;
-        self.height = size.rows;
-        self.clampScroll();
-        self.markDirty(.full);
+        runtime_loop.refreshTerminalSize(self);
     }
 
     fn dispatchRuntimeKeyForLoop(
@@ -554,26 +287,7 @@ pub const Editor = struct {
         key_trace: ?*perf.KeypressTrace,
         metrics: *perf.FrameMetrics,
     ) !RuntimeKeyDispatch {
-        const input_handle_start = perf.nowNs();
-        self.last_input_movement_handled = false;
-        {
-            const previous_trace = self.active_keypress_trace;
-            self.active_keypress_trace = key_trace;
-            defer self.active_keypress_trace = previous_trace;
-            try self.handleRuntimeKey(event);
-        }
-        const update_elapsed = perf.elapsedNs(input_handle_start);
-        const update_end = perf.nowNs();
-        if (key_trace) |trace| {
-            trace.dispatch_ns += update_elapsed;
-            self.updateKeypressTraceAfterDispatch(trace);
-        }
-        metrics.add(.update_state, update_elapsed);
-        return .{
-            .update_end_ns = update_end,
-            .update_elapsed_ns = update_elapsed,
-            .movement_handled = self.last_input_movement_handled,
-        };
+        return runtime_loop.dispatchRuntimeKeyForLoop(self, event, key_trace, metrics);
     }
 
     fn movementCoalescingEligibilityBefore(self: *Editor, event: terminal.KeyEvent) MovementCoalesceEligibility {
@@ -606,64 +320,11 @@ pub const Editor = struct {
     }
 
     fn processBackgroundEvents(self: *Editor, max_fifo_events: usize) !void {
-        var fifo_events_processed: usize = 0;
-        while (fifo_events_processed < max_fifo_events) : (fifo_events_processed += 1) {
-            const ev = self.runtime.event_queue.tryPop() orelse break;
-            const event = ev;
-            switch (event) {
-                .lsp_message => |msg| {
-                    defer self.allocator.free(msg.plugin_name);
-                    defer self.allocator.free(msg.message);
-                    try self.handleLspEvent(msg.plugin_name, msg.message);
-                },
-                .git_status_snapshot => |snapshot| {
-                    if (self.state.git_snapshot) |*old| {
-                        if (old.eql(&snapshot)) {
-                            var duplicate = snapshot;
-                            duplicate.deinit();
-                            continue;
-                        }
-                    }
-                    if (self.state.git_snapshot) |*old| old.deinit();
-                    self.state.git_snapshot = snapshot;
-                    self.markDirty(.partial);
-                },
-                .terminal_output => |output| {
-                    defer self.allocator.free(output.bytes);
-                    self.terminal_panel.appendOutput(output.bytes) catch |err| {
-                        logz.err().fmt("msg", "failed to append terminal output: {any}", .{err}).log();
-                    };
-                    if (self.terminal_panel.visible) self.markDirty(.partial);
-                },
-                .terminal_exit => |exit| {
-                    self.terminal_panel.markExited(exit.code) catch |err| {
-                        logz.err().fmt("msg", "failed to record terminal exit: {any}", .{err}).log();
-                    };
-                    if (self.terminal_panel.visible) self.markDirty(.partial);
-                },
-                .syntax_parse_result => unreachable,
-            }
-        }
-
-        var syntax_results = std.ArrayList(syntax.ParseResult).empty;
-        defer syntax_results.deinit(self.allocator);
-        self.runtime.event_queue.drainSyntaxResults(&syntax_results) catch |err| {
-            logz.err().fmt("msg", "failed to drain syntax parse results: {any}", .{err}).log();
-        };
-        for (syntax_results.items) |*result| {
-            defer result.deinit(self.allocator);
-            self.handleSyntaxParseResult(result) catch |err| {
-                logz.err().fmt("msg", "failed to install syntax parse result: {any}", .{err}).log();
-            };
-        }
+        return runtime_background.processBackgroundEvents(self, max_fifo_events);
     }
 
     fn updateStatusClockDirty(self: *Editor) void {
-        const minute = self.currentMinute();
-        if (minute != self.last_status_minute) {
-            self.last_status_minute = minute;
-            self.markDirty(.partial);
-        }
+        runtime_background.updateStatusClockDirty(self);
     }
 
     fn handleLspEvent(self: *Editor, plugin_name: []const u8, message: []const u8) !void {
@@ -724,7 +385,7 @@ pub const Editor = struct {
         return key_profile.formatKeyName(event, buf);
     }
 
-    fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
+    pub fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
         if (event.key == .PageUp or event.key == .PageDown) return true;
 
         var without_shift = event;
@@ -910,7 +571,7 @@ pub const Editor = struct {
         };
     }
 
-    fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
+    pub fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
         if (self.state.mode != .Help and self.quitRequestedByEvent(event)) {
             self.should_quit = true;
             self.markDirty(.full);
@@ -1165,7 +826,7 @@ pub const Editor = struct {
         return renderer_mod.calculateGutterWidth(total_lines);
     }
 
-    fn renderVirtual(self: *Editor, writer: anytype, metrics: *perf.FrameMetrics) !void {
+    pub fn renderVirtual(self: *Editor, writer: anytype, metrics: *perf.FrameMetrics) !void {
         if (try self.renderer.screen.resize(self.width, self.height)) {
             self.renderer.screen_renderer.invalidate(.full);
         }
