@@ -3429,6 +3429,87 @@ pub const Editor = struct {
     }
 };
 
+fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
+    return makeFastMoveTestEditorWithLineCount(allocator, 4);
+}
+
+fn defaultKeyForCommand(ed: *const Editor, context: commands.CommandContext, id: commands.CommandId) terminal.KeyEvent {
+    return ed.keyEventForCommand(context, id) orelse unreachable;
+}
+
+fn installTestKeybindingOverrides(ed: *Editor, overrides: []const command_keybindings.UserBindingOverride) !void {
+    var diagnostics = command_keybindings.BuildDiagnostics{};
+    defer diagnostics.deinit(ed.allocator);
+    var registry = try command_keybindings.Registry.fromDefaultsAndConfig(ed.allocator, overrides, &.{}, &diagnostics);
+    errdefer registry.deinit(ed.allocator);
+    try std.testing.expect(!diagnostics.hasErrors());
+    ed.keybinding_registry.deinit(ed.allocator);
+    ed.keybinding_registry = registry;
+}
+
+fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count: usize) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const seed_lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
+    for (0..line_count) |i| {
+        const line = if (i < seed_lines.len) seed_lines[i] else "filler";
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    try ed.addTab(buf);
+    ed.state.mode = .Normal;
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.render_dirty = false;
+    ed.state.force_full_render = false;
+    return ed;
+}
+
+fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+
+    const lines = [_][]const u8{
+        "fn main() {",
+        "    foo();",
+        "}",
+        "after();",
+    };
+    for (lines) |line| {
+        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+    }
+
+    try ed.addTab(buf);
+    ed.state.mode = .Normal;
+    ed.width = 80;
+    ed.height = 12;
+    return ed;
+}
+
+pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
+    var editor = try Editor.init(allocator, io, cfg);
+    defer editor.deinit();
+    try editor.run();
+}
+
+fn addNamedTestTab(state: *state_mod.EditorState, allocator: std.mem.Allocator, name: []const u8) !void {
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    try buf.setFilename(name);
+    try std.testing.expect(try state.addTab(allocator, buf));
+}
+
 test "Editor.calculateGutterWidth" {
     const cfg = config.Config{};
     var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
@@ -3443,13 +3524,6 @@ test "Editor.calculateGutterWidth" {
     // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
     try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
-}
-
-fn addNamedTestTab(state: *state_mod.EditorState, allocator: std.mem.Allocator, name: []const u8) !void {
-    var buf = try buffer.Buffer.init(allocator);
-    errdefer buf.deinit();
-    try buf.setFilename(name);
-    try std.testing.expect(try state.addTab(allocator, buf));
 }
 
 test "tab bar scroll follows active tab with variable label widths" {
@@ -4029,78 +4103,4 @@ test "insert mode alt-up then character stays in bounds" {
     defer std.testing.allocator.free(line);
     try std.testing.expectEqualStrings("alphax", line);
     try std.testing.expectEqual(@as(usize, 6), tab.mainCursor().col);
-}
-
-fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
-    return makeFastMoveTestEditorWithLineCount(allocator, 4);
-}
-
-fn defaultKeyForCommand(ed: *const Editor, context: commands.CommandContext, id: commands.CommandId) terminal.KeyEvent {
-    return ed.keyEventForCommand(context, id) orelse unreachable;
-}
-
-fn installTestKeybindingOverrides(ed: *Editor, overrides: []const command_keybindings.UserBindingOverride) !void {
-    var diagnostics = command_keybindings.BuildDiagnostics{};
-    defer diagnostics.deinit(ed.allocator);
-    var registry = try command_keybindings.Registry.fromDefaultsAndConfig(ed.allocator, overrides, &.{}, &diagnostics);
-    errdefer registry.deinit(ed.allocator);
-    try std.testing.expect(!diagnostics.hasErrors());
-    ed.keybinding_registry.deinit(ed.allocator);
-    ed.keybinding_registry = registry;
-}
-
-fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count: usize) !Editor {
-    var ed = try Editor.init(allocator, std.testing.io, .{});
-    errdefer ed.deinit();
-
-    var buf = try buffer.Buffer.init(allocator);
-    errdefer buf.deinit();
-    var first = buf.lines.orderedRemove(0);
-    first.deinit();
-
-    const seed_lines = [_][]const u8{ "alpha", "beta", "gamma", "delta" };
-    for (0..line_count) |i| {
-        const line = if (i < seed_lines.len) seed_lines[i] else "filler";
-        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
-    }
-
-    try ed.addTab(buf);
-    ed.state.mode = .Normal;
-    ed.width = 80;
-    ed.height = 24;
-    ed.state.render_dirty = false;
-    ed.state.force_full_render = false;
-    return ed;
-}
-
-fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
-    var ed = try Editor.init(allocator, std.testing.io, .{});
-    errdefer ed.deinit();
-
-    var buf = try buffer.Buffer.init(allocator);
-    errdefer buf.deinit();
-    var first = buf.lines.orderedRemove(0);
-    first.deinit();
-
-    const lines = [_][]const u8{
-        "fn main() {",
-        "    foo();",
-        "}",
-        "after();",
-    };
-    for (lines) |line| {
-        try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
-    }
-
-    try ed.addTab(buf);
-    ed.state.mode = .Normal;
-    ed.width = 80;
-    ed.height = 12;
-    return ed;
-}
-
-pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
-    var editor = try Editor.init(allocator, io, cfg);
-    defer editor.deinit();
-    try editor.run();
 }

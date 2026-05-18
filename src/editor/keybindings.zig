@@ -940,6 +940,32 @@ test "formatKeySequence emits config-style labels" {
     try std.testing.expectEqualStrings("space", formatKeySequence(keyChar(' '), &buf));
 }
 
+test "parse and format representative key sequences are stable" {
+    const cases = [_]struct {
+        input: []const u8,
+        formatted: []const u8,
+    }{
+        .{ .input = "gg", .formatted = "gg" },
+        .{ .input = "G", .formatted = "G" },
+        .{ .input = "zM", .formatted = "zM" },
+        .{ .input = "ctrl+s", .formatted = "ctrl+s" },
+        .{ .input = "ctrl+shift+k", .formatted = "ctrl+shift+k" },
+        .{ .input = "alt+delete", .formatted = "alt+delete" },
+        .{ .input = "option+backspace", .formatted = "alt+backspace" },
+        .{ .input = "ctrl+alt+up", .formatted = "ctrl+alt+up" },
+        .{ .input = "shift+tab", .formatted = "shift+tab" },
+        .{ .input = "enter", .formatted = "enter" },
+        .{ .input = "esc", .formatted = "esc" },
+        .{ .input = "space", .formatted = "space" },
+        .{ .input = "ctrl+x ctrl+s", .formatted = "ctrl+x ctrl+s" },
+    };
+
+    var buf: [64]u8 = undefined;
+    for (cases) |case| {
+        try std.testing.expectEqualStrings(case.formatted, formatKeySequence(try parseKeySequence(case.input), &buf));
+    }
+}
+
 test "default registry resolves exact prefix and no-match results" {
     const registry = defaultRegistry();
 
@@ -987,6 +1013,75 @@ test "resolved registry applies overrides and unbinds" {
         else => return error.ExpectedCommand,
     });
     try std.testing.expect(registry.resolve(.normal, ctrlChar('s')) == .none);
+}
+
+test "resolved registry reports duplicate overrides warnings and unbind rebind ordering" {
+    {
+        var diagnostics = BuildDiagnostics{};
+        defer diagnostics.deinit(std.testing.allocator);
+        const overrides = [_]UserBindingOverride{
+            .{
+                .context = .normal,
+                .sequence = keyChar('x'),
+                .command = .mode_insert,
+                .source_key = "x",
+                .source_command = "mode.insert",
+            },
+            .{
+                .context = .normal,
+                .sequence = keyChar('x'),
+                .command = .mode_command,
+                .source_key = "x",
+                .source_command = "mode.command",
+            },
+        };
+        try std.testing.expectError(
+            error.InvalidKeybindingConfig,
+            Registry.fromDefaultsAndConfig(std.testing.allocator, &overrides, &.{}, &diagnostics),
+        );
+        try std.testing.expect(diagnostics.hasErrors());
+    }
+
+    {
+        var diagnostics = BuildDiagnostics{};
+        defer diagnostics.deinit(std.testing.allocator);
+        const unbinds = [_]UserUnbind{.{
+            .context = .normal,
+            .sequence = keyChar('x'),
+            .source_key = "x",
+        }};
+        var registry = try Registry.fromDefaultsAndConfig(std.testing.allocator, &.{}, &unbinds, &diagnostics);
+        defer registry.deinit(std.testing.allocator);
+
+        try std.testing.expect(!diagnostics.hasErrors());
+        try std.testing.expectEqual(@as(usize, 1), diagnostics.items.items.len);
+        try std.testing.expectEqual(DiagnosticSeverity.warning, diagnostics.items.items[0].severity);
+    }
+
+    {
+        var diagnostics = BuildDiagnostics{};
+        defer diagnostics.deinit(std.testing.allocator);
+        const unbinds = [_]UserUnbind{.{
+            .context = .normal,
+            .sequence = keyChar('i'),
+            .source_key = "i",
+        }};
+        const overrides = [_]UserBindingOverride{.{
+            .context = .normal,
+            .sequence = keyChar('i'),
+            .command = .file_write,
+            .source_key = "i",
+            .source_command = "file.write",
+        }};
+        var registry = try Registry.fromDefaultsAndConfig(std.testing.allocator, &overrides, &unbinds, &diagnostics);
+        defer registry.deinit(std.testing.allocator);
+
+        try std.testing.expect(!diagnostics.hasErrors());
+        try std.testing.expectEqual(commands.CommandId.file_write, switch (registry.resolve(.normal, keyChar('i'))) {
+            .command => |command| command,
+            else => return error.ExpectedCommand,
+        });
+    }
 }
 
 test "resolved registry rejects invalid command contexts and prefix conflicts" {

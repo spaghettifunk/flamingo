@@ -152,6 +152,23 @@ test "Config: new keybinding tables validate unknown command context and key err
     }
 }
 
+test "Config: inline command args are rejected clearly" {
+    const allocator = std.testing.allocator;
+    var parser = toml.Parser(config.Config).init(allocator);
+    defer parser.deinit();
+    var result = try parser.parseString(
+        \\[keybindings.normal]
+        \\"tab" = { command = "editing.indent", args = { spaces = 4 } }
+    );
+    defer result.deinit();
+
+    var diagnostics = keybindings.BuildDiagnostics{};
+    defer diagnostics.deinit(allocator);
+    try std.testing.expectError(error.InvalidKeybindingConfig, config.buildKeybindingRegistry(allocator, &result.value, &diagnostics));
+    try std.testing.expect(diagnostics.hasErrors());
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics.items.items[0].message, "inline command args") != null);
+}
+
 test "Config: legacy flat keybindings are rejected" {
     const allocator = std.testing.allocator;
     var parser = toml.Parser(config.Config).init(allocator);
