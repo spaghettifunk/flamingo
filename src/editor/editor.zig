@@ -12,12 +12,16 @@ const normal_sequence = @import("input_router/normal_sequence.zig");
 const viewport_mod = @import("navigation/viewport.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
+const completion_menu = @import("renderer/completion_menu.zig");
 const line_render = @import("renderer/line_render.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
+const picker_help_popups = @import("renderer/picker_help_popups.zig");
 const popup = @import("renderer/popup.zig");
+const prompt_save_popups = @import("renderer/prompt_save_popups.zig");
 const search_popups = @import("renderer/search_popups.zig");
 const statusline = @import("renderer/statusline.zig");
 const tabbar = @import("renderer/tabbar.zig");
+const terminal_panel_view = @import("renderer/terminal_panel_view.zig");
 const lsp_manager = @import("../lsp/manager.zig");
 const logger = @import("../logger.zig");
 const tab_mod = @import("model/tab.zig");
@@ -26,8 +30,6 @@ const jump_history = @import("state/jump_history.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
-const help_mod = @import("help.zig");
-const file_icons = @import("file_icons.zig");
 const prompt_popup = @import("prompt_popup.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
 
@@ -126,9 +128,6 @@ const RenderContext = struct {
 
 const CommandPopupGeometry = popup.CommandPopupGeometry;
 const FilesystemPickerGeometry = popup.FilesystemPickerGeometry;
-
-const help_popup_title = " Help ";
-const horizontal_line = "─";
 
 const GlobalSearchRenderRow = search_popups.GlobalSearchRenderRow;
 
@@ -1183,21 +1182,8 @@ pub const Editor = struct {
         return viewport_mod.editorVisibleRows(self);
     }
 
-    fn terminalCursorScreenPosition(self: *Editor) struct { row: usize, col: usize } {
-        const panel_height = self.terminalPanelHeight();
-        if (panel_height <= 1 or self.height == 0 or self.width == 0) return .{ .row = self.height, .col = self.width };
-        const body_height = panel_height - 1;
-        self.terminal_panel.clampScroll(body_height);
-        const total_lines = self.terminal_panel.renderLineCount();
-        const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
-        const shown = @min(body_height, end);
-        const first = end - shown;
-        const cursor_index = self.terminal_panel.cursorRenderIndex();
-        if (cursor_index < first or cursor_index >= first + shown) return .{ .row = self.height, .col = self.width };
-
-        const row = self.height - panel_height + 2 + (cursor_index - first);
-        const col = @min(self.terminal_panel.cursor_col + 1, self.width);
-        return .{ .row = row, .col = col };
+    fn terminalCursorScreenPosition(self: *Editor) terminal_panel_view.TerminalCursorScreenPosition {
+        return terminal_panel_view.terminalCursorScreenPosition(self);
     }
 
     fn buildRenderContext(self: *Editor, status_buf: *[160]u8) RenderContext {
@@ -1612,161 +1598,51 @@ pub const Editor = struct {
     }
 
     fn pickerTitle(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
-        return switch (mode) {
-            .open_file => " Open File ",
-            .open_folder => " Open Folder ",
-            .new_file_location => if (phase == .entering_name) " New File " else " New File Location ",
-        };
+        return picker_help_popups.pickerTitle(mode, phase);
     }
 
     fn pickerFooter(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
-        if (mode == .new_file_location and phase == .entering_name) {
-            return "Enter create  Backspace edit  Esc cancel";
-        }
-        return switch (mode) {
-            .open_file => "Up/Down move  Enter open  Backspace up  Esc cancel",
-            .open_folder => "Up/Down move  Enter enter folder  Space select folder  Backspace up  Esc cancel",
-            .new_file_location => "Up/Down move  Enter enter folder  Space choose location  Backspace up  Esc cancel",
-        };
+        return picker_help_popups.pickerFooter(mode, phase);
     }
 
     fn pickerPrompt(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
-        if (mode == .new_file_location and phase == .entering_name) return "Name the new file";
-        return switch (mode) {
-            .open_file => "Select a file...",
-            .open_folder => "Select a directory...",
-            .new_file_location => "Choose a location...",
-        };
+        return picker_help_popups.pickerPrompt(mode, phase);
     }
 
     fn pickerFooterCompact(width: usize) bool {
-        return width < 62;
+        return picker_help_popups.pickerFooterCompact(width);
     }
 
     fn pickerFooterLineOne(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, compact: bool) []const u8 {
-        if (mode == .new_file_location and phase == .entering_name) {
-            return if (compact) "Enter create  Backspace edit" else "Enter create  Backspace edit  Esc cancel";
-        }
-        return switch (mode) {
-            .open_file => if (compact) "Enter open  ↑/↓ select" else "Enter open  ↑/↓ select  Backspace parent  Esc cancel",
-            .open_folder => if (compact) "Enter browse  Space select" else "Enter browse  Space select  . current  Backspace parent  Esc cancel",
-            .new_file_location => if (compact) "Enter browse  Space name" else "Enter browse  Space name  Backspace parent  Esc cancel",
-        };
+        return picker_help_popups.pickerFooterLineOne(mode, phase, compact);
     }
 
     fn pickerFooterLineTwo(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, compact: bool) ?[]const u8 {
-        if (!compact) return null;
-        if (mode == .new_file_location and phase == .entering_name) return "Esc cancel";
-        return switch (mode) {
-            .open_file => "Esc cancel  Backspace parent",
-            .open_folder => "Esc cancel  Backspace parent  . current",
-            .new_file_location => "Esc cancel  Backspace parent",
-        };
+        return picker_help_popups.pickerFooterLineTwo(mode, phase, compact);
     }
 
     fn pickerFooterLineCount(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, width: usize) usize {
-        return if (pickerFooterLineTwo(mode, phase, pickerFooterCompact(width)) == null) 1 else 2;
+        return picker_help_popups.pickerFooterLineCount(mode, phase, width);
     }
 
     fn filesystemPickerGeometry(self: *const Editor, mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, has_error: bool) ?FilesystemPickerGeometry {
-        if (self.width < 24 or self.height < 9) return null;
-
-        const available_width = self.width -| 4;
-        if (available_width < 24) return null;
-        const capped_width = @min(available_width, @as(usize, 72));
-        const panel_width = if (capped_width >= 36) capped_width else available_width;
-        if (panel_width < 24) return null;
-
-        const available_height = self.height -| 2;
-        if (available_height < 8) return null;
-        const target_height = @max(@as(usize, 8), (self.height * 65) / 100);
-        const footer_rows = pickerFooterLineCount(mode, phase, panel_width);
-        const minimum_height = 6 + footer_rows + @as(usize, if (has_error) 1 else 0) + 1;
-        const panel_height = @min(available_height, @max(minimum_height, target_height));
-        if (panel_height < minimum_height) return null;
-
-        const row = if (available_height > panel_height) ((available_height - panel_height) / 2) -| 1 else 0;
-        return .{
-            .row = row,
-            .col = (self.width - panel_width) / 2,
-            .width = panel_width,
-            .height = panel_height,
-        };
+        return picker_help_popups.filesystemPickerGeometry(self, mode, phase, has_error);
     }
 
     fn helpPopupGeometry(self: *const Editor) ?FilesystemPickerGeometry {
-        if (!self.state.help_popup.visible or self.width < 20 or self.height < 7) return null;
-
-        const viewport = self.bufferViewportGeometry();
-        if (viewport.width < 20) return null;
-
-        const right_margin: usize = if (viewport.width >= 34) 2 else 0;
-        const available_width = viewport.width -| right_margin;
-        if (available_width < 20) return null;
-        const desired_width: usize = 56;
-        const max_width: usize = 72;
-        const panel_width = if (available_width >= 28)
-            @min(@min(desired_width, max_width), available_width)
-        else
-            available_width;
-        if (panel_width < 20) return null;
-
-        const status_row = self.statusRowIndex();
-        if (status_row == 0) return null;
-        const bottom_row = status_row - 1;
-        const usable_height = bottom_row + 1;
-        if (usable_height < 6) return null;
-
-        const content_height = self.state.help_popup.totalRows(&self.keybinding_registry) + 4;
-        const target_height = @min(@max(@as(usize, 8), (usable_height * 65) / 100), @as(usize, 24));
-        const panel_height = @min(usable_height, @min(content_height, target_height));
-        if (panel_height < 6) return null;
-
-        const viewport_col = viewport.start_col -| 1;
-        const col = viewport_col + viewport.width - panel_width - right_margin;
-        return .{
-            .row = bottom_row + 1 - panel_height,
-            .col = col,
-            .width = panel_width,
-            .height = panel_height,
-        };
+        return picker_help_popups.helpPopupGeometry(self);
     }
 
     pub fn helpPopupBodyRows(self: *const Editor) usize {
-        const geom = self.helpPopupGeometry() orelse return 1;
-        return @max(@as(usize, 1), geom.height -| 4);
+        return picker_help_popups.helpPopupBodyRows(self);
     }
 
     fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
-        return switch (kind) {
-            .explorer_new_file => "Enter create  Backspace edit  Esc cancel",
-            .explorer_rename => "Enter rename  Backspace edit  Esc cancel",
-            .explorer_delete_confirm => "Enter/y confirm  Esc/n cancel",
-        };
+        return prompt_save_popups.promptFooter(kind);
     }
 
     fn terminalCellStyle(cell: terminal_panel_mod.TerminalCell) render_mod.RenderStyle {
-        if (cell.style.fg) |fg| {
-            return switch (fg) {
-                .black => .terminal_black,
-                .red => if (cell.style.bold) .terminal_bright_red else .terminal_red,
-                .green => if (cell.style.bold) .terminal_bright_green else .terminal_green,
-                .yellow => if (cell.style.bold) .terminal_bright_yellow else .terminal_yellow,
-                .blue => if (cell.style.bold) .terminal_bright_blue else .terminal_blue,
-                .magenta => if (cell.style.bold) .terminal_bright_magenta else .terminal_magenta,
-                .cyan => if (cell.style.bold) .terminal_bright_cyan else .terminal_cyan,
-                .white => if (cell.style.bold) .terminal_bright_white else .terminal_white,
-                .bright_black => .terminal_bright_black,
-                .bright_red => .terminal_bright_red,
-                .bright_green => .terminal_bright_green,
-                .bright_yellow => .terminal_bright_yellow,
-                .bright_blue => .terminal_bright_blue,
-                .bright_magenta => .terminal_bright_magenta,
-                .bright_cyan => .terminal_bright_cyan,
-                .bright_white => .terminal_bright_white,
-            };
-        }
-        return if (cell.style.bold) .terminal_bright_white else .terminal_bg;
+        return terminal_panel_view.terminalCellStyle(cell);
     }
 
     /// Calculates total gutter width: 1 space + num_digits + 1 space separator.
@@ -1886,301 +1762,27 @@ pub const Editor = struct {
     }
 
     fn renderVirtualFilesystemPickerPopup(self: *Editor) void {
-        if (!self.state.filesystem_picker.visible) return;
-        const picker = &self.state.filesystem_picker;
-        const geom = self.filesystemPickerGeometry(picker.mode, picker.phase, picker.error_message != null) orelse return;
-        const inner_end = geom.col + geom.width - 1;
-        const title = pickerTitle(picker.mode, picker.phase);
-        self.drawPickerTop(geom, title, .command_popup_border);
-
-        var row = geom.row + 1;
-        self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .command_popup);
-        var col = geom.col + 2;
-        self.writeVirtualTruncatedCells(row, &col, inner_end, " ", .explorer_folder, false);
-        self.writeVirtualTruncatedCells(row, &col, inner_end, picker.cwd, .command_popup, true);
-        row += 1;
-
-        self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .command_popup);
-        col = geom.col + 2;
-        const prompt_icon = switch (picker.mode) {
-            .open_folder => file_icons.folderIcon(),
-            else => "",
-        };
-        self.writeVirtualTruncatedCells(row, &col, inner_end, prompt_icon, .command_popup_prompt, false);
-        self.writeVirtualTruncatedCells(row, &col, inner_end, " ", .command_popup, false);
-        self.writeVirtualTruncatedCells(row, &col, inner_end, pickerPrompt(picker.mode, picker.phase), .command_popup_prompt, false);
-        row += 1;
-
-        self.drawPickerSeparator(row, geom.col, geom.width, .command_popup_border);
-        row += 1;
-
-        const footer_rows = pickerFooterLineCount(picker.mode, picker.phase, geom.width);
-        const error_rows: usize = if (picker.error_message == null) 0 else 1;
-        const result_height = geom.height -| (6 + footer_rows + error_rows);
-
-        if (picker.phase == .entering_name) {
-            for (0..result_height) |offset| {
-                const item_row = row + offset;
-                self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
-                if (offset == 0) {
-                    col = geom.col + 2;
-                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, " ", .explorer_file, false);
-                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, "filename: ", .explorer_dim, false);
-                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, picker.input.items, .normal, false);
-                }
-            }
-        } else {
-            if (picker.entries.items.len == 0) {
-                for (0..result_height) |offset| {
-                    const item_row = row + offset;
-                    self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
-                    if (offset == 0) {
-                        col = geom.col + 2;
-                        self.writeVirtualTruncatedCells(item_row, &col, inner_end, "No entries", .explorer_dim, false);
-                    }
-                }
-            } else {
-                if (picker.selected_index >= picker.scroll_offset + result_height) {
-                    picker.scroll_offset = picker.selected_index - result_height + 1;
-                } else if (picker.selected_index < picker.scroll_offset) {
-                    picker.scroll_offset = picker.selected_index;
-                }
-                for (0..result_height) |offset| {
-                    const item_row = row + offset;
-                    const index = picker.scroll_offset + offset;
-                    if (index >= picker.entries.items.len) {
-                        self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
-                        continue;
-                    }
-                    const entry = picker.entries.items[index];
-                    const selected = index == picker.selected_index;
-                    const row_style: render_mod.RenderStyle = if (selected) .explorer_selected_focus else .explorer_bg;
-                    const text_style = pickerEntryStyle(entry, selected);
-                    self.drawPickerRow(item_row, geom.col, geom.width, .command_popup_border, row_style);
-                    col = geom.col + 2;
-                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, pickerEntryIcon(entry), text_style, false);
-                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, " ", row_style, false);
-                    self.writeVirtualTruncatedCells(item_row, &col, inner_end, entry.name, text_style, false);
-                    if (entry.kind == .directory) {
-                        self.writeVirtualTruncatedCells(item_row, &col, inner_end, "/", text_style, false);
-                    }
-                }
-            }
-        }
-        row += result_height;
-
-        self.drawPickerSeparator(row, geom.col, geom.width, .command_popup_border);
-        row += 1;
-
-        if (picker.error_message) |msg| {
-            self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .popup_error);
-            col = geom.col + 2;
-            self.writeVirtualTruncatedCells(row, &col, inner_end, msg, .popup_error, false);
-            row += 1;
-        }
-
-        const compact = pickerFooterCompact(geom.width);
-        self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .popup_footer);
-        col = geom.col + 2;
-        self.writeVirtualTruncatedCells(row, &col, inner_end, pickerFooterLineOne(picker.mode, picker.phase, compact), .popup_footer, false);
-        row += 1;
-        if (pickerFooterLineTwo(picker.mode, picker.phase, compact)) |line| {
-            self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .popup_footer);
-            col = geom.col + 2;
-            self.writeVirtualTruncatedCells(row, &col, inner_end, line, .popup_footer, false);
-        }
-
-        self.drawPickerBottom(geom.row + geom.height - 1, geom.col, geom.width, .command_popup_border);
+        picker_help_popups.renderVirtualFilesystemPickerPopup(self);
     }
 
     fn helpFooter(width: usize) []const u8 {
-        return if (width < 46)
-            "q/Esc close  Up/Down scroll"
-        else
-            "q/Esc close  Up/Down scroll  PgUp/PgDn page";
+        return picker_help_popups.helpFooter(width);
     }
 
     fn renderVirtualHelpPopup(self: *Editor) void {
-        if (!self.state.help_popup.visible) return;
-        const geom = self.helpPopupGeometry() orelse return;
-        const body_rows = @max(@as(usize, 1), geom.height -| 4);
-        const inner_end = geom.col + geom.width - 1;
-        self.state.help_popup.clampScroll(&self.keybinding_registry, body_rows);
-
-        self.drawPickerTop(geom, help_popup_title, .command_popup_border);
-
-        const key_width: usize = if (geom.width < 42) 14 else 24;
-        var body_row: usize = geom.row + 1;
-        for (0..body_rows) |offset| {
-            const source_row = self.state.help_popup.scroll_offset + offset;
-            const row = body_row + offset;
-            const help_row = self.state.help_popup.rowAt(&self.keybinding_registry, source_row);
-            switch (help_row orelse {
-                self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
-                continue;
-            }) {
-                .category => |category| {
-                    self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_selected_focus);
-                    var col = geom.col + 2;
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, help_mod.categoryTitle(category), .explorer_selected_focus, false);
-                },
-                .command => |command| {
-                    self.drawPickerRow(row, geom.col, geom.width, .command_popup_border, .explorer_bg);
-                    var col = geom.col + 2;
-                    var key_buf: [192]u8 = undefined;
-                    var description_buf: [256]u8 = undefined;
-                    const key_text = help_mod.formatCommandKeys(command.meta, &self.keybinding_registry, &key_buf);
-                    const description = help_mod.formatCommandDescription(command.meta, &description_buf);
-                    const key_start = col;
-                    self.writeVirtualTruncatedCells(row, &col, @min(inner_end, key_start + key_width), key_text, .command_popup_prompt, false);
-                    if (col < key_start + key_width and col < inner_end) {
-                        while (col < key_start + key_width and col < inner_end) : (col += 1) {
-                            self.renderer.screen.set(row, col, ' ', .explorer_bg);
-                        }
-                    }
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, "  ", .explorer_bg, false);
-                    self.writeVirtualTruncatedCells(row, &col, inner_end, description, .command_popup, false);
-                },
-            }
-        }
-        body_row += body_rows;
-
-        self.drawPickerSeparator(body_row, geom.col, geom.width, .command_popup_border);
-        body_row += 1;
-
-        self.drawPickerRow(body_row, geom.col, geom.width, .command_popup_border, .popup_footer);
-        var col = geom.col + 2;
-        self.writeVirtualTruncatedCells(body_row, &col, inner_end, helpFooter(geom.width), .popup_footer, false);
-
-        self.drawPickerBottom(geom.row + geom.height - 1, geom.col, geom.width, .command_popup_border);
+        picker_help_popups.renderVirtualHelpPopup(self);
     }
 
     fn renderVirtualPromptPopup(self: *Editor) void {
-        if (!self.state.prompt_popup.visible) return;
-        const popup_state = &self.state.prompt_popup;
-        const geom = self.popupGeometry(true, 4, true, 4) orelse return;
-        const inner_width = geom.width - 2;
-        self.drawVirtualPopupTop(geom, popup_state.title, .command_popup_border);
-
-        const body_row = geom.row + 1;
-        self.drawVirtualPopupRow(body_row, geom.col, geom.width, .command_popup_border, .command_popup);
-        if (popup_state.kind == .explorer_delete_confirm) {
-            var col = geom.col + 2;
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, "Delete ", .command_popup);
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, popup_state.context_path, .command_popup);
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, "?", .command_popup);
-        } else {
-            const shown_context = popup_state.context_path[0..@min(popup_state.context_path.len, inner_width / 2)];
-            var col = geom.col + 2;
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, shown_context, .command_popup);
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, " > ", .command_popup);
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, popup_state.input.items, .command_popup);
-        }
-
-        var row_offset: usize = 2;
-        if (popup_state.error_message) |msg| {
-            const row = geom.row + row_offset;
-            self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, .popup_error);
-            self.renderer.screen.writeText(row, geom.col + 2, msg[0..@min(msg.len, inner_width -| 2)], .popup_error);
-            row_offset += 1;
-        }
-
-        const separator_row = geom.row + row_offset;
-        self.drawVirtualPopupSeparator(separator_row, geom.col, geom.width, .command_popup_border);
-        row_offset += 1;
-
-        const footer_row = geom.row + row_offset;
-        self.drawVirtualPopupRow(footer_row, geom.col, geom.width, .command_popup_border, .popup_footer);
-        const footer = promptFooter(popup_state.kind);
-        self.renderer.screen.writeText(footer_row, geom.col + 2, footer[0..@min(footer.len, inner_width -| 2)], .popup_footer);
-        self.drawVirtualPopupBottom(footer_row + 1, geom.col, geom.width, .command_popup_border);
+        prompt_save_popups.renderVirtualPromptPopup(self);
     }
 
     fn renderVirtualSaveConfirmationPopup(self: *Editor) void {
-        if (!self.state.save_confirmation.visible) return;
-        const popup_state = &self.state.save_confirmation;
-        const geom = self.popupGeometry(true, 0, false, 0) orelse return;
-        const inner_width = geom.width - 2;
-
-        // Title row
-        self.drawVirtualPopupTop(geom, " Save File ", .command_popup_border);
-
-        // Body: show filename
-        const body_row = geom.row + 1;
-        self.drawVirtualPopupRow(body_row, geom.col, geom.width, .command_popup_border, .command_popup);
-        const display = popup_state.displayName();
-        const shown = display[0..@min(display.len, inner_width -| 4)];
-        var name_buf: [256]u8 = undefined;
-        const name_line = std.fmt.bufPrint(&name_buf, "  {s}", .{shown}) catch "";
-        self.renderer.screen.writeText(body_row, geom.col + 2, name_line[0..@min(name_line.len, inner_width -| 2)], .command_popup);
-
-        // Separator
-        const sep_row = geom.row + 2;
-        self.drawVirtualPopupSeparator(sep_row, geom.col, geom.width, .command_popup_border);
-
-        // Footer hint
-        const footer_row = geom.row + 3;
-        self.drawVirtualPopupRow(footer_row, geom.col, geom.width, .command_popup_border, .popup_footer);
-        const hint = "[S] Save   [D] Discard   [Esc] Cancel";
-        self.renderer.screen.writeText(footer_row, geom.col + 2, hint[0..@min(hint.len, inner_width -| 2)], .popup_footer);
-
-        // Bottom border
-        self.drawVirtualPopupBottom(geom.row + 4, geom.col, geom.width, .command_popup_border);
+        prompt_save_popups.renderVirtualSaveConfirmationPopup(self);
     }
 
     fn renderVirtualCompletionMenu(self: *Editor) void {
-        if (!self.state.lsp_ui.completion_active or self.state.lsp_ui.completion_items == null) return;
-        const tab = self.currentTab() orelse return;
-        const mc = tab.mainCursor();
-        const viewport = self.bufferViewportGeometry();
-        const gutter_width = self.calculateGutterWidth(tab.buf.lines.items.len);
-        const content_width = viewport.width -| gutter_width;
-        const rel_row = mc.row -| tab.scroll_row;
-        const col = (viewport.start_col -| 1) + gutter_width + visibleCursorCol(mc.col, tab.scroll_col, content_width);
-        const items = self.state.lsp_ui.completionItems();
-        if (items.len == 0) {
-            self.state.lsp_ui.clearCompletion();
-            return;
-        }
-
-        const max_height = 10;
-        const visible_count = @min(items.len, max_height);
-        var row = rel_row + 4;
-        if (row + visible_count >= self.height - 1) {
-            row = (rel_row + 3) -| visible_count;
-        }
-        var scroll_top: usize = 0;
-        if (self.state.lsp_ui.completion_selected >= max_height) {
-            scroll_top = self.state.lsp_ui.completion_selected - max_height + 1;
-        }
-
-        for (0..visible_count) |i| {
-            const item_idx = scroll_top + i;
-            if (item_idx >= items.len) break;
-            const item = completionItemObject(items[item_idx]) orelse continue;
-            const label = completionItemString(item, "label") orelse continue;
-            const selected = item_idx == self.state.lsp_ui.completion_selected;
-            const style: render_mod.RenderStyle = if (selected) .completion_selected else .completion;
-            const render_row = row + i;
-            for (0..@min(@as(usize, 42), self.width -| col)) |offset| {
-                self.renderer.screen.set(render_row, col + offset, ' ', style);
-            }
-            const kind_str = completionKindLabel(item);
-            var line_buf: [64]u8 = undefined;
-            const line = std.fmt.bufPrint(&line_buf, " {s: <6} | {s}", .{ kind_str, label[0..@min(label.len, 30)] }) catch "";
-            self.renderer.screen.writeText(render_row, col, line, style);
-            if (selected) {
-                if (item.get("detail")) |d| {
-                    if (d == .string) {
-                        const detail_col = col + 42;
-                        if (detail_col < self.width) {
-                            const detail = d.string;
-                            self.renderer.screen.writeText(render_row, detail_col, detail[0..@min(detail.len, 40)], .completion_detail);
-                        }
-                    }
-                }
-            }
-        }
+        completion_menu.renderVirtualCompletionMenu(self);
     }
 
     fn drawVirtualPopupTop(self: *Editor, geom: CommandPopupGeometry, title: []const u8, style: render_mod.RenderStyle) void {
@@ -2228,60 +1830,15 @@ pub const Editor = struct {
     }
 
     fn pickerEntryIcon(entry: filesystem_picker.PickerEntry) []const u8 {
-        return switch (entry.kind) {
-            .directory => file_icons.folderIcon(),
-            .file => file_icons.iconForFileName(entry.name),
-            .other => "",
-        };
+        return picker_help_popups.pickerEntryIcon(entry);
     }
 
     fn pickerEntryStyle(entry: filesystem_picker.PickerEntry, selected: bool) render_mod.RenderStyle {
-        if (selected) return .explorer_selected_focus;
-        return switch (entry.kind) {
-            .directory => .explorer_folder,
-            .file => file_icons.styleForFileName(entry.name),
-            .other => .explorer_dim,
-        };
+        return picker_help_popups.pickerEntryStyle(entry, selected);
     }
 
     fn renderVirtualTerminalPanel(self: *Editor) void {
-        const panel_height = self.terminalPanelHeight();
-        if (panel_height == 0 or self.width == 0) return;
-
-        const start_row = self.height - panel_height;
-        for (start_row..self.height) |row| {
-            self.renderer.screen.fillRow(row, ' ', .terminal_bg);
-        }
-
-        self.renderer.screen.fillRowGlyph(start_row, horizontal_line, .terminal_border);
-        const title = if (self.terminal_panel.focused) " Terminal [focused] " else " Terminal ";
-        const title_style: render_mod.RenderStyle = if (self.terminal_panel.focused) .terminal_focus else .terminal_title;
-        if (self.width > 2) {
-            self.renderer.screen.writeText(start_row, 1, title[0..@min(title.len, self.width - 1)], title_style);
-        }
-
-        const body_height = panel_height -| 1;
-        if (body_height == 0) return;
-
-        self.terminal_panel.resizePty(self.width, body_height);
-        self.terminal_panel.clampScroll(body_height);
-        const total_lines = self.terminal_panel.renderLineCount();
-        const end = total_lines -| @min(self.terminal_panel.scroll_offset, total_lines);
-        const shown = @min(body_height, end);
-        const first = end - shown;
-        for (0..shown) |offset| {
-            const row = start_row + 1 + offset;
-            const line = self.terminal_panel.renderLineAt(first + offset) orelse continue;
-            const max_cols = self.width;
-            for (line.cells.items[0..@min(line.cells.items.len, max_cols)], 0..) |cell, col| {
-                self.renderer.screen.set(row, col, cell.ch, terminalCellStyle(cell));
-            }
-            if (self.terminal_panel.focused and first + offset == self.terminal_panel.cursorRenderIndex()) {
-                const cursor_col = @min(self.terminal_panel.cursor_col, max_cols -| 1);
-                const ch = if (cursor_col < line.cells.items.len) line.cells.items[cursor_col].ch else ' ';
-                self.renderer.screen.set(row, cursor_col, ch, .terminal_cursor);
-            }
-        }
+        terminal_panel_view.renderVirtualTerminalPanel(self);
     }
 
     fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, ctx: RenderContext) void {
@@ -2393,40 +1950,15 @@ pub const Editor = struct {
     }
 
     fn completionItemObject(value: std.json.Value) ?std.json.ObjectMap {
-        if (value != .object) return null;
-        return value.object;
+        return completion_menu.completionItemObject(value);
     }
 
     fn completionItemString(item: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-        const value = item.get(key) orelse return null;
-        if (value != .string) return null;
-        return value.string;
+        return completion_menu.completionItemString(item, key);
     }
 
     fn completionKindLabel(item: std.json.ObjectMap) []const u8 {
-        const kind_val = if (item.get("kind")) |k|
-            if (k == .integer) @as(u8, @intCast(k.integer)) else @as(u8, 0)
-        else
-            @as(u8, 0);
-
-        return switch (kind_val) {
-            1 => "Text",
-            2 => "Method",
-            3 => "Fn",
-            4 => "Const",
-            5 => "Field",
-            6 => "Var",
-            7 => "Class",
-            8 => "Intf",
-            9 => "Mod",
-            10 => "Prop",
-            13 => "Enum",
-            14 => "Key",
-            15 => "Snip",
-            21 => "Const",
-            22 => "Struct",
-            else => "",
-        };
+        return completion_menu.completionKindLabel(item);
     }
 
     fn handleCompletionInput(self: *Editor, event: terminal.KeyEvent) !bool {
