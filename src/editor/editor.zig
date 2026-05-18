@@ -9,6 +9,7 @@ const global_search = @import("global_search.zig");
 const commands = @import("commands.zig");
 const command_keybindings = @import("keybindings.zig");
 const normal_sequence = @import("input_router/normal_sequence.zig");
+const editor_lsp = @import("lsp/editor_lsp.zig");
 const viewport_mod = @import("navigation/viewport.zig");
 const syntax = @import("syntax.zig");
 const editor_syntax = @import("syntax_editor.zig");
@@ -23,11 +24,12 @@ const search_popups = @import("renderer/search_popups.zig");
 const statusline = @import("renderer/statusline.zig");
 const tabbar = @import("renderer/tabbar.zig");
 const terminal_panel_view = @import("renderer/terminal_panel_view.zig");
-const lsp_manager = @import("../lsp/manager.zig");
 const logger = @import("../logger.zig");
 const tab_mod = @import("model/tab.zig");
 const state_mod = @import("state/state.zig");
 const jump_history = @import("state/jump_history.zig");
+const key_profile = @import("runtime/key_profile.zig");
+const movement_coalesce = @import("runtime/movement_coalesce.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
@@ -41,64 +43,12 @@ pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
 pub const Cursor = tab_mod.Cursor;
 pub const Tab = tab_mod.Tab;
-const max_movement_coalesce_batch_count = 64;
-
-const CoalescedMovement = enum {
-    up,
-    down,
-    left,
-    right,
-};
-
-const MovementCoalesceStopReason = enum {
-    none,
-    not_eligible,
-    no_pending_input,
-    different_key,
-    mode_changed,
-    overlay_active,
-    selection_active,
-    max_batch,
-    pending_sequence,
-    read_error,
-    unknown,
-
-    fn name(self: MovementCoalesceStopReason) []const u8 {
-        return switch (self) {
-            .none => "none",
-            .not_eligible => "not_eligible",
-            .no_pending_input => "no_pending_input",
-            .different_key => "different_key",
-            .mode_changed => "mode_changed",
-            .overlay_active => "overlay_active",
-            .selection_active => "selection_active",
-            .max_batch => "max_batch",
-            .pending_sequence => "pending_sequence",
-            .read_error => "read_error",
-            .unknown => "unknown",
-        };
-    }
-};
-
-const MovementCoalesceSnapshot = struct {
-    mode: EditorMode,
-    active_tab_index: usize,
-    tab_count: usize,
-    buffer_ptr: *const buffer.Buffer,
-    buffer_revision: u64,
-    cursor_count: usize,
-};
-
-const CoalescingCandidate = struct {
-    movement: CoalescedMovement,
-    event: terminal.KeyEvent,
-    snapshot: MovementCoalesceSnapshot,
-};
-
-const MovementCoalesceEligibility = union(enum) {
-    eligible: CoalescingCandidate,
-    blocked: MovementCoalesceStopReason,
-};
+const max_movement_coalesce_batch_count = movement_coalesce.max_movement_coalesce_batch_count;
+const CoalescedMovement = movement_coalesce.CoalescedMovement;
+const MovementCoalesceStopReason = movement_coalesce.MovementCoalesceStopReason;
+const MovementCoalesceSnapshot = movement_coalesce.MovementCoalesceSnapshot;
+const CoalescingCandidate = movement_coalesce.CoalescingCandidate;
+const MovementCoalesceEligibility = movement_coalesce.MovementCoalesceEligibility;
 
 const InputKeyRead = struct {
     event: terminal.KeyEvent,
@@ -137,12 +87,7 @@ const LineRenderState = line_render.LineRenderState;
 
 const TextSnapshot = editor_syntax.TextSnapshot;
 
-const KeypressProfilePosition = struct {
-    row: usize = 0,
-    col: usize = 0,
-    scroll_row: usize = 0,
-    selection_active: bool = false,
-};
+const KeypressProfilePosition = key_profile.KeypressProfilePosition;
 
 pub const Editor = struct {
     config: config.Config,
@@ -247,59 +192,7 @@ pub const Editor = struct {
     }
 
     pub fn requestDefinitionAtCursor(self: *Editor) !void {
-        const tab = self.currentTab() orelse {
-            self.state.error_message = "No active file for definition lookup";
-            self.pending_definition_request_id = null;
-            self.pending_definition_plugin_name = null;
-            self.pending_definition_source = null;
-            return;
-        };
-        const filename = tab.buf.filename orelse {
-            self.state.error_message = "No active file for definition lookup";
-            self.pending_definition_request_id = null;
-            self.pending_definition_plugin_name = null;
-            self.pending_definition_source = null;
-            return;
-        };
-        const mc = tab.mainCursor();
-        const source = jump_history.JumpLocation{
-            .buffer_id = tab.syntax_buffer_id,
-            .row = mc.row,
-            .col = mc.col,
-        };
-
-        if (self.runtime.lsp_mgr) |*mgr| {
-            self.flushPendingLspChanges(true) catch |err| {
-                logz.err().fmt("msg", "Failed to flush LSP changes before definition request: {any}", .{err}).log();
-            };
-
-            const result = mgr.requestDefinition(filename, mc.row, mc.col) catch |err| {
-                logz.err().fmt("msg", "Failed to request definition: {any}", .{err}).log();
-                self.state.error_message = "LSP definition unavailable";
-                self.pending_definition_request_id = null;
-                self.pending_definition_source = null;
-                return;
-            };
-
-            switch (result) {
-                .requested => |requested| {
-                    self.pending_definition_request_id = requested.request_id;
-                    self.pending_definition_plugin_name = requested.plugin_name;
-                    self.pending_definition_source = source;
-                },
-                .no_plugin, .no_client, .not_ready => {
-                    self.state.error_message = "LSP definition unavailable";
-                    self.pending_definition_request_id = null;
-                    self.pending_definition_plugin_name = null;
-                    self.pending_definition_source = null;
-                },
-            }
-        } else {
-            self.state.error_message = "LSP definition unavailable";
-            self.pending_definition_request_id = null;
-            self.pending_definition_plugin_name = null;
-            self.pending_definition_source = null;
-        }
+        return editor_lsp.requestDefinitionAtCursor(self);
     }
 
     pub fn closeTab(self: *Editor) void {
@@ -684,93 +577,19 @@ pub const Editor = struct {
     }
 
     fn movementCoalescingEligibilityBefore(self: *Editor, event: terminal.KeyEvent) MovementCoalesceEligibility {
-        if (self.state.mode != .Normal and self.state.mode != .Insert) return .{ .blocked = .overlay_active };
-        if (self.state.error_message != null) return .{ .blocked = .not_eligible };
-        if (self.state.explorer_focused) return .{ .blocked = .overlay_active };
-        if (self.state.lsp_ui.completion_active) return .{ .blocked = .overlay_active };
-        if (self.state.search_buffer.items.len > 0) return .{ .blocked = .overlay_active };
-        if (self.state.tree) |tree| {
-            if (tree.search_active) return .{ .blocked = .overlay_active };
-        }
-        if (self.state.mode == .Normal and self.state.pending_normal_sequence.len > 0) {
-            return .{ .blocked = .pending_sequence };
-        }
-        if (event.shift) return .{ .blocked = .selection_active };
-
-        const movement = self.coalescedMovementForEvent(event) orelse return .{ .blocked = .not_eligible };
-        if (self.matchesNonSimpleMovement(event)) return .{ .blocked = .not_eligible };
-        const tab = self.currentTab() orelse return .{ .blocked = .not_eligible };
-        if (tab.cursors.items.len != 1) return .{ .blocked = .not_eligible };
-        if (hasActiveSelection(tab)) return .{ .blocked = .selection_active };
-
-        return .{ .eligible = .{
-            .movement = movement,
-            .event = event,
-            .snapshot = .{
-                .mode = self.state.mode,
-                .active_tab_index = self.state.active_tab_index,
-                .tab_count = self.state.tabs.items.len,
-                .buffer_ptr = &tab.buf,
-                .buffer_revision = tab.buf.revision,
-                .cursor_count = tab.cursors.items.len,
-            },
-        } };
+        return movement_coalesce.movementCoalescingEligibilityBefore(self, event);
     }
 
     fn coalescedMovementForEvent(self: *Editor, event: terminal.KeyEvent) ?CoalescedMovement {
-        if (event.ctrl or event.alt or event.shift) return null;
-
-        const allowed_key = switch (event.key) {
-            .Up, .Down, .Left, .Right => true,
-            .Char => self.state.mode == .Normal and
-                (event.char == 'h' or event.char == 'j' or event.char == 'k' or event.char == 'l'),
-            else => false,
-        };
-        if (!allowed_key) return null;
-
-        const context: commands.CommandContext = if (self.state.mode == .Insert) .insert else .normal;
-        const command = self.resolveDefaultContextCommand(context, event) orelse return null;
-        return switch (command) {
-            .navigation_move_up => .up,
-            .navigation_move_down => .down,
-            .navigation_move_left => .left,
-            .navigation_move_right => .right,
-            else => null,
-        };
+        return movement_coalesce.coalescedMovementForEvent(self, event);
     }
 
     fn matchesNonSimpleMovement(self: *Editor, event: terminal.KeyEvent) bool {
-        const context: commands.CommandContext = if (self.state.mode == .Insert) .insert else .normal;
-        const command = self.resolveDefaultContextCommand(context, event) orelse return false;
-        return switch (command) {
-            .navigation_line_start,
-            .navigation_line_end,
-            .navigation_word_left,
-            .navigation_word_right,
-            => true,
-            else => false,
-        };
+        return movement_coalesce.matchesNonSimpleMovement(self, event);
     }
 
     fn coalescingStopReasonAfterMovement(self: *Editor, snapshot: MovementCoalesceSnapshot) ?MovementCoalesceStopReason {
-        if (self.state.mode != snapshot.mode) return .mode_changed;
-        if (self.state.mode != .Normal and self.state.mode != .Insert) return .mode_changed;
-        if (self.state.explorer_focused) return .overlay_active;
-        if (self.state.lsp_ui.completion_active) return .overlay_active;
-        if (self.state.search_buffer.items.len > 0) return .overlay_active;
-        if (self.state.tree) |tree| {
-            if (tree.search_active) return .overlay_active;
-        }
-        if (self.state.mode == .Normal and self.state.pending_normal_sequence.len > 0) return .pending_sequence;
-        if (self.state.tabs.items.len != snapshot.tab_count) return .unknown;
-        if (self.state.active_tab_index != snapshot.active_tab_index) return .unknown;
-
-        const tab = self.currentTab() orelse return .unknown;
-        if (&tab.buf != snapshot.buffer_ptr) return .unknown;
-        if (tab.buf.revision != snapshot.buffer_revision) return .unknown;
-        if (tab.cursors.items.len != snapshot.cursor_count) return .unknown;
-        if (hasActiveSelection(tab)) return .selection_active;
-        return null;
+        return movement_coalesce.coalescingStopReasonAfterMovement(self, snapshot);
     }
 
     fn coalescingStopReasonForNext(
@@ -779,19 +598,11 @@ pub const Editor = struct {
         event: terminal.KeyEvent,
         batch_count: usize,
     ) ?MovementCoalesceStopReason {
-        if (batch_count >= max_movement_coalesce_batch_count) return .max_batch;
-        if (event.key == .None) return .no_pending_input;
-        if (self.coalescingStopReasonAfterMovement(candidate.snapshot)) |reason| return reason;
-        const movement = self.coalescedMovementForEvent(event) orelse return .different_key;
-        if (movement != candidate.movement or !event.eql(candidate.event)) return .different_key;
-        return null;
+        return movement_coalesce.coalescingStopReasonForNext(self, candidate, event, batch_count);
     }
 
     fn hasActiveSelection(tab: *const Tab) bool {
-        for (tab.cursors.items) |cursor| {
-            if (cursor.selection_start != null) return true;
-        }
-        return false;
+        return movement_coalesce.hasActiveSelection(tab);
     }
 
     fn processBackgroundEvents(self: *Editor, max_fifo_events: usize) !void {
@@ -856,87 +667,11 @@ pub const Editor = struct {
     }
 
     fn handleLspEvent(self: *Editor, plugin_name: []const u8, message: []const u8) !void {
-        if (self.runtime.lsp_mgr) |*mgr| {
-            const res = mgr.handleMessage(plugin_name, message) catch |err| blk: {
-                logz.err().fmt("msg", "Error handling LSP msg: {any}", .{err}).log();
-                break :blk lsp_manager.LspManager.HandleResult.none;
-            };
-
-            switch (res) {
-                .initialized => {
-                    for (self.state.tabs.items) |tab| {
-                        if (tab.buf.filename) |fname| {
-                            const ext = std.fs.path.extension(fname);
-                            if (mgr.plugin_mgr.getPluginForExtension(ext)) |p| {
-                                if (std.mem.eql(u8, p.name, plugin_name)) {
-                                    const content = try tab.buf.toOwnedTextSnapshot(self.allocator);
-                                    defer self.allocator.free(content);
-                                    mgr.notifyOpen(fname, content) catch {};
-                                }
-                            }
-                        }
-                    }
-                },
-                .completion => |items| {
-                    if (!isValidCompletionValue(items)) {
-                        mgr.freeValue(items);
-                        return;
-                    }
-                    self.state.lsp_ui.replaceCompletion(items);
-                    self.markDirty(.partial);
-                },
-                .definition => |definition| {
-                    defer mgr.freeValue(definition.result);
-                    try self.handleDefinitionResult(plugin_name, definition.request_id, definition.result);
-                },
-                .diagnostics => |diag_val| {
-                    var diagnostics_stored = false;
-                    errdefer if (!diagnostics_stored) mgr.freeValue(diag_val);
-
-                    const uri = diagnosticUri(diag_val) orelse return;
-                    const fname = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else uri;
-                    try self.state.lsp_ui.replaceDiagnostics(fname, diag_val);
-                    diagnostics_stored = true;
-                    self.markDirty(.partial);
-                },
-                .none => {},
-            }
-        }
+        return editor_lsp.handleLspEvent(self, plugin_name, message);
     }
 
     fn handleDefinitionResult(self: *Editor, plugin_name: []const u8, request_id: usize, result: std.json.Value) !void {
-        const pending_id = self.pending_definition_request_id orelse return;
-        const pending_plugin_name = self.pending_definition_plugin_name orelse return;
-        if (pending_id != request_id) return;
-        if (!std.mem.eql(u8, pending_plugin_name, plugin_name)) return;
-
-        const source = self.pending_definition_source;
-        self.pending_definition_request_id = null;
-        self.pending_definition_plugin_name = null;
-        self.pending_definition_source = null;
-
-        const location = lsp_manager.firstDefinitionLocation(result) orelse {
-            self.state.error_message = "No definition found";
-            self.markDirty(.partial);
-            return;
-        };
-
-        const path = lsp_manager.fileUriToPathAlloc(self.allocator, location.uri) catch |err| {
-            logz.err().fmt("msg", "failed to convert definition URI {s}: {any}", .{ location.uri, err }).log();
-            self.state.error_message = "Could not open definition target";
-            self.markDirty(.partial);
-            return;
-        };
-        defer self.allocator.free(path);
-
-        _ = self.jumpToFileLocation(path, location.row, location.col, source) catch |err| {
-            logz.err().fmt("msg", "failed to jump to definition target {s}: {any}", .{ path, err }).log();
-            self.state.error_message = "Could not open definition target";
-            self.markDirty(.partial);
-            return;
-        };
-        self.state.error_message = null;
-        self.markDirty(.full);
+        return editor_lsp.handleDefinitionResult(self, plugin_name, request_id, result);
     }
 
     fn jumpToFileLocation(
@@ -946,189 +681,47 @@ pub const Editor = struct {
         col: usize,
         source: ?jump_history.JumpLocation,
     ) !bool {
-        if (self.findOpenTabIndexByPath(path)) |idx| {
-            self.state.active_tab_index = idx;
-        } else {
-            var loaded = try buffer.Buffer.loadFromFile(self.allocator, self.io, path);
-            var consumed = false;
-            errdefer if (!consumed) loaded.deinit();
-            try self.addTab(loaded);
-            consumed = true;
-        }
-
-        const tab = self.currentTab() orelse return false;
-        const target = self.clampedLocationForTab(tab, row, col);
-        if (source) |from| {
-            if (!from.eql(target)) try self.state.jump_history.recordJump(self.allocator, from);
-        }
-
-        const mc = tab.mainCursor();
-        const changed = mc.row != target.row or mc.col != target.col;
-        mc.row = target.row;
-        mc.col = target.col;
-        mc.preferred_col = null;
-        self.clampScroll();
-        return changed;
+        return editor_lsp.jumpToFileLocation(self, path, row, col, source);
     }
 
     fn findOpenTabIndexByPath(self: *Editor, path: []const u8) ?usize {
-        for (self.state.tabs.items, 0..) |*tab, i| {
-            if (tab.buf.filename) |filename| {
-                if (std.mem.eql(u8, filename, path)) return i;
-            }
-        }
-
-        const target_real = self.realPathOrNull(path) orelse return null;
-        defer self.allocator.free(target_real);
-
-        for (self.state.tabs.items, 0..) |*tab, i| {
-            const filename = tab.buf.filename orelse continue;
-            const filename_real = self.realPathOrNull(filename) orelse continue;
-            defer self.allocator.free(filename_real);
-            if (std.mem.eql(u8, filename_real, target_real)) return i;
-        }
-        return null;
+        return editor_lsp.findOpenTabIndexByPath(self, path);
     }
 
     fn realPathOrNull(self: *Editor, path: []const u8) ?[]u8 {
-        const z = std.Io.Dir.cwd().realPathFileAlloc(self.io, path, self.allocator) catch return null;
-        defer self.allocator.free(z);
-        return self.allocator.dupe(u8, z) catch null;
+        return editor_lsp.realPathOrNull(self, path);
     }
 
     fn clampedLocationForTab(self: *Editor, tab: *const Tab, row: usize, col: usize) jump_history.JumpLocation {
-        var clamped_row = row;
-        var clamped_col = col;
-        if (tab.buf.lines.items.len == 0) {
-            clamped_row = 0;
-            clamped_col = 0;
-        } else {
-            clamped_row = @min(clamped_row, tab.buf.lines.items.len - 1);
-            clamped_row = tab.buf.clampToVisibleLine(clamped_row);
-            clamped_col = @min(clamped_col, tab.buf.lines.items[clamped_row].len());
-        }
-        _ = self;
-        return .{
-            .buffer_id = tab.syntax_buffer_id,
-            .row = clamped_row,
-            .col = clamped_col,
-        };
+        return editor_lsp.clampedLocationForTab(self, tab, row, col);
     }
 
     pub fn noteKeypressMovementHandled(self: *Editor, handled: bool) void {
-        if (!handled) return;
-        self.last_input_movement_handled = true;
-        if (self.active_keypress_trace) |trace| {
-            trace.movement_handled = true;
-        }
+        key_profile.noteKeypressMovementHandled(self, handled);
     }
 
     fn captureKeypressProfilePosition(self: *Editor) KeypressProfilePosition {
-        const tab = self.currentTab() orelse return .{};
-        if (tab.cursors.items.len == 0) return .{ .scroll_row = tab.scroll_row };
-        const mc = tab.mainCursor();
-        return .{
-            .row = mc.row,
-            .col = mc.col,
-            .scroll_row = tab.scroll_row,
-            .selection_active = mc.selection_start != null,
-        };
+        return key_profile.captureKeypressProfilePosition(self);
     }
 
     fn initKeypressTrace(self: *Editor, event: terminal.KeyEvent, key_name: []const u8) perf.KeypressTrace {
-        const pos = self.captureKeypressProfilePosition();
-        return .{
-            .key = key_name,
-            .mode = @tagName(self.state.mode),
-            .before_row = pos.row,
-            .before_col = pos.col,
-            .after_row = pos.row,
-            .after_col = pos.col,
-            .before_scroll_row = pos.scroll_row,
-            .after_scroll_row = pos.scroll_row,
-            .dirty = self.keypressDirtyState(),
-            .explorer_visible = self.state.explorer_visible,
-            .explorer_focused = self.state.explorer_focused,
-            .completion_active = self.state.lsp_ui.completion_active,
-            .search_active = self.state.search_buffer.items.len > 0,
-            .selection_active = pos.selection_active or event.shift,
-        };
+        return key_profile.initKeypressTrace(self, event, key_name);
     }
 
     fn updateKeypressTraceAfterDispatch(self: *Editor, trace: *perf.KeypressTrace) void {
-        const pos = self.captureKeypressProfilePosition();
-        trace.after_row = pos.row;
-        trace.after_col = pos.col;
-        trace.after_scroll_row = pos.scroll_row;
-        trace.scroll_delta = signedDelta(trace.before_scroll_row, pos.scroll_row);
-        trace.cursor_moved = trace.before_row != pos.row or trace.before_col != pos.col;
-        trace.viewport_scrolled = trace.viewport_scrolled or trace.before_scroll_row != pos.scroll_row;
-        trace.explorer_visible = self.state.explorer_visible;
-        trace.explorer_focused = self.state.explorer_focused;
-        trace.completion_active = self.state.lsp_ui.completion_active;
-        trace.search_active = self.state.search_buffer.items.len > 0;
-        trace.selection_active = trace.selection_active or pos.selection_active;
+        key_profile.updateKeypressTraceAfterDispatch(self, trace);
     }
 
     fn signedDelta(before: usize, after: usize) i64 {
-        if (after >= before) return @intCast(after - before);
-        return -@as(i64, @intCast(before - after));
+        return key_profile.signedDelta(before, after);
     }
 
     fn keypressDirtyState(self: *const Editor) perf.KeypressDirtyState {
-        if (!self.state.render_dirty) return .clean;
-        if (self.state.force_full_render) return .full;
-        return .partial;
+        return key_profile.keypressDirtyState(self);
     }
 
     fn formatKeyName(event: terminal.KeyEvent, buf: *[32]u8) []const u8 {
-        var idx: usize = 0;
-        idx = appendKeyPart(buf, idx, event.ctrl, "Ctrl+");
-        idx = appendKeyPart(buf, idx, event.alt, "Alt+");
-        idx = appendKeyPart(buf, idx, event.shift, "Shift+");
-
-        const base = switch (event.key) {
-            .None => "None",
-            .Backspace => "Backspace",
-            .Enter => "Enter",
-            .Esc => "Esc",
-            .Up => "Up",
-            .Down => "Down",
-            .Right => "Right",
-            .Left => "Left",
-            .Delete => "Delete",
-            .Home => "Home",
-            .End => "End",
-            .PageUp => "PageUp",
-            .PageDown => "PageDown",
-            .Char => blk: {
-                if (event.char == '\t') break :blk "Tab";
-                if (event.char == ' ') break :blk "Space";
-                if (event.char >= 0x21 and event.char <= 0x7e and idx + 1 <= buf.len) {
-                    buf[idx] = event.char;
-                    return buf[0 .. idx + 1];
-                }
-                break :blk "Char";
-            },
-        };
-
-        idx = appendKeyBytes(buf, idx, base);
-        return buf[0..idx];
-    }
-
-    fn appendKeyPart(buf: *[32]u8, idx: usize, enabled: bool, text: []const u8) usize {
-        if (!enabled) return idx;
-        return appendKeyBytes(buf, idx, text);
-    }
-
-    fn appendKeyBytes(buf: *[32]u8, start: usize, text: []const u8) usize {
-        var idx = start;
-        for (text) |ch| {
-            if (idx >= buf.len) break;
-            buf[idx] = ch;
-            idx += 1;
-        }
-        return idx;
+        return key_profile.formatKeyName(event, buf);
     }
 
     fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
@@ -1355,7 +948,7 @@ pub const Editor = struct {
     }
 
     fn modeAllowsCompletion(self: *const Editor) bool {
-        return self.state.mode == .Normal or self.state.mode == .Insert;
+        return editor_lsp.modeAllowsCompletion(self);
     }
 
     fn handleSyntaxParseResult(self: *Editor, result: *syntax.ParseResult) !void {
@@ -1397,34 +990,11 @@ pub const Editor = struct {
     }
 
     fn notePendingLspChange(self: *Editor) void {
-        const tab = self.currentTab() orelse return;
-        if (!tab.needsLspChangeNotification()) return;
-        if (tab.lsp_pending_since_ns == null) {
-            tab.lsp_pending_since_ns = perf.nowNs();
-        }
+        editor_lsp.notePendingLspChange(self);
     }
 
     fn flushPendingLspChanges(self: *Editor, force: bool) !void {
-        const tab = self.currentTab() orelse return;
-        if (!tab.needsLspChangeNotification()) {
-            tab.lsp_pending_since_ns = null;
-            return;
-        }
-        if (tab.lsp_pending_since_ns == null) return;
-        if (!force and perf.nowNs() - tab.lsp_pending_since_ns.? < 250 * std.time.ns_per_ms) {
-            return;
-        }
-
-        if (self.runtime.lsp_mgr) |*mgr| {
-            const snapshot = try self.takeTextSnapshot(tab);
-            defer self.allocator.free(snapshot.text);
-            if (snapshot.revision != tab.buf.revision) return;
-            if (mgr.notifyChange(tab.buf.filename.?, snapshot.text)) {
-                tab.markLspChangeNotified();
-            } else |err| {
-                logz.err().fmt("msg", "Failed to notify change: {any}", .{err}).log();
-            }
-        }
+        return editor_lsp.flushPendingLspChanges(self, force);
     }
 
     fn textViewportWidthForTab(self: *const Editor, tab: *const Tab) usize {
@@ -1876,29 +1446,19 @@ pub const Editor = struct {
     }
 
     fn diagnosticUri(value: std.json.Value) ?[]const u8 {
-        if (value != .object) return null;
-        const uri = value.object.get("uri") orelse return null;
-        if (uri != .string) return null;
-        const diagnostics = value.object.get("diagnostics") orelse return null;
-        if (diagnostics != .array) return null;
-        return uri.string;
+        return editor_lsp.diagnosticUri(value);
     }
 
     fn isValidCompletionValue(value: std.json.Value) bool {
-        if (value == .array) return true;
-        if (value == .object) {
-            const items = value.object.get("items") orelse return false;
-            return items == .array;
-        }
-        return false;
+        return editor_lsp.isValidCompletionValue(value);
     }
 
     fn completionItemObject(value: std.json.Value) ?std.json.ObjectMap {
-        return completion_menu.completionItemObject(value);
+        return editor_lsp.completionItemObject(value);
     }
 
     fn completionItemString(item: std.json.ObjectMap, key: []const u8) ?[]const u8 {
-        return completion_menu.completionItemString(item, key);
+        return editor_lsp.completionItemString(item, key);
     }
 
     fn completionKindLabel(item: std.json.ObjectMap) []const u8 {
@@ -1906,77 +1466,7 @@ pub const Editor = struct {
     }
 
     fn handleCompletionInput(self: *Editor, event: terminal.KeyEvent) !bool {
-        if (!self.state.lsp_ui.completion_active or self.state.lsp_ui.completion_items == null) return false;
-        const items = self.state.lsp_ui.completionItems();
-
-        if (self.completionActionCommandForEvent(event)) |command| {
-            switch (command) {
-                .completion_previous => {
-                    if (self.state.lsp_ui.completion_selected > 0) {
-                        self.state.lsp_ui.completion_selected -= 1;
-                    } else if (items.len > 0) {
-                        self.state.lsp_ui.completion_selected = items.len - 1;
-                    }
-                    return true;
-                },
-                .completion_next => {
-                    if (self.state.lsp_ui.completion_selected < items.len - 1) {
-                        self.state.lsp_ui.completion_selected += 1;
-                    } else {
-                        self.state.lsp_ui.completion_selected = 0;
-                    }
-                    return true;
-                },
-                .completion_accept => {
-                    if (items.len == 0) {
-                        self.state.lsp_ui.clearCompletion();
-                        return false;
-                    }
-                    const item = completionItemObject(items[self.state.lsp_ui.completion_selected]) orelse {
-                        self.state.lsp_ui.clearCompletion();
-                        return false;
-                    };
-                    const label = completionItemString(item, "label") orelse {
-                        self.state.lsp_ui.clearCompletion();
-                        return false;
-                    };
-                    const insertText = completionItemString(item, "insertText") orelse label;
-
-                    // Insert the completion
-                    if (self.currentTab()) |tab| {
-                        const mc = tab.mainCursor();
-                        // Simple insertion for now.
-                        // TODO: handle overwrite and snippets.
-                        for (insertText) |c| {
-                            try tab.buf.insertChar(mc.row, mc.col, c);
-                            mc.col += 1;
-                        }
-                    }
-
-                    self.state.lsp_ui.clearCompletion();
-                    return true;
-                },
-                .completion_cancel => {
-                    self.state.lsp_ui.clearCompletion();
-                    return true;
-                },
-                else => unreachable,
-            }
-        }
-
-        switch (event.key) {
-            .Char => {
-                if (!std.ascii.isAlphanumeric(event.char)) {
-                    self.state.lsp_ui.clearCompletion();
-                    return false;
-                }
-                return false;
-            },
-            else => {
-                self.state.lsp_ui.clearCompletion();
-                return false;
-            },
-        }
+        return editor_lsp.handleCompletionInput(self, event);
     }
 };
 

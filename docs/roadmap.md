@@ -7,8 +7,6 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] write a proper README.md with contributions, running the project, etc
 - [ ] CI pipeline for running tests and binary creation (GitHub actions as a start)
 - [ ] `homebrew` formula for installation
-- [ ] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
-- [ ] implement `create project`(or workspace) feature
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
 - [x] UI overhaul using nerdfonts
 
@@ -26,9 +24,11 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement "New File" by using a popup to show the filesystem (and navigate it) and create the file
 - [x] implement "Open Folder" by selecting a specific folder (and not just `.`) using a popup to show the filesystem (and navigate it)
 - [x] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
+- [ ] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
 - [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file. This step cannot happen until I find a way to automatically put the file in a specific folder at startup time
 - [x] implement opening the current folder with `.` button when the Filesystem pane is open
 - [x] UI rehaul for the Filesystem pane
+- [ ] implement `create project`(or workspace) feature
 
 ## Editing TODO
 
@@ -48,6 +48,8 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement folding/unfolding feature for when `{}` are found (add also keybinding)
 - [x] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
 - [x] BUG: cannot scroll the tabs
+- [ ] implement Comments for non-programming files (like google docs)
+- [ ] implement TODO list based on both `//TODO` or `//FIXME` etc and actual todo inputs from user
 
 ## Plugins System TODO
 
