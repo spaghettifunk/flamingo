@@ -11,6 +11,7 @@ const command_keybindings = @import("keybindings.zig");
 const normal_sequence = @import("input_router/normal_sequence.zig");
 const viewport_mod = @import("navigation/viewport.zig");
 const syntax = @import("syntax.zig");
+const editor_syntax = @import("syntax_editor.zig");
 const perf = @import("../perf/perf.zig");
 const completion_menu = @import("renderer/completion_menu.zig");
 const line_render = @import("renderer/line_render.zig");
@@ -134,10 +135,7 @@ const GlobalSearchRenderRow = search_popups.GlobalSearchRenderRow;
 const SelectionRange = line_render.SelectionRange;
 const LineRenderState = line_render.LineRenderState;
 
-const TextSnapshot = struct {
-    revision: u64,
-    text: []u8,
-};
+const TextSnapshot = editor_syntax.TextSnapshot;
 
 const KeypressProfilePosition = struct {
     row: usize = 0,
@@ -1361,61 +1359,19 @@ pub const Editor = struct {
     }
 
     fn handleSyntaxParseResult(self: *Editor, result: *syntax.ParseResult) !void {
-        const tab = self.findTabBySyntaxBufferId(result.buffer_id) orelse {
-            logz.debug().fmt("msg", "dropping syntax result for closed buffer {d}", .{result.buffer_id}).log();
-            return;
-        };
-
-        if (result.revision != tab.buf.revision) {
-            logz.debug().fmt(
-                "msg",
-                "dropping stale syntax result for buffer {d}: result revision {d}, current revision {d}",
-                .{ result.buffer_id, result.revision, tab.buf.revision },
-            ).log();
-            return;
-        }
-
-        const current_language = if (tab.buf.filename) |filename|
-            syntax.languageFromFilename(filename)
-        else
-            null;
-        if (current_language == null or current_language.? != result.language) {
-            tab.syntax_requested_revision = null;
-            logz.debug().fmt("msg", "dropping syntax result for changed language on buffer {d}", .{result.buffer_id}).log();
-            return;
-        }
-
-        try tab.syntax_highlighter.installParseResult(result);
-        tab.syntax_requested_revision = result.revision;
-        self.markDirty(.partial);
+        return editor_syntax.handleSyntaxParseResult(self, result);
     }
 
     fn findTabBySyntaxBufferId(self: *Editor, buffer_id: u64) ?*Tab {
-        for (self.state.tabs.items) |*tab| {
-            if (tab.syntax_buffer_id == buffer_id) return tab;
-        }
-        return null;
+        return editor_syntax.findTabBySyntaxBufferId(self, buffer_id);
     }
 
     fn prepareSyntaxForViewport(self: *Editor, tab: *Tab, first_line: usize, last_line: usize, margin: usize) !void {
-        _ = try tab.syntax_highlighter.prepareForAsyncBuffer(&tab.buf) orelse {
-            tab.syntax_requested_revision = null;
-            if (self.active_keypress_trace) |trace| {
-                trace.syntax_cache = syntax.ViewportCacheStatus.none.name();
-            }
-            return;
-        };
-
-        if (self.active_keypress_trace) |trace| {
-            trace.syntax_cache = tab.syntax_highlighter.viewportCacheStatusFromCommitted(first_line, last_line, margin).name();
-        }
-        try tab.syntax_highlighter.ensureViewportFromCommitted(first_line, last_line, margin);
+        return editor_syntax.prepareSyntaxForViewport(self, tab, first_line, last_line, margin);
     }
 
     fn takeTextSnapshot(self: *Editor, tab: *const Tab) !TextSnapshot {
-        const revision = tab.buf.revision;
-        const text = try tab.buf.toOwnedTextSnapshot(self.allocator);
-        return .{ .revision = revision, .text = text };
+        return editor_syntax.takeTextSnapshot(self, tab);
     }
 
     fn buildLineRenderState(
@@ -1437,19 +1393,7 @@ pub const Editor = struct {
     }
 
     fn queueSyntaxParseForCurrentTab(self: *Editor) !void {
-        const tab = self.currentTab() orelse return;
-        const language = try tab.syntax_highlighter.prepareForAsyncBuffer(&tab.buf) orelse {
-            tab.syntax_requested_revision = null;
-            return;
-        };
-
-        if (tab.syntax_highlighter.parsed_revision != tab.buf.revision and
-            tab.syntax_requested_revision != tab.buf.revision)
-        {
-            const snapshot = try self.takeTextSnapshot(tab);
-            tab.syntax_requested_revision = snapshot.revision;
-            self.runtime.syntax_parse_worker.requestParse(tab.syntax_buffer_id, snapshot.revision, language, snapshot.text);
-        }
+        return editor_syntax.queueSyntaxParseForCurrentTab(self);
     }
 
     fn notePendingLspChange(self: *Editor) void {

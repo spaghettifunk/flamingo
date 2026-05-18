@@ -8,6 +8,7 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] CI pipeline for running tests and binary creation (GitHub actions as a start)
 - [ ] `homebrew` formula for installation
 - [ ] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
+- [ ] implement `create project`(or workspace) feature
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
 - [x] UI overhaul using nerdfonts
 
