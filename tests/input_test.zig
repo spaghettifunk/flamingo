@@ -11,6 +11,8 @@ const buffer_mod = @import("../src/editor/model/buffer.zig");
 const explorer_mod = @import("../src/editor/explorer.zig");
 const prompt_mod = @import("../src/editor/prompt_popup.zig");
 const navigation = @import("../src/editor/navigation.zig");
+const commands = @import("../src/editor/commands.zig");
+const keybindings = @import("../src/editor/keybindings.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
 const terminal = @import("../src/terminal.zig");
@@ -56,6 +58,33 @@ fn pickerEntryIndex(ed: *editor_mod.Editor, name: []const u8) ?usize {
     return null;
 }
 
+fn installKeybindingOverrides(ed: *editor_mod.Editor, overrides: []const keybindings.UserBindingOverride) !void {
+    var diagnostics = keybindings.BuildDiagnostics{};
+    defer diagnostics.deinit(ed.allocator);
+    var registry = try keybindings.Registry.fromDefaultsAndConfig(ed.allocator, overrides, &.{}, &diagnostics);
+    errdefer registry.deinit(ed.allocator);
+    try std.testing.expect(!diagnostics.hasErrors());
+    ed.keybinding_registry.deinit(ed.allocator);
+    ed.keybinding_registry = registry;
+}
+
+fn replaceBinding(
+    ed: *editor_mod.Editor,
+    context: commands.CommandContext,
+    sequence: keybindings.KeySequence,
+    command: commands.CommandId,
+    default_sequence: keybindings.KeySequence,
+) !void {
+    try installKeybindingOverrides(ed, &.{
+        .{
+            .context = context,
+            .sequence = sequence,
+            .command = command,
+            .replace_default_sequence = default_sequence,
+        },
+    });
+}
+
 // ── Mode transitions ──────────────────────────────────────────────────────────
 
 test "Dashboard → filesystem picker via Enter on 'New File'" {
@@ -82,8 +111,7 @@ test "Dashboard: Up Down and configured movement key change selection" {
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
     try std.testing.expectEqual(@as(usize, 0), ed.state.dash.selected_index);
 
-    ed.config.keybindings.dashboard_down = "ctrl+j";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .dashboard, keybindings.ctrlChar('j'), .dashboard_move_down, keybindings.keySpecial(.Down));
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
     try std.testing.expectEqual(@as(usize, 0), ed.state.dash.selected_index);
@@ -119,8 +147,7 @@ test "FilesystemPicker: Up Down and configured submit key are routed through pic
 
     var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
-    ed.config.keybindings.prompt_submit = "ctrl+j";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .picker, keybindings.ctrlChar('j'), .picker_accept, keybindings.keySpecial(.Enter));
     try ed.state.filesystem_picker.open(a, io, .open_file, root_path);
     ed.state.mode = .FilesystemPicker;
 
@@ -563,8 +590,7 @@ test "Normal: Ctrl+O can return from a successful percent jump" {
     var ed = try th.makeEditor(a, &[_][]const u8{"(value)"});
     defer ed.deinit();
 
-    ed.config.keybindings.jump_back = "ctrl+o";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .normal, keybindings.ctrlChar('o'), .navigation_jump_back, keybindings.altChar('o'));
 
     const tab = ed.currentTab().?;
     tab.mainCursor().col = 0;
@@ -696,9 +722,20 @@ test "Normal: jump history keys are configurable" {
     var ed = try th.makeEditor(a, &[_][]const u8{ "one", "two" });
     defer ed.deinit();
 
-    ed.config.keybindings.jump_back = "alt+u";
-    ed.config.keybindings.jump_forward = "alt+j";
-    ed.refreshKeybindings();
+    try installKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = keybindings.altChar('u'),
+            .command = .navigation_jump_back,
+            .replace_default_sequence = keybindings.altChar('o'),
+        },
+        .{
+            .context = .normal,
+            .sequence = keybindings.altChar('j'),
+            .command = .navigation_jump_forward,
+            .replace_default_sequence = keybindings.altChar('p'),
+        },
+    });
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('G')});
     try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('o')});
@@ -859,8 +896,7 @@ test "Insert: configured indent key preserves raw Tab text" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.indent = "ctrl+i";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .insert, keybindings.ctrlChar('i'), .editing_indent, keybindings.keyChar('\t'));
     ed.state.mode = .Insert;
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
@@ -952,8 +988,7 @@ test "SaveConfirmation: custom prompt submit preserves default d discard only" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{"dirty"});
     defer ed.deinit();
-    ed.config.keybindings.prompt_submit = "ctrl+j";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .save_confirmation, keybindings.ctrlChar('j'), .save_confirmation_discard, keybindings.keySpecial(.Enter));
 
     ed.currentTab().?.buf.is_dirty = true;
     ed.state.save_confirmation.open(null);
@@ -1102,8 +1137,7 @@ test "Command: configured submit key executes command" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
-    ed.config.keybindings.prompt_submit = "ctrl+j";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .command_line, keybindings.ctrlChar('j'), .command_execute, keybindings.keySpecial(.Enter));
     ed.currentTab().?.buf.is_dirty = false;
 
     try feed(&ed, &[_]terminal.KeyEvent{
@@ -1265,8 +1299,7 @@ test "GlobalSearch: configured select-next key is used" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.indent = "ctrl+n";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .global_search, keybindings.ctrlChar('n'), .global_search_select_next, keybindings.keyChar('\t'));
 
     try ed.state.global_search.open(a, ".");
     ed.state.mode = .GlobalSearch;
@@ -1380,8 +1413,7 @@ test "Search: configured next key is used" {
         "foo end",
     });
     defer ed.deinit();
-    ed.config.keybindings.search_next = "ctrl+n";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .search, keybindings.ctrlChar('n'), .search_next_match, keybindings.keySpecial(.Down));
 
     ed.state.mode = .Search;
     try ed.state.search_buffer.appendSlice(a, "foo");
@@ -1671,8 +1703,7 @@ test "configured toggle_explorer key is used" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.toggle_explorer = "ctrl+g";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .global, keybindings.ctrlChar('g'), .explorer_toggle, keybindings.ctrlChar('b'));
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(!ed.state.explorer_visible);
@@ -1703,8 +1734,7 @@ test "configured toggle_terminal key is used" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.toggle_terminal = "ctrl+g";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .global, keybindings.ctrlChar('g'), .terminal_toggle, keybindings.ctrlChar('t'));
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('t')});
     try std.testing.expect(!ed.terminal_panel.visible);
@@ -1794,8 +1824,7 @@ test "configured close_tab key is used" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
-    ed.config.keybindings.close_tab = "ctrl+u";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .global, keybindings.ctrlChar('u'), .app_close_tab, keybindings.ctrlChar('w'));
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
     try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
@@ -1825,8 +1854,6 @@ test "configured Ctrl+E switches explorer focus" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.switch_focus = "ctrl+e";
-
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(ed.state.explorer_visible);
     try std.testing.expect(ed.state.explorer_focused);
@@ -1922,8 +1949,7 @@ test "Explorer: configured movement key remains available" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{"hello"});
     defer ed.deinit();
-    ed.config.keybindings.explorer_down = "ctrl+j";
-    ed.refreshKeybindings();
+    try replaceBinding(&ed, .explorer, keybindings.ctrlChar('j'), .explorer_move_down, keybindings.keySpecial(.Down));
     try attachFocusedExplorer(a, io, &ed, root_path);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
@@ -2033,7 +2059,6 @@ test "plain Tab inserts indentation when explorer is visible" {
 
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
-    ed.config.keybindings.switch_focus = "ctrl+e";
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('b')});
     try std.testing.expect(ed.state.explorer_visible);

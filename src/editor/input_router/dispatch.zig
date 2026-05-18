@@ -1,6 +1,5 @@
 const std = @import("std");
 const logz = @import("logz");
-const config = @import("../../config.zig");
 const terminal = @import("../../terminal.zig");
 const editor = @import("../editor.zig");
 const buffer = @import("../model/buffer.zig");
@@ -15,81 +14,6 @@ const filesystem_picker = @import("../filesystem_picker.zig");
 const fs_ops = @import("../filesystem_ops.zig");
 const prompt_popup = @import("../prompt_popup.zig");
 const terminal_panel = @import("../terminal_panel.zig");
-
-fn matches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
-    if (event.eql(expected)) return true;
-
-    // macOS Option+Delete is commonly delivered by terminals as
-    // Alt+Backspace, while the user-facing shortcut is named Alt+Delete.
-    if (expected.alt and expected.key == .Delete) {
-        var alt_backspace = expected;
-        alt_backspace.key = .Backspace;
-        return event.eql(alt_backspace);
-    }
-
-    // Most terminals encode Ctrl+Shift+letter the same way as Ctrl+letter, so
-    // the shift bit can be lost before it reaches the editor.
-    if (expected.ctrl and expected.shift and expected.key == .Char and
-        expected.char >= 'a' and expected.char <= 'z')
-    {
-        var without_shift = expected;
-        without_shift.shift = false;
-        return event.eql(without_shift);
-    }
-
-    return false;
-}
-
-fn matchesMovement(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
-    if (matches(event, expected)) return true;
-
-    // Shift extends a selection while preserving the underlying movement key.
-    var without_shift = event;
-    without_shift.shift = false;
-    return event.shift and without_shift.eql(expected);
-}
-
-fn commandFromLegacyMovementKeys(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-
-    return if (matchesMovement(event, keys.line_end))
-        .navigation_line_end
-    else if (matchesMovement(event, keys.line_start))
-        .navigation_line_start
-    else if (matchesMovement(event, keys.word_left))
-        .navigation_word_left
-    else if (matchesMovement(event, keys.word_right))
-        .navigation_word_right
-    else if (matchesMovement(event, keys.move_up))
-        .navigation_move_up
-    else if (matchesMovement(event, keys.move_down))
-        .navigation_move_down
-    else if (event.key == .PageUp and !event.ctrl and !event.alt)
-        .navigation_page_up
-    else if (event.key == .PageDown and !event.ctrl and !event.alt)
-        .navigation_page_down
-    else if (matchesMovement(event, keys.move_left))
-        .navigation_move_left
-    else if (matchesMovement(event, keys.move_right))
-        .navigation_move_right
-    else
-        null;
-}
-
-fn commandFromLegacyJumpKeys(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-
-    return if (matches(event, keys.jump_back))
-        .navigation_jump_back
-    else if (matches(event, keys.jump_forward))
-        .navigation_jump_forward
-    else
-        null;
-}
-
-fn keyMatchesDefault(actual: terminal.KeyEvent, default_text: []const u8) bool {
-    return actual.eql(terminal.parseKeyChord(default_text));
-}
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -284,69 +208,8 @@ fn registryCommandMatches(ed: *const editor.Editor, context: commands.CommandCon
     return (resolveRegistryCommand(ed, context, event) orelse return false) == id;
 }
 
-fn modeUsesRegistryContext(mode: editor.EditorMode, context: commands.CommandContext) bool {
-    return switch (context) {
-        .normal => mode == .Normal,
-        .global => true,
-        .command_line => mode == .Command,
-        .search => mode == .Search,
-        .global_search => mode == .GlobalSearch,
-        .explorer, .explorer_search => mode == .Normal or mode == .Insert,
-        .dashboard => mode == .Dashboard,
-        .picker, .picker_new_file, .picker_open_folder => mode == .FilesystemPicker,
-        .open_file_prompt => mode == .OpenFilePrompt,
-        .insert => mode == .Insert,
-        .terminal => mode == .Terminal,
-        .help => mode == .Help,
-        .prompt => mode == .Prompt,
-        .save_confirmation => mode == .SaveConfirmation,
-        else => false,
-    };
-}
-
-fn matchesRegistryOrLegacyCommand(
-    ed: *editor.Editor,
-    event: terminal.KeyEvent,
-    context: commands.CommandContext,
-    id: commands.CommandId,
-    legacy_key: terminal.KeyEvent,
-    default_text: []const u8,
-) bool {
-    if (modeUsesRegistryContext(ed.state.mode, context)) {
-        if (resolveRegistryCommand(ed, context, event)) |resolved| {
-            if (resolved == id) return true;
-        }
-    }
-    // Temporary migration-window fallback for legacy flat [keybindings] fields.
-    // The registry path above remains the canonical source for defaults and
-    // context-specific config; this branch only preserves old direct field
-    // behavior until flat keybindings are removed.
-    return !keyMatchesDefault(legacy_key, default_text) and matches(event, legacy_key);
-}
-
-fn normalMovementKeysAreDefault(ed: *editor.Editor) bool {
-    const defaults = config.KeybindingsConfig{};
-    const keys = ed.keys;
-    return keyMatchesDefault(keys.move_up, defaults.move_up) and
-        keyMatchesDefault(keys.move_down, defaults.move_down) and
-        keyMatchesDefault(keys.move_left, defaults.move_left) and
-        keyMatchesDefault(keys.move_right, defaults.move_right) and
-        keyMatchesDefault(keys.line_start, defaults.line_start) and
-        keyMatchesDefault(keys.line_end, defaults.line_end) and
-        keyMatchesDefault(keys.word_left, defaults.word_left) and
-        keyMatchesDefault(keys.word_right, defaults.word_right);
-}
-
-fn normalJumpKeysAreDefault(ed: *editor.Editor) bool {
-    const defaults = config.KeybindingsConfig{};
-    const keys = ed.keys;
-    return keyMatchesDefault(keys.jump_back, defaults.jump_back) and
-        keyMatchesDefault(keys.jump_forward, defaults.jump_forward);
-}
-
 fn resolveNormalMovementCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    if (normal_sequence.resolveMovementCommand(&ed.keybinding_registry, event)) |command| return command;
-    return if (!normalMovementKeysAreDefault(ed)) commandFromLegacyMovementKeys(ed, event) else null;
+    return normal_sequence.resolveMovementCommand(&ed.keybinding_registry, event);
 }
 
 fn resolveInsertMovementCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -366,12 +229,11 @@ fn resolveInsertMovementCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?c
             else => false,
         }) return command;
     }
-    return if (!normalMovementKeysAreDefault(ed)) commandFromLegacyMovementKeys(ed, event) else null;
+    return null;
 }
 
 fn resolveNormalJumpCommand(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    if (normal_sequence.resolveJumpCommand(&ed.keybinding_registry, event)) |command| return command;
-    return if (!normalJumpKeysAreDefault(ed)) commandFromLegacyJumpKeys(ed, event) else null;
+    return normal_sequence.resolveJumpCommand(&ed.keybinding_registry, event);
 }
 
 fn movementCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -381,206 +243,81 @@ fn movementCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?comman
     if (ed.state.mode == .Insert) {
         return resolveInsertMovementCommand(ed, event);
     }
-    return commandFromLegacyMovementKeys(ed, event);
+    return null;
 }
 
 fn normalSharedActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
     const context: commands.CommandContext = if (ed.state.mode == .Insert) .insert else .normal;
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_select_all, keys.select_all, defaults.select_all))
-        .editing_select_all
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_copy, keys.copy, defaults.copy))
-        .editing_copy
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_cut, keys.cut, defaults.cut))
-        .editing_cut
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_paste, keys.paste, defaults.paste))
-        .editing_paste
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .file_write, keys.save, defaults.save))
-        .file_write
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_undo, keys.undo, defaults.undo))
-        .editing_undo
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_redo, keys.redo, defaults.redo))
-        .editing_redo
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_delete_word_back, keys.delete_word_back, defaults.delete_word_back))
-        .editing_delete_word_back
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_duplicate_line, keys.duplicate_line, defaults.duplicate_line))
-        .editing_duplicate_line
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_delete_line, keys.delete_line, defaults.delete_line))
-        .editing_delete_line
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_add_cursor_above, keys.add_cursor_above, defaults.add_cursor_above))
-        .editing_add_cursor_above
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .editing_add_cursor_below, keys.add_cursor_below, defaults.add_cursor_below))
-        .editing_add_cursor_below
-    else if (matchesRegistryOrLegacyCommand(ed, event, context, .mode_normal, keys.normal_mode, defaults.normal_mode))
-        .mode_normal
-    else
-        null;
+    const command = resolveRegistryCommand(ed, context, event) orelse return null;
+    return switch (command) {
+        .editing_select_all,
+        .editing_copy,
+        .editing_cut,
+        .editing_paste,
+        .file_write,
+        .editing_undo,
+        .editing_redo,
+        .editing_delete_word_back,
+        .editing_duplicate_line,
+        .editing_delete_line,
+        .editing_add_cursor_above,
+        .editing_add_cursor_below,
+        .mode_normal,
+        => command,
+        else => null,
+    };
 }
 
 fn normalModeActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .normal, .mode_insert, keys.insert_mode, defaults.insert_mode))
-        .mode_insert
-    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .mode_command, keys.command_mode, defaults.command_mode))
-        .mode_command
-    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .mode_search, keys.search_mode, defaults.search_mode))
-        .mode_search
-    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .completion_auto_trigger, keys.completion_auto_trigger, defaults.completion_auto_trigger))
-        .completion_auto_trigger
-    else if (matchesRegistryOrLegacyCommand(ed, event, .normal, .completion_trigger, keys.completion_trigger, defaults.completion_trigger))
-        .completion_trigger
-    else
-        null;
+    const command = resolveRegistryCommand(ed, .normal, event) orelse return null;
+    return switch (command) {
+        .mode_insert,
+        .mode_command,
+        .mode_search,
+        .completion_auto_trigger,
+        .completion_trigger,
+        => command,
+        else => null,
+    };
 }
 
 fn commandLineActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_cancel, keys.normal_mode, defaults.normal_mode))
-        .command_cancel
-    else if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_backspace, keys.prompt_backspace, defaults.prompt_backspace))
-        .command_backspace
-    else if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_suggestion_next, keys.indent, defaults.indent))
-        .command_suggestion_next
-    else if (registryCommandMatches(ed, .command_line, event, .command_suggestion_previous))
-        .command_suggestion_previous
-    else if (matchesRegistryOrLegacyCommand(ed, event, .command_line, .command_execute, keys.prompt_submit, defaults.prompt_submit))
-        .command_execute
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .command_line, event);
 }
 
 fn searchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_cancel, keys.normal_mode, defaults.normal_mode))
-        .search_cancel
-    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_backspace, keys.prompt_backspace, defaults.prompt_backspace))
-        .search_backspace
-    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_accept, keys.prompt_submit, defaults.prompt_submit))
-        .search_accept
-    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_next_match, keys.search_next, defaults.search_next))
-        .search_next_match
-    else if (matchesRegistryOrLegacyCommand(ed, event, .search, .search_previous_match, keys.search_previous, defaults.search_previous))
-        .search_previous_match
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .search, event);
 }
 
 fn globalSearchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_cancel, keys.normal_mode, defaults.normal_mode))
-        .global_search_cancel
-    else if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_backspace, keys.prompt_backspace, defaults.prompt_backspace))
-        .global_search_backspace
-    else if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_select_next, keys.indent, defaults.indent))
-        .global_search_select_next
-    else if (registryCommandMatches(ed, .global_search, event, .global_search_select_previous))
-        .global_search_select_previous
-    else if (matchesRegistryOrLegacyCommand(ed, event, .global_search, .global_search_accept, keys.prompt_submit, defaults.prompt_submit))
-        .global_search_accept
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .global_search, event);
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_new_file, keys.explorer_new_file, defaults.explorer_new_file))
-        .explorer_new_file
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_rename, keys.explorer_rename, defaults.explorer_rename))
-        .explorer_rename
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_delete, keys.explorer_delete, defaults.explorer_delete))
-        .explorer_delete
-    else
-        null;
+    const command = resolveDefaultContextCommand(ed, .explorer, event) orelse return null;
+    return switch (command) {
+        .explorer_new_file,
+        .explorer_rename,
+        .explorer_delete,
+        => command,
+        else => null,
+    };
 }
 
 fn explorerActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_search_open, keys.search_mode, defaults.search_mode))
-        .explorer_search_open
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_move_up, keys.explorer_up, defaults.explorer_up))
-        .explorer_move_up
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_move_down, keys.explorer_down, defaults.explorer_down))
-        .explorer_move_down
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer, .explorer_open_selected, keys.explorer_open, defaults.explorer_open))
-        .explorer_open_selected
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .explorer, event);
 }
 
 fn explorerSearchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_search_cancel, keys.normal_mode, defaults.normal_mode))
-        .explorer_search_cancel
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_search_backspace, keys.prompt_backspace, defaults.prompt_backspace))
-        .explorer_search_backspace
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_move_up, keys.explorer_up, defaults.explorer_up))
-        .explorer_move_up
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_move_down, keys.explorer_down, defaults.explorer_down))
-        .explorer_move_down
-    else if (matchesRegistryOrLegacyCommand(ed, event, .explorer_search, .explorer_open_selected, keys.explorer_open, defaults.explorer_open))
-        .explorer_open_selected
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .explorer_search, event);
 }
 
 fn dashboardActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .mode_command, keys.command_mode, defaults.command_mode))
-        .mode_command
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_new_file, keys.new_file, defaults.new_file))
-        .dashboard_new_file
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_open_file, keys.open_file, defaults.open_file))
-        .dashboard_open_file
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_open_folder, keys.open_folder, defaults.open_folder))
-        .dashboard_open_folder
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_settings, keys.settings, defaults.settings))
-        .dashboard_settings
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .app_quit_flamingo, keys.quit, defaults.quit))
-        .app_quit_flamingo
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_move_up, keys.dashboard_up, defaults.dashboard_up))
-        .dashboard_move_up
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_move_down, keys.dashboard_down, defaults.dashboard_down))
-        .dashboard_move_down
-    else if (matchesRegistryOrLegacyCommand(ed, event, .dashboard, .dashboard_select, keys.dashboard_select, defaults.dashboard_select))
-        .dashboard_select
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .dashboard, event);
 }
 
 fn pickerActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .picker, .picker_cancel, keys.normal_mode, defaults.normal_mode))
-        .picker_cancel
-    else if (matchesRegistryOrLegacyCommand(ed, event, .picker, .picker_back, keys.prompt_backspace, defaults.prompt_backspace))
-        .picker_back
-    else if (registryCommandMatches(ed, .picker, event, .picker_move_up))
-        .picker_move_up
-    else if (registryCommandMatches(ed, .picker, event, .picker_move_down))
-        .picker_move_down
-    else if (matchesRegistryOrLegacyCommand(ed, event, .picker, .picker_accept, keys.prompt_submit, defaults.prompt_submit))
-        .picker_accept
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .picker, event);
 }
 
 fn pickerNewFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -600,116 +337,47 @@ fn pickerOpenFolderActionCommandForEvent(ed: *editor.Editor, event: terminal.Key
 }
 
 fn openFilePromptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .open_file_prompt, .open_file_prompt_cancel, keys.normal_mode, defaults.normal_mode))
-        .open_file_prompt_cancel
-    else if (matchesRegistryOrLegacyCommand(ed, event, .open_file_prompt, .open_file_prompt_backspace, keys.prompt_backspace, defaults.prompt_backspace))
-        .open_file_prompt_backspace
-    else if (matchesRegistryOrLegacyCommand(ed, event, .open_file_prompt, .open_file_prompt_submit, keys.prompt_submit, defaults.prompt_submit))
-        .open_file_prompt_submit
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .open_file_prompt, event);
 }
 
 fn insertActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .insert, .editing_insert_newline, keys.insert_newline, defaults.insert_newline))
-        .editing_insert_newline
-    else if (matchesRegistryOrLegacyCommand(ed, event, .insert, .editing_delete_back, keys.delete_back, defaults.delete_back))
-        .editing_delete_back
-    else if (matchesRegistryOrLegacyCommand(ed, event, .insert, .editing_indent, keys.indent, defaults.indent))
-        .editing_indent
-    else
-        null;
+    const command = resolveDefaultContextCommand(ed, .insert, event) orelse return null;
+    return switch (command) {
+        .editing_insert_newline,
+        .editing_delete_back,
+        .editing_indent,
+        => command,
+        else => null,
+    };
 }
 
 fn terminalActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .terminal, .terminal_unfocus, keys.normal_mode, defaults.normal_mode))
-        .terminal_unfocus
-    else if (registryCommandMatches(ed, .terminal, event, .terminal_scroll_page_up))
-        .terminal_scroll_page_up
-    else if (registryCommandMatches(ed, .terminal, event, .terminal_scroll_page_down))
-        .terminal_scroll_page_down
-    else if (registryCommandMatches(ed, .terminal, event, .terminal_scroll_bottom))
-        .terminal_scroll_bottom
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .terminal, event);
 }
 
 fn helpActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-    const normal_mode_is_default = keyMatchesDefault(keys.normal_mode, defaults.normal_mode);
-
-    return if (matchesRegistryOrLegacyCommand(ed, event, .help, .help_close, keys.normal_mode, defaults.normal_mode))
-        .help_close
-    else if (registryCommandMatches(ed, .help, event, .help_close) and
-        (normal_mode_is_default or !keyMatchesDefault(event, defaults.normal_mode)))
-        .help_close
-    else if (registryCommandMatches(ed, .help, event, .help_scroll_up))
-        .help_scroll_up
-    else if (registryCommandMatches(ed, .help, event, .help_scroll_down))
-        .help_scroll_down
-    else if (registryCommandMatches(ed, .help, event, .help_page_up))
-        .help_page_up
-    else if (registryCommandMatches(ed, .help, event, .help_page_down))
-        .help_page_down
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .help, event);
 }
 
 fn promptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
     const is_delete_confirm = ed.state.prompt_popup.kind == .explorer_delete_confirm;
-    const normal_mode_is_default = keyMatchesDefault(keys.normal_mode, defaults.normal_mode);
-    const is_normal_mode_key = if (normal_mode_is_default)
-        keyMatchesDefault(event, defaults.normal_mode) and registryCommandMatches(ed, .prompt, event, .prompt_cancel)
-    else
-        event.eql(keys.normal_mode);
+    const command = resolveDefaultContextCommand(ed, .prompt, event) orelse return null;
+    return switch (command) {
+        .prompt_cancel => if (is_delete_confirm or !isPlainPromptNoKey(event)) .prompt_cancel else null,
+        .prompt_confirm => if (is_delete_confirm) .prompt_confirm else null,
+        .prompt_submit => .prompt_submit,
+        .prompt_backspace => if (is_delete_confirm) null else .prompt_backspace,
+        else => null,
+    };
+}
 
-    return if (is_normal_mode_key)
-        .prompt_cancel
-    else if (is_delete_confirm and registryCommandMatches(ed, .prompt, event, .prompt_cancel) and
-        !keyMatchesDefault(event, defaults.normal_mode))
-        .prompt_cancel
-    else if (is_delete_confirm and registryCommandMatches(ed, .prompt, event, .prompt_confirm))
-        .prompt_confirm
-    else if (matchesRegistryOrLegacyCommand(ed, event, .prompt, .prompt_submit, keys.prompt_submit, defaults.prompt_submit))
-        .prompt_submit
-    else if (!is_delete_confirm and matchesRegistryOrLegacyCommand(ed, event, .prompt, .prompt_backspace, keys.prompt_backspace, defaults.prompt_backspace))
-        .prompt_backspace
-    else
-        null;
+fn isPlainPromptNoKey(event: terminal.KeyEvent) bool {
+    return event.key == .Char and !event.ctrl and !event.alt and !event.shift and
+        (event.char == 'n' or event.char == 'N');
 }
 
 fn saveConfirmationActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-    const prompt_submit_is_default = keyMatchesDefault(keys.prompt_submit, defaults.prompt_submit);
-    const normal_mode_is_default = keyMatchesDefault(keys.normal_mode, defaults.normal_mode);
-
-    return if (registryCommandMatches(ed, .save_confirmation, event, .save_confirmation_save))
-        .save_confirmation_save
-    else if (matchesRegistryOrLegacyCommand(ed, event, .save_confirmation, .save_confirmation_discard, keys.prompt_submit, defaults.prompt_submit))
-        .save_confirmation_discard
-    else if (registryCommandMatches(ed, .save_confirmation, event, .save_confirmation_discard) and
-        (prompt_submit_is_default or !keyMatchesDefault(event, defaults.prompt_submit)))
-        .save_confirmation_discard
-    else if (matchesRegistryOrLegacyCommand(ed, event, .save_confirmation, .save_confirmation_cancel, keys.normal_mode, defaults.normal_mode))
-        .save_confirmation_cancel
-    else if (registryCommandMatches(ed, .save_confirmation, event, .save_confirmation_cancel) and
-        (normal_mode_is_default or !keyMatchesDefault(event, defaults.normal_mode)))
-        .save_confirmation_cancel
-    else
-        null;
+    return resolveDefaultContextCommand(ed, .save_confirmation, event);
 }
 
 fn clearPendingNormalSequence(ed: *editor.Editor) void {
@@ -1641,15 +1309,12 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         ed.state.error_message = null;
     }
 
-    const keys = ed.keys;
-    const defaults = config.KeybindingsConfig{};
-
     if (ed.state.mode == .Help) {
         handleHelpInput(ed, event);
         return;
     }
 
-    if (matchesRegistryOrLegacyCommand(ed, event, .global, .terminal_toggle, keys.toggle_terminal, defaults.toggle_terminal)) {
+    if (registryCommandMatches(ed, .global, event, .terminal_toggle)) {
         clearPendingNormalSequence(ed);
         if (ed.terminal_panel.visible) {
             hideTerminal(ed);
@@ -1659,7 +1324,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    if (matchesRegistryOrLegacyCommand(ed, event, .global, .explorer_toggle, keys.toggle_explorer, defaults.toggle_explorer)) {
+    if (registryCommandMatches(ed, .global, event, .explorer_toggle)) {
         clearPendingNormalSequence(ed);
         if (ed.state.tree == null) {
             ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
@@ -1676,7 +1341,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_cycle_panel_focus, keys.switch_focus, defaults.switch_focus)) {
+    if (registryCommandMatches(ed, .global, event, .app_cycle_panel_focus)) {
         clearPendingNormalSequence(ed);
         if (try cyclePanelFocus(ed)) return;
     }
@@ -1686,7 +1351,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         return;
     }
 
-    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_close_tab, keys.close_tab, defaults.close_tab)) {
+    if (registryCommandMatches(ed, .global, event, .app_close_tab)) {
         clearPendingNormalSequence(ed);
         if (ed.state.mode != .Dashboard) {
             // If the buffer has unsaved changes, show the confirmation popup
@@ -1728,13 +1393,13 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         }
     }
 
-    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_next_tab, keys.next_tab, defaults.next_tab)) {
+    if (registryCommandMatches(ed, .global, event, .app_next_tab)) {
         clearPendingNormalSequence(ed);
         ed.nextTab();
         return;
     }
 
-    if (matchesRegistryOrLegacyCommand(ed, event, .global, .app_previous_tab, keys.previous_tab, defaults.previous_tab)) {
+    if (registryCommandMatches(ed, .global, event, .app_previous_tab)) {
         clearPendingNormalSequence(ed);
         ed.prevTab();
         return;

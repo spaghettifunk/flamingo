@@ -19,7 +19,6 @@ const state_mod = @import("state/state.zig");
 const jump_history = @import("state/jump_history.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
-const keybindings = @import("input_router/keybindings.zig");
 const filesystem_picker = @import("filesystem_picker.zig");
 const help_mod = @import("help.zig");
 const file_icons = @import("file_icons.zig");
@@ -35,7 +34,6 @@ pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
 pub const Cursor = tab_mod.Cursor;
 pub const Tab = tab_mod.Tab;
-pub const ResolvedKeybindings = keybindings.ResolvedKeybindings;
 const max_movement_coalesce_batch_count = 64;
 
 const CoalescedMovement = enum {
@@ -236,7 +234,6 @@ const KeypressProfilePosition = struct {
 
 pub const Editor = struct {
     config: config.Config,
-    keys: ResolvedKeybindings,
     keybinding_registry: command_keybindings.Registry,
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -274,7 +271,6 @@ pub const Editor = struct {
             .allocator = allocator,
             .io = io,
             .config = cfg,
-            .keys = ResolvedKeybindings.init(cfg.keybindings),
             .keybinding_registry = keybinding_registry,
             .state = state_mod.EditorState.init(allocator),
             .terminal_panel = terminal_panel_mod.TerminalPanel.init(allocator),
@@ -301,12 +297,20 @@ pub const Editor = struct {
     }
 
     pub fn refreshKeybindings(self: *Editor) void {
-        self.keys = ResolvedKeybindings.init(self.config.keybindings);
         var diagnostics = command_keybindings.BuildDiagnostics{};
         defer diagnostics.deinit(self.allocator);
         const rebuilt = config.buildKeybindingRegistry(self.allocator, &self.config, &diagnostics) catch return;
         self.keybinding_registry.deinit(self.allocator);
         self.keybinding_registry = rebuilt;
+    }
+
+    pub fn keyEventForCommand(self: *const Editor, context: commands.CommandContext, id: commands.CommandId) ?terminal.KeyEvent {
+        for (self.keybinding_registry.bindings) |binding| {
+            if (binding.context == context and binding.command == id and binding.sequence.len == 1) {
+                return binding.sequence.chords[0].toEvent();
+            }
+        }
+        return null;
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
@@ -812,18 +816,28 @@ pub const Editor = struct {
         };
         if (!allowed_key) return null;
 
-        if (event.eql(self.keys.move_up)) return .up;
-        if (event.eql(self.keys.move_down)) return .down;
-        if (event.eql(self.keys.move_left)) return .left;
-        if (event.eql(self.keys.move_right)) return .right;
-        return null;
+        const context: commands.CommandContext = if (self.state.mode == .Insert) .insert else .normal;
+        const command = self.resolveDefaultContextCommand(context, event) orelse return null;
+        return switch (command) {
+            .navigation_move_up => .up,
+            .navigation_move_down => .down,
+            .navigation_move_left => .left,
+            .navigation_move_right => .right,
+            else => null,
+        };
     }
 
     fn matchesNonSimpleMovement(self: *Editor, event: terminal.KeyEvent) bool {
-        return event.eql(self.keys.line_start) or
-            event.eql(self.keys.line_end) or
-            event.eql(self.keys.word_left) or
-            event.eql(self.keys.word_right);
+        const context: commands.CommandContext = if (self.state.mode == .Insert) .insert else .normal;
+        const command = self.resolveDefaultContextCommand(context, event) orelse return false;
+        return switch (command) {
+            .navigation_line_start,
+            .navigation_line_end,
+            .navigation_word_left,
+            .navigation_word_right,
+            => true,
+            else => false,
+        };
     }
 
     fn coalescingStopReasonAfterMovement(self: *Editor, snapshot: MovementCoalesceSnapshot) ?MovementCoalesceStopReason {
@@ -1208,24 +1222,30 @@ pub const Editor = struct {
     fn shouldRenderAfterInputEvent(self: *const Editor, event: terminal.KeyEvent) bool {
         if (event.key == .PageUp or event.key == .PageDown) return true;
 
-        return movementEventMatches(event, self.keys.move_up) or
-            movementEventMatches(event, self.keys.move_down) or
-            movementEventMatches(event, self.keys.move_left) or
-            movementEventMatches(event, self.keys.move_right) or
-            movementEventMatches(event, self.keys.line_start) or
-            movementEventMatches(event, self.keys.line_end) or
-            movementEventMatches(event, self.keys.word_left) or
-            movementEventMatches(event, self.keys.word_right) or
-            movementEventMatches(event, self.keys.explorer_up) or
-            movementEventMatches(event, self.keys.explorer_down);
-    }
-
-    fn movementEventMatches(event: terminal.KeyEvent, expected: terminal.KeyEvent) bool {
-        if (event.eql(expected)) return true;
-
         var without_shift = event;
         without_shift.shift = false;
-        return event.shift and without_shift.eql(expected);
+        const context: commands.CommandContext = if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null)
+            if (self.state.tree.?.search_active) .explorer_search else .explorer
+        else if (self.state.mode == .Insert)
+            .insert
+        else
+            .normal;
+
+        const command = self.resolveDefaultContextCommand(context, without_shift) orelse return false;
+        return switch (command) {
+            .navigation_move_up,
+            .navigation_move_down,
+            .navigation_move_left,
+            .navigation_move_right,
+            .navigation_line_start,
+            .navigation_line_end,
+            .navigation_word_left,
+            .navigation_word_right,
+            .explorer_move_up,
+            .explorer_move_down,
+            => true,
+            else => false,
+        };
     }
 
     fn bufferViewportGeometry(self: *const Editor) struct { start_col: usize, width: usize } {
@@ -1513,10 +1533,6 @@ pub const Editor = struct {
         return @min(@as(usize, 100), ((row + 1) * 100) / total_lines);
     }
 
-    fn keyMatchesDefault(actual: terminal.KeyEvent, default_text: []const u8) bool {
-        return actual.eql(terminal.parseKeyChord(default_text));
-    }
-
     fn resolveDefaultContextCommand(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
         const result = self.keybinding_registry.resolve(context, command_keybindings.KeySequence.fromEvent(event));
         return switch (result) {
@@ -1529,29 +1545,8 @@ pub const Editor = struct {
         return (self.resolveDefaultContextCommand(context, event) orelse return false) == id;
     }
 
-    fn matchesRegistryOrLegacyCommand(
-        self: *const Editor,
-        event: terminal.KeyEvent,
-        context: commands.CommandContext,
-        id: commands.CommandId,
-        legacy_key: terminal.KeyEvent,
-        default_text: []const u8,
-    ) bool {
-        if (self.registryCommandMatches(context, event, id)) {
-            return true;
-        }
-        // Temporary migration-window fallback for legacy flat [keybindings].
-        // Command-style resolution goes through keybinding_registry first; this
-        // only keeps older direct field behavior alive while flat config exists.
-        return !keyMatchesDefault(legacy_key, default_text) and event.eql(legacy_key);
-    }
-
     fn quitRequestedByEvent(self: *const Editor, event: terminal.KeyEvent) bool {
-        const defaults = config.KeybindingsConfig{};
         if (self.registryCommandMatches(.global, event, .app_quit_flamingo)) return true;
-        if (!keyMatchesDefault(self.keys.quit, defaults.quit)) {
-            return event.eql(self.keys.quit);
-        }
         if (self.state.mode == .Normal) {
             const command = normal_sequence.resolveGlobalActionCommand(&self.keybinding_registry, event) orelse return false;
             return command == .app_quit_flamingo;
@@ -1560,42 +1555,31 @@ pub const Editor = struct {
     }
 
     fn completionCommandForEvent(self: *const Editor, event: terminal.KeyEvent) ?commands.CommandId {
-        const defaults = config.KeybindingsConfig{};
         const context: commands.CommandContext = switch (self.state.mode) {
             .Normal => .normal,
             .Insert => .insert,
             else => return null,
         };
 
-        if (self.matchesRegistryOrLegacyCommand(
-            event,
-            context,
+        const command = self.resolveDefaultContextCommand(context, event) orelse return null;
+        return switch (command) {
             .completion_auto_trigger,
-            self.keys.completion_auto_trigger,
-            defaults.completion_auto_trigger,
-        )) return .completion_auto_trigger;
-        if (self.matchesRegistryOrLegacyCommand(
-            event,
-            context,
             .completion_trigger,
-            self.keys.completion_trigger,
-            defaults.completion_trigger,
-        )) return .completion_trigger;
-        return null;
+            => command,
+            else => null,
+        };
     }
 
     fn completionActionCommandForEvent(self: *const Editor, event: terminal.KeyEvent) ?commands.CommandId {
-        const defaults = config.KeybindingsConfig{};
-        return if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_previous, self.keys.completion_previous, defaults.completion_previous))
-            .completion_previous
-        else if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_next, self.keys.completion_next, defaults.completion_next))
-            .completion_next
-        else if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_accept, self.keys.completion_accept, defaults.completion_accept))
-            .completion_accept
-        else if (self.matchesRegistryOrLegacyCommand(event, .completion, .completion_cancel, self.keys.completion_cancel, defaults.completion_cancel))
-            .completion_cancel
-        else
-            null;
+        const command = self.resolveDefaultContextCommand(.completion, event) orelse return null;
+        return switch (command) {
+            .completion_previous,
+            .completion_next,
+            .completion_accept,
+            .completion_cancel,
+            => command,
+            else => null,
+        };
     }
 
     fn handleRuntimeKey(self: *Editor, event: terminal.KeyEvent) !void {
@@ -3733,9 +3717,11 @@ test "virtual renderer and movement respect folded lines" {
 
     tab.mainCursor().row = 0;
     tab.mainCursor().col = 0;
-    try std.testing.expect(try input.handleMovement(&ed, ed.keys.move_down));
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const up = defaultKeyForCommand(&ed, .normal, .navigation_move_up);
+    try std.testing.expect(try input.handleMovement(&ed, down));
     try std.testing.expectEqual(@as(usize, 3), tab.mainCursor().row);
-    try std.testing.expect(try input.handleMovement(&ed, ed.keys.move_up));
+    try std.testing.expect(try input.handleMovement(&ed, up));
     try std.testing.expectEqual(@as(usize, 0), tab.mainCursor().row);
 }
 
@@ -3743,27 +3729,30 @@ test "movement coalescing helper accepts repeated plain Down" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
 
     try std.testing.expectEqual(CoalescedMovement.down, candidate.movement);
-    try std.testing.expect(ed.coalescingStopReasonForNext(candidate, ed.keys.move_down, 1) == null);
+    try std.testing.expect(ed.coalescingStopReasonForNext(candidate, down, 1) == null);
 }
 
 test "movement coalescing stores different movement for next input" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const up = defaultKeyForCommand(&ed, .normal, .navigation_move_up);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
 
     try std.testing.expectEqual(
         MovementCoalesceStopReason.different_key,
-        ed.coalescingStopReasonForNext(candidate, ed.keys.move_up, 1).?,
+        ed.coalescingStopReasonForNext(candidate, up, 1).?,
     );
 }
 
@@ -3771,7 +3760,8 @@ test "movement coalescing stores printable input for next input" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
@@ -3801,7 +3791,8 @@ test "movement coalescing rejects prompt and overlay modes" {
 
     for (rejected_modes) |mode| {
         ed.state.mode = mode;
-        switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+        const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+        switch (ed.movementCoalescingEligibilityBefore(down)) {
             .eligible => return error.ExpectedCoalescingRejection,
             .blocked => {},
         }
@@ -3813,9 +3804,10 @@ test "movement coalescing rejects completion and focused explorer" {
     defer ed.deinit();
 
     ed.state.lsp_ui.completion_active = true;
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
     try std.testing.expectEqual(
         MovementCoalesceStopReason.overlay_active,
-        switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+        switch (ed.movementCoalescingEligibilityBefore(down)) {
             .eligible => return error.ExpectedCoalescingRejection,
             .blocked => |reason| reason,
         },
@@ -3826,7 +3818,7 @@ test "movement coalescing rejects completion and focused explorer" {
     ed.state.explorer_focused = true;
     try std.testing.expectEqual(
         MovementCoalesceStopReason.overlay_active,
-        switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+        switch (ed.movementCoalescingEligibilityBefore(down)) {
             .eligible => return error.ExpectedCoalescingRejection,
             .blocked => |reason| reason,
         },
@@ -3837,14 +3829,15 @@ test "movement coalescing stops at max batch count" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    const candidate = switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    const candidate = switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => |candidate| candidate,
         .blocked => return error.ExpectedCoalescingEligibility,
     };
 
     try std.testing.expectEqual(
         MovementCoalesceStopReason.max_batch,
-        ed.coalescingStopReasonForNext(candidate, ed.keys.move_down, max_movement_coalesce_batch_count).?,
+        ed.coalescingStopReasonForNext(candidate, down, max_movement_coalesce_batch_count).?,
     );
 }
 
@@ -3852,10 +3845,17 @@ test "movement coalescing rejects ambiguous non-simple movement binding" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    ed.config.keybindings.line_start = "down";
-    ed.refreshKeybindings();
+    try installTestKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = command_keybindings.keySpecial(.Down),
+            .command = .navigation_line_start,
+            .replace_default_sequence = command_keybindings.altKey(.Down),
+        },
+    });
 
-    switch (ed.movementCoalescingEligibilityBefore(ed.keys.move_down)) {
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    switch (ed.movementCoalescingEligibilityBefore(down)) {
         .eligible => return error.ExpectedCoalescingRejection,
         .blocked => {},
     }
@@ -3865,18 +3865,20 @@ test "pending key is processed before reading terminal input" {
     var ed = try makeFastMoveTestEditor(std.testing.allocator);
     defer ed.deinit();
 
-    ed.pending_key = ed.keys.move_up;
+    const up = defaultKeyForCommand(&ed, .normal, .navigation_move_up);
+    const down = defaultKeyForCommand(&ed, .normal, .navigation_move_down);
+    ed.pending_key = up;
     var reader = std.Io.Reader.fixed("\x1b[B");
     var metrics = perf.FrameMetrics{};
 
     const first = try ed.readInputKey(&reader, &metrics);
     try std.testing.expect(first.from_pending);
-    try std.testing.expect(first.event.eql(ed.keys.move_up));
+    try std.testing.expect(first.event.eql(up));
     try std.testing.expect(ed.pending_key == null);
 
     const second = try ed.readInputKey(&reader, &metrics);
     try std.testing.expect(!second.from_pending);
-    try std.testing.expect(second.event.eql(ed.keys.move_down));
+    try std.testing.expect(second.event.eql(down));
 }
 
 test "normal-mode hjkl movement can coalesce only when bound to movement" {
@@ -3889,8 +3891,14 @@ test "normal-mode hjkl movement can coalesce only when bound to movement" {
         .blocked => {},
     }
 
-    ed.config.keybindings.move_down = "j";
-    ed.refreshKeybindings();
+    try installTestKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = command_keybindings.keyChar('j'),
+            .command = .navigation_move_down,
+            .replace_default_sequence = command_keybindings.keySpecial(.Down),
+        },
+    });
     switch (ed.movementCoalescingEligibilityBefore(j)) {
         .eligible => |candidate| try std.testing.expectEqual(CoalescedMovement.down, candidate.movement),
         .blocked => return error.ExpectedCoalescingEligibility,
@@ -3944,8 +3952,20 @@ test "completion trigger keys resolve from normal and insert contexts" {
     try std.testing.expectEqual(commands.CommandId.completion_auto_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = '.' }).?);
     try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }).?);
 
-    ed.config.keybindings.completion_trigger = "ctrl+j";
-    ed.refreshKeybindings();
+    try installTestKeybindingOverrides(&ed, &.{
+        .{
+            .context = .normal,
+            .sequence = command_keybindings.ctrlChar('j'),
+            .command = .completion_trigger,
+            .replace_default_sequence = command_keybindings.ctrlChar(' '),
+        },
+        .{
+            .context = .insert,
+            .sequence = command_keybindings.ctrlChar('j'),
+            .command = .completion_trigger,
+            .replace_default_sequence = command_keybindings.ctrlChar(' '),
+        },
+    });
     try std.testing.expect(ed.completionCommandForEvent(.{ .key = .Char, .char = ' ', .ctrl = true }) == null);
     try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = 'j', .ctrl = true }).?);
 }
@@ -4013,6 +4033,20 @@ test "insert mode alt-up then character stays in bounds" {
 
 fn makeFastMoveTestEditor(allocator: std.mem.Allocator) !Editor {
     return makeFastMoveTestEditorWithLineCount(allocator, 4);
+}
+
+fn defaultKeyForCommand(ed: *const Editor, context: commands.CommandContext, id: commands.CommandId) terminal.KeyEvent {
+    return ed.keyEventForCommand(context, id) orelse unreachable;
+}
+
+fn installTestKeybindingOverrides(ed: *Editor, overrides: []const command_keybindings.UserBindingOverride) !void {
+    var diagnostics = command_keybindings.BuildDiagnostics{};
+    defer diagnostics.deinit(ed.allocator);
+    var registry = try command_keybindings.Registry.fromDefaultsAndConfig(ed.allocator, overrides, &.{}, &diagnostics);
+    errdefer registry.deinit(ed.allocator);
+    try std.testing.expect(!diagnostics.hasErrors());
+    ed.keybinding_registry.deinit(ed.allocator);
+    ed.keybinding_registry = registry;
 }
 
 fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count: usize) !Editor {
