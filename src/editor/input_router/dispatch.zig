@@ -69,6 +69,7 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .dashboard_new_file,
             .dashboard_open_file,
             .dashboard_open_folder,
+            .dashboard_create_workspace,
             .dashboard_settings,
             .dashboard_move_up,
             .dashboard_move_down,
@@ -745,7 +746,15 @@ fn openSaveConfirmation(ed: *editor.Editor) void {
 }
 
 fn openDashboardPicker(ed: *editor.Editor, mode: filesystem_picker.PickerMode) !void {
-    try ed.state.filesystem_picker.open(ed.allocator, ed.io, mode, pickerStartDir(ed));
+    try openDashboardPickerWithFolderPurpose(ed, mode, .open_folder);
+}
+
+fn openDashboardPickerWithFolderPurpose(
+    ed: *editor.Editor,
+    mode: filesystem_picker.PickerMode,
+    folder_purpose: filesystem_picker.FolderPickerPurpose,
+) !void {
+    try ed.state.filesystem_picker.openWithFolderPurpose(ed.allocator, ed.io, mode, folder_purpose, pickerStartDir(ed));
     ed.state.mode = .FilesystemPicker;
     ed.markDirty(.full);
 }
@@ -756,18 +765,40 @@ fn applyPickerResult(ed: *editor.Editor, result: filesystem_picker.PickerResult)
         .open_file => |path| {
             fs_ops.openFileInEditor(ed, path) catch |err| {
                 ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
+                ed.markDirty(.full);
                 return;
             };
         },
         .open_folder => |path| {
-            fs_ops.openFolderInEditor(ed, path) catch |err| {
-                ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
-                return;
-            };
+            switch (ed.state.filesystem_picker.folder_purpose) {
+                .open_folder => {
+                    fs_ops.openFolderInEditor(ed, path) catch |err| {
+                        ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
+                        ed.markDirty(.full);
+                        return;
+                    };
+                },
+                .create_workspace => {
+                    const create_result = fs_ops.createWorkspaceAndOpenFolder(ed, path) catch |err| {
+                        ed.state.filesystem_picker.error_message = fs_ops.workspaceCreateErrorMessage(err);
+                        ed.markDirty(.full);
+                        return;
+                    };
+                    switch (create_result) {
+                        .created => ed.state.status_message = fs_ops.workspaceCreateMessage(create_result),
+                        .already_exists, .invalid_path_exists => {
+                            ed.state.filesystem_picker.error_message = fs_ops.workspaceCreateMessage(create_result);
+                            ed.markDirty(.full);
+                            return;
+                        },
+                    }
+                },
+            }
         },
         .create_file => |path| {
             fs_ops.createFileAndOpen(ed, path, false) catch |err| {
                 ed.state.filesystem_picker.error_message = fs_ops.userMessage(err);
+                ed.markDirty(.full);
                 return;
             };
         },
@@ -781,6 +812,7 @@ fn executeDashboardSelectedAction(ed: *editor.Editor) !void {
         .NewFile => try openDashboardPicker(ed, .new_file_location),
         .OpenFile => try openDashboardPicker(ed, .open_file),
         .OpenFolder => try openDashboardPicker(ed, .open_folder),
+        .CreateWorkspace => try openDashboardPickerWithFolderPurpose(ed, .open_folder, .create_workspace),
         .Quit => ed.should_quit = true,
         else => {},
     }
@@ -797,6 +829,7 @@ fn executeDashboardActionCommand(ed: *editor.Editor, command: commands.CommandId
         .dashboard_new_file => try openDashboardPicker(ed, .new_file_location),
         .dashboard_open_file => try openDashboardPicker(ed, .open_file),
         .dashboard_open_folder => try openDashboardPicker(ed, .open_folder),
+        .dashboard_create_workspace => try openDashboardPickerWithFolderPurpose(ed, .open_folder, .create_workspace),
         .dashboard_settings => {},
         .app_quit_flamingo => ed.should_quit = true,
         .dashboard_move_up => ed.state.dash.moveUp(),
@@ -839,6 +872,8 @@ fn executePickerActionCommand(ed: *editor.Editor, command: commands.CommandId) !
         .picker_select_folder => {
             if (try ed.state.filesystem_picker.selectFolder(ed.allocator)) |result| {
                 try applyPickerResult(ed, result);
+            } else {
+                ed.markDirty(.full);
             }
         },
         .picker_select_current_folder => {
@@ -1308,6 +1343,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
     }
+    if (ed.state.status_message != null) {
+        ed.state.status_message = null;
+    }
 
     if (ed.state.mode == .Help) {
         handleHelpInput(ed, event);
@@ -1363,8 +1401,8 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
             }
             ed.closeTab();
+            return;
         }
-        return;
     }
 
     if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null and

@@ -15,6 +15,13 @@ pub fn pickerTitle(mode: filesystem_picker.PickerMode, phase: filesystem_picker.
     };
 }
 
+fn pickerTitleForPicker(picker: *const filesystem_picker.FilesystemPicker) []const u8 {
+    if (picker.mode == .open_folder and picker.folder_purpose == .create_workspace) {
+        return " Create Workspace ";
+    }
+    return pickerTitle(picker.mode, picker.phase);
+}
+
 pub fn pickerFooter(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
     if (mode == .new_file_location and phase == .entering_name) {
         return "Enter create  Backspace edit  Esc cancel";
@@ -33,6 +40,13 @@ pub fn pickerPrompt(mode: filesystem_picker.PickerMode, phase: filesystem_picker
         .open_folder => "Select a directory...",
         .new_file_location => "Choose a location...",
     };
+}
+
+fn pickerPromptForPicker(picker: *const filesystem_picker.FilesystemPicker) []const u8 {
+    if (picker.mode == .open_folder and picker.folder_purpose == .create_workspace) {
+        return "Select workspace folder...";
+    }
+    return pickerPrompt(picker.mode, picker.phase);
 }
 
 pub fn pickerFooterCompact(width: usize) bool {
@@ -155,7 +169,7 @@ pub fn renderVirtualFilesystemPickerPopup(editor: anytype) void {
     const picker = &editor.state.filesystem_picker;
     const geom = filesystemPickerGeometry(editor, picker.mode, picker.phase, picker.error_message != null) orelse return;
     const inner_end = geom.col + geom.width - 1;
-    const title = pickerTitle(picker.mode, picker.phase);
+    const title = pickerTitleForPicker(picker);
     popup.drawPickerTop(&editor.renderer.screen, geom, title, .command_popup_border);
 
     var row = geom.row + 1;
@@ -173,7 +187,7 @@ pub fn renderVirtualFilesystemPickerPopup(editor: anytype) void {
     };
     popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, prompt_icon, .command_popup_prompt, false);
     popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, " ", .command_popup, false);
-    popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, pickerPrompt(picker.mode, picker.phase), .command_popup_prompt, false);
+    popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, pickerPromptForPicker(picker), .command_popup_prompt, false);
     row += 1;
 
     popup.drawPickerSeparator(&editor.renderer.screen, row, geom.col, geom.width, .command_popup_border);

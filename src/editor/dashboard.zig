@@ -6,13 +6,14 @@ pub const DashboardAction = enum {
     NewFile,
     OpenFile,
     OpenFolder,
+    CreateWorkspace,
     Settings,
     Quit,
 };
 
 pub const Dashboard = struct {
     selected_index: usize = 0,
-    const options = [_][]const u8{ "New File", "Open File", "Open Folder", "Settings", "Quit" };
+    const options = [_][]const u8{ "New File", "Open File", "Open Folder", "Create Workspace", "Settings", "Quit" };
 
     const logo =
         \\   ___ _               _                 
@@ -44,8 +45,9 @@ pub const Dashboard = struct {
             0 => .NewFile,
             1 => .OpenFile,
             2 => .OpenFolder,
-            3 => .Settings,
-            4 => .Quit,
+            3 => .CreateWorkspace,
+            4 => .Settings,
+            5 => .Quit,
             else => .None,
         };
     }

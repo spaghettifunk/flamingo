@@ -15,6 +15,7 @@ const tab_mod = @import("../model/tab.zig");
 const normal_sequence = @import("../input_router/normal_sequence.zig");
 const jump_history_mod = @import("jump_history.zig");
 const git_status = @import("../git_status.zig");
+const workspace_mod = @import("../workspace.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -43,7 +44,9 @@ pub const EditorState = struct {
     prompt_popup: prompt_popup.PromptPopup = .{},
     save_confirmation: save_confirmation.SaveConfirmationPopup = .{},
     error_message: ?[]const u8 = null,
+    status_message: ?[]const u8 = null,
     project_root: ?[]u8 = null,
+    workspace: workspace_mod.WorkspaceState = .{},
     tree: ?explorer.Explorer = null,
     explorer_visible: bool = false,
     explorer_focused: bool = false,
@@ -91,6 +94,7 @@ pub const EditorState = struct {
             allocator.free(root);
             self.project_root = null;
         }
+        self.workspace.deinit(allocator);
         if (self.search_system) |*s| {
             s.deinit();
             self.search_system = null;
@@ -199,6 +203,14 @@ pub const EditorState = struct {
         const owned = try allocator.dupe(u8, root_path);
         if (self.project_root) |old| allocator.free(old);
         self.project_root = owned;
+    }
+
+    pub fn setWorkspaceRoot(self: *EditorState, allocator: std.mem.Allocator, root_path: []const u8) !void {
+        try self.workspace.setActive(allocator, root_path);
+    }
+
+    pub fn clearWorkspace(self: *EditorState, allocator: std.mem.Allocator) void {
+        self.workspace.clear(allocator);
     }
 };
 

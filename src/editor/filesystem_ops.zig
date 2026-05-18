@@ -2,6 +2,7 @@ const std = @import("std");
 const editor = @import("editor.zig");
 const buffer = @import("model/buffer.zig");
 const explorer = @import("explorer.zig");
+const workspace = @import("workspace.zig");
 
 pub const PathKind = enum { file, directory, other };
 
@@ -17,6 +18,8 @@ pub const FsError = error{
     FileIsOpen,
     DirectoryNotEmpty,
 };
+
+pub const WorkspaceCreateResult = workspace.CreateWorkspaceResult;
 
 fn containsWhitespace(path: []const u8) bool {
     for (path) |ch| {
@@ -231,6 +234,57 @@ pub fn openFolderInEditor(ed: *editor.Editor, path: []const u8) !void {
     ed.state.explorer_visible = true;
     ed.state.explorer_focused = true;
     ed.state.mode = .Normal;
+    try refreshWorkspaceState(ed, root);
+}
+
+pub fn createWorkspaceAndOpenFolder(ed: *editor.Editor, path: []const u8) !WorkspaceCreateResult {
+    const stat = std.Io.Dir.cwd().statFile(ed.io, path, .{}) catch return error.FileNotFound;
+    if (stat.kind != .directory) return error.ExpectedDirectory;
+
+    const root = realPathOrNull(ed.allocator, ed.io, path) orelse try ed.allocator.dupe(u8, path);
+    defer ed.allocator.free(root);
+
+    const result = try workspace.createWorkspace(ed.allocator, ed.io, root);
+    if (result == .created) {
+        try openFolderInEditor(ed, root);
+    }
+    return result;
+}
+
+pub fn workspaceCreateMessage(result: WorkspaceCreateResult) []const u8 {
+    return workspace.createResultMessage(result);
+}
+
+pub fn workspaceCreateErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.FileNotFound => "Cannot create workspace: folder does not exist",
+        error.ExpectedDirectory, error.NotDir => "Cannot create workspace: selected path is not a directory",
+        error.AccessDenied, error.PermissionDenied => "Cannot create workspace: permission denied",
+        else => "Cannot create workspace: filesystem operation failed",
+    };
+}
+
+fn refreshWorkspaceState(ed: *editor.Editor, root: []const u8) !void {
+    const status = workspace.detectWorkspace(ed.allocator, ed.io, root) catch {
+        ed.state.clearWorkspace(ed.allocator);
+        ed.state.status_message = "Could not inspect workspace marker";
+        return;
+    };
+
+    switch (status) {
+        .valid => {
+            try ed.state.setWorkspaceRoot(ed.allocator, root);
+            ed.state.status_message = null;
+        },
+        .none => {
+            ed.state.clearWorkspace(ed.allocator);
+            ed.state.status_message = null;
+        },
+        .invalid_path_exists => {
+            ed.state.clearWorkspace(ed.allocator);
+            ed.state.status_message = ".flamingo exists and is not a directory";
+        },
+    }
 }
 
 pub fn refreshExplorerBestEffort(ed: *editor.Editor, reveal_path: ?[]const u8) !void {
@@ -250,6 +304,7 @@ pub fn userMessage(err: anyerror) []const u8 {
         error.ExpectedDirectory => "Expected a directory",
         error.FileIsOpen => "File is open; close it before deleting",
         error.DirectoryNotEmpty => "Directory is not empty",
+        error.NotDir => "Expected a directory",
         error.AccessDenied, error.PermissionDenied => "Permission denied",
         else => "Filesystem operation failed",
     };

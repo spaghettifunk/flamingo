@@ -52,6 +52,9 @@ pub fn buildStatusText(editor: anytype, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
     if (editor.state.error_message) |err_msg| {
         return try std.fmt.bufPrint(buf, "{s}", .{err_msg});
     }
+    if (editor.state.status_message) |msg| {
+        return try std.fmt.bufPrint(buf, "{s}", .{msg});
+    }
 
     const mode_str = switch (editor.state.mode) {
         .Command => "COMMAND",
@@ -252,7 +255,7 @@ pub fn statusScrollPercent(row: usize, total_lines: usize) usize {
 }
 
 pub fn renderVirtualStatus(editor: anytype, ctx: anytype, row: usize) void {
-    if (editor.height == 0 or (editor.state.mode == .Dashboard and editor.state.error_message == null)) return;
+    if (editor.height == 0 or (editor.state.mode == .Dashboard and editor.state.error_message == null and editor.state.status_message == null)) return;
     editor.renderer.screen.fillRow(row, ' ', .status_bg);
 
     var col: usize = 0;
@@ -283,6 +286,13 @@ pub fn writeVirtualStatusLeft(editor: anytype, row: usize, col: *usize, tab: ?*T
         writeVirtualStatusText(editor, row, col, "", .status_sep_error);
         writeVirtualStatusText(editor, row, col, " ", .status_file);
         writeVirtualStatusText(editor, row, col, err, .status_file);
+        return;
+    }
+    if (editor.state.status_message) |msg| {
+        writeVirtualStatusText(editor, row, col, " STATUS ", .status_mode_normal);
+        writeVirtualStatusText(editor, row, col, "", .status_sep_normal);
+        writeVirtualStatusText(editor, row, col, " ", .status_file);
+        writeVirtualStatusText(editor, row, col, msg, .status_file);
         return;
     }
     if (editor.state.mode == .OpenFilePrompt) {

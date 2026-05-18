@@ -100,13 +100,26 @@ test "Dashboard → filesystem picker via Enter on 'New File'" {
     try std.testing.expectEqual(@as(usize, 0), ed.state.tabs.items.len);
 }
 
+test "Dashboard: Create Workspace opens folder picker with workspace purpose" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('w')});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.FilesystemPicker, ed.state.mode);
+    try std.testing.expect(ed.state.filesystem_picker.visible);
+    try std.testing.expectEqual(.open_folder, ed.state.filesystem_picker.mode);
+    try std.testing.expectEqual(.create_workspace, ed.state.filesystem_picker.folder_purpose);
+}
+
 test "Dashboard: Up Down and configured movement key change selection" {
     const a = std.testing.allocator;
     var ed = try th.makeEmptyEditor(a);
     defer ed.deinit();
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Up)});
-    try std.testing.expectEqual(@as(usize, 4), ed.state.dash.selected_index);
+    try std.testing.expectEqual(@as(usize, 5), ed.state.dash.selected_index);
 
     try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
     try std.testing.expectEqual(@as(usize, 0), ed.state.dash.selected_index);
@@ -212,6 +225,31 @@ test "FilesystemPicker: open-folder dot selects current folder" {
     try std.testing.expect(ed.state.explorer_visible);
     try std.testing.expect(ed.state.explorer_focused);
     try std.testing.expect(ed.state.project_root != null);
+}
+
+test "FilesystemPicker: open-folder detects workspace marker" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".flamingo");
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root_path = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+    try ed.state.filesystem_picker.open(a, io, .open_folder, root_path);
+    ed.state.mode = .FilesystemPicker;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('.')});
+
+    try std.testing.expect(ed.state.workspace.active);
+    try std.testing.expect(ed.state.workspace.root_path != null);
+    try std.testing.expectEqualStrings(ed.state.project_root.?, ed.state.workspace.root_path.?);
 }
 
 test "OpenFilePrompt: typed path backspace submit and cancel use prompt actions" {

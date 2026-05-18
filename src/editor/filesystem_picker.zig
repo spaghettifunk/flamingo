@@ -12,6 +12,11 @@ pub const PickerMode = enum {
     new_file_location,
 };
 
+pub const FolderPickerPurpose = enum {
+    open_folder,
+    create_workspace,
+};
+
 pub const PickerPhase = enum {
     browsing,
     entering_name,
@@ -70,6 +75,7 @@ const SortContext = struct {
 pub const FilesystemPicker = struct {
     visible: bool = false,
     mode: PickerMode = .open_file,
+    folder_purpose: FolderPickerPurpose = .open_folder,
     phase: PickerPhase = .browsing,
     cwd: []u8 = &.{},
     entries: std.ArrayListUnmanaged(PickerEntry) = .empty,
@@ -87,9 +93,21 @@ pub const FilesystemPicker = struct {
     }
 
     pub fn open(self: *FilesystemPicker, allocator: std.mem.Allocator, io: std.Io, mode: PickerMode, start_dir: []const u8) !void {
+        try self.openWithFolderPurpose(allocator, io, mode, .open_folder, start_dir);
+    }
+
+    pub fn openWithFolderPurpose(
+        self: *FilesystemPicker,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        mode: PickerMode,
+        folder_purpose: FolderPickerPurpose,
+        start_dir: []const u8,
+    ) !void {
         self.close(allocator);
         self.visible = true;
         self.mode = mode;
+        self.folder_purpose = if (mode == .open_folder) folder_purpose else .open_folder;
         self.phase = .browsing;
         errdefer self.close(allocator);
         self.cwd = realPathOwned(allocator, io, start_dir) catch try allocator.dupe(u8, start_dir);
@@ -100,6 +118,7 @@ pub const FilesystemPicker = struct {
         self.visible = false;
         self.phase = .browsing;
         self.mode = .open_file;
+        self.folder_purpose = .open_folder;
         self.clearEntries(allocator);
         self.input.clearRetainingCapacity();
         self.selected_index = 0;
@@ -373,4 +392,29 @@ test "open folder mode can select current directory explicitly" {
         .open_folder => |path| try std.testing.expectEqualStrings(root, path),
         else => return error.UnexpectedResult,
     }
+}
+
+test "open folder mode tracks create workspace purpose" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+
+    var picker = FilesystemPicker{};
+    defer picker.deinit(allocator);
+    try picker.openWithFolderPurpose(allocator, io, .open_folder, .create_workspace, root);
+
+    try std.testing.expectEqual(FolderPickerPurpose.create_workspace, picker.folder_purpose);
+    const result = (try picker.selectCurrentFolder(allocator)).?;
+    defer result.deinit(allocator);
+    switch (result) {
+        .open_folder => |path| try std.testing.expectEqualStrings(root, path),
+        else => return error.UnexpectedResult,
+    }
+
+    picker.close(allocator);
+    try std.testing.expectEqual(FolderPickerPurpose.open_folder, picker.folder_purpose);
 }
