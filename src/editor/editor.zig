@@ -15,15 +15,13 @@ const syntax = @import("syntax.zig");
 const editor_syntax = @import("syntax_editor.zig");
 const perf = @import("../perf/perf.zig");
 const completion_menu = @import("renderer/completion_menu.zig");
-const line_render = @import("renderer/line_render.zig");
+const editor_render = @import("renderer/editor_render.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
 const picker_help_popups = @import("renderer/picker_help_popups.zig");
 const popup = @import("renderer/popup.zig");
-const prompt_save_popups = @import("renderer/prompt_save_popups.zig");
 const search_popups = @import("renderer/search_popups.zig");
 const statusline = @import("renderer/statusline.zig");
 const tabbar = @import("renderer/tabbar.zig");
-const terminal_panel_view = @import("renderer/terminal_panel_view.zig");
 const logger = @import("../logger.zig");
 const tab_mod = @import("model/tab.zig");
 const state_mod = @import("state/state.zig");
@@ -34,8 +32,6 @@ const runtime_background = @import("runtime/background.zig");
 const runtime_loop = @import("runtime/loop.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
-const filesystem_picker = @import("filesystem_picker.zig");
-const prompt_popup = @import("prompt_popup.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
 
 pub const EditorMode = state_mod.EditorMode;
@@ -55,28 +51,10 @@ const RuntimeKeyDispatch = runtime_loop.RuntimeKeyDispatch;
 pub const HorizontalScrollCommand = viewport_mod.HorizontalScrollCommand;
 
 const TabBarLayout = tabbar.TabBarLayout;
-const TabLabel = tabbar.TabLabel;
-const RightStatusLayout = statusline.RightStatusLayout;
 
-const RenderContext = struct {
-    tab: ?*Tab,
-    buf_start_col: usize,
-    buf_width: usize,
-    gutter_width: usize,
-    visible_rows: usize,
-};
-
-const CommandPopupGeometry = popup.CommandPopupGeometry;
 const FilesystemPickerGeometry = popup.FilesystemPickerGeometry;
 
 const GlobalSearchRenderRow = search_popups.GlobalSearchRenderRow;
-
-const SelectionRange = line_render.SelectionRange;
-const LineRenderState = line_render.LineRenderState;
-
-const TextSnapshot = editor_syntax.TextSnapshot;
-
-const KeypressProfilePosition = key_profile.KeypressProfilePosition;
 
 pub const Editor = struct {
     config: config.Config,
@@ -294,14 +272,6 @@ pub const Editor = struct {
         return movement_coalesce.movementCoalescingEligibilityBefore(self, event);
     }
 
-    fn coalescedMovementForEvent(self: *Editor, event: terminal.KeyEvent) ?CoalescedMovement {
-        return movement_coalesce.coalescedMovementForEvent(self, event);
-    }
-
-    fn matchesNonSimpleMovement(self: *Editor, event: terminal.KeyEvent) bool {
-        return movement_coalesce.matchesNonSimpleMovement(self, event);
-    }
-
     fn coalescingStopReasonAfterMovement(self: *Editor, snapshot: MovementCoalesceSnapshot) ?MovementCoalesceStopReason {
         return movement_coalesce.coalescingStopReasonAfterMovement(self, snapshot);
     }
@@ -315,10 +285,6 @@ pub const Editor = struct {
         return movement_coalesce.coalescingStopReasonForNext(self, candidate, event, batch_count);
     }
 
-    fn hasActiveSelection(tab: *const Tab) bool {
-        return movement_coalesce.hasActiveSelection(tab);
-    }
-
     fn processBackgroundEvents(self: *Editor, max_fifo_events: usize) !void {
         return runtime_background.processBackgroundEvents(self, max_fifo_events);
     }
@@ -327,42 +293,8 @@ pub const Editor = struct {
         runtime_background.updateStatusClockDirty(self);
     }
 
-    fn handleLspEvent(self: *Editor, plugin_name: []const u8, message: []const u8) !void {
-        return editor_lsp.handleLspEvent(self, plugin_name, message);
-    }
-
-    fn handleDefinitionResult(self: *Editor, plugin_name: []const u8, request_id: usize, result: std.json.Value) !void {
-        return editor_lsp.handleDefinitionResult(self, plugin_name, request_id, result);
-    }
-
-    fn jumpToFileLocation(
-        self: *Editor,
-        path: []const u8,
-        row: usize,
-        col: usize,
-        source: ?jump_history.JumpLocation,
-    ) !bool {
-        return editor_lsp.jumpToFileLocation(self, path, row, col, source);
-    }
-
-    fn findOpenTabIndexByPath(self: *Editor, path: []const u8) ?usize {
-        return editor_lsp.findOpenTabIndexByPath(self, path);
-    }
-
-    fn realPathOrNull(self: *Editor, path: []const u8) ?[]u8 {
-        return editor_lsp.realPathOrNull(self, path);
-    }
-
-    fn clampedLocationForTab(self: *Editor, tab: *const Tab, row: usize, col: usize) jump_history.JumpLocation {
-        return editor_lsp.clampedLocationForTab(self, tab, row, col);
-    }
-
     pub fn noteKeypressMovementHandled(self: *Editor, handled: bool) void {
         key_profile.noteKeypressMovementHandled(self, handled);
-    }
-
-    fn captureKeypressProfilePosition(self: *Editor) KeypressProfilePosition {
-        return key_profile.captureKeypressProfilePosition(self);
     }
 
     fn initKeypressTrace(self: *Editor, event: terminal.KeyEvent, key_name: []const u8) perf.KeypressTrace {
@@ -371,14 +303,6 @@ pub const Editor = struct {
 
     fn updateKeypressTraceAfterDispatch(self: *Editor, trace: *perf.KeypressTrace) void {
         key_profile.updateKeypressTraceAfterDispatch(self, trace);
-    }
-
-    fn signedDelta(before: usize, after: usize) i64 {
-        return key_profile.signedDelta(before, after);
-    }
-
-    fn keypressDirtyState(self: *const Editor) perf.KeypressDirtyState {
-        return key_profile.keypressDirtyState(self);
     }
 
     fn formatKeyName(event: terminal.KeyEvent, buf: *[32]u8) []const u8 {
@@ -434,92 +358,12 @@ pub const Editor = struct {
         return viewport_mod.editorVisibleRows(self);
     }
 
-    fn terminalCursorScreenPosition(self: *Editor) terminal_panel_view.TerminalCursorScreenPosition {
-        return terminal_panel_view.terminalCursorScreenPosition(self);
-    }
-
-    fn buildRenderContext(self: *Editor, status_buf: *[160]u8) RenderContext {
-        const tab = self.currentTab();
-        const viewport = self.bufferViewportGeometry();
-        const gutter_width: usize = if (tab) |t|
-            self.calculateGutterWidth(t.buf.lines.items.len)
-        else
-            0;
-        const visible_rows = self.editorVisibleRows();
-
-        _ = status_buf;
-
-        return .{
-            .tab = tab,
-            .buf_start_col = viewport.start_col,
-            .buf_width = viewport.width,
-            .gutter_width = gutter_width,
-            .visible_rows = visible_rows,
-        };
-    }
-
     fn buildStatusText(self: *Editor, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
         return statusline.buildStatusText(self, tab, buf);
     }
 
-    fn statusModeLabel(self: *const Editor) []const u8 {
-        return statusline.statusModeLabel(self);
-    }
-
     fn statusModeStyle(self: *const Editor) render_mod.RenderStyle {
         return statusline.statusModeStyle(self);
-    }
-
-    fn statusModeSepStyle(self: *const Editor) render_mod.RenderStyle {
-        return statusline.statusModeSepStyle(self);
-    }
-
-    fn fileIconForName(name: []const u8) []const u8 {
-        return statusline.fileIconForName(name);
-    }
-
-    fn statusFilePath(self: *const Editor, tab: ?*Tab) []const u8 {
-        return statusline.statusFilePath(self, tab);
-    }
-
-    fn statusContext(self: *const Editor) ?[]const u8 {
-        return statusline.statusContext(self);
-    }
-
-    fn currentMinute(self: *const Editor) i64 {
-        return statusline.currentMinute(self);
-    }
-
-    fn clockText(self: *const Editor, buf: *[16]u8) []const u8 {
-        return statusline.clockText(self, buf);
-    }
-
-    fn cacheRightStatusLayout(self: *Editor, right: RightStatusLayout, text_start_terminal_col: usize, text_available: usize) void {
-        statusline.cacheRightStatusLayout(self, right, text_start_terminal_col, text_available);
-    }
-
-    fn buildRightStatus(self: *Editor, tab: ?*Tab, buf: *[192]u8) ![]const u8 {
-        return statusline.buildRightStatus(self, tab, buf);
-    }
-
-    fn buildRightStatusLayout(self: *Editor, tab: ?*Tab, buf: *[192]u8) !RightStatusLayout {
-        return statusline.buildRightStatusLayout(self, tab, buf);
-    }
-
-    fn appendStatusText(buf: *[192]u8, idx: *usize, cells: *usize, text: []const u8) !void {
-        return statusline.appendStatusText(buf, idx, cells, text);
-    }
-
-    fn appendStatusFmt(buf: *[192]u8, idx: *usize, cells: *usize, comptime fmt: []const u8, args: anytype) !void {
-        return statusline.appendStatusFmt(buf, idx, cells, fmt, args);
-    }
-
-    fn appendStatusFieldFmt(buf: *[192]u8, idx: *usize, cells: *usize, width: usize, comptime fmt: []const u8, args: anytype) !void {
-        return statusline.appendStatusFieldFmt(buf, idx, cells, width, fmt, args);
-    }
-
-    fn statusScrollPercent(row: usize, total_lines: usize) usize {
-        return statusline.statusScrollPercent(row, total_lines);
     }
 
     fn resolveDefaultContextCommand(self: *const Editor, context: commands.CommandContext, event: terminal.KeyEvent) ?commands.CommandId {
@@ -616,74 +460,12 @@ pub const Editor = struct {
         return editor_syntax.handleSyntaxParseResult(self, result);
     }
 
-    fn findTabBySyntaxBufferId(self: *Editor, buffer_id: u64) ?*Tab {
-        return editor_syntax.findTabBySyntaxBufferId(self, buffer_id);
-    }
-
-    fn prepareSyntaxForViewport(self: *Editor, tab: *Tab, first_line: usize, last_line: usize, margin: usize) !void {
-        return editor_syntax.prepareSyntaxForViewport(self, tab, first_line, last_line, margin);
-    }
-
-    fn takeTextSnapshot(self: *Editor, tab: *const Tab) !TextSnapshot {
-        return editor_syntax.takeTextSnapshot(self, tab);
-    }
-
-    fn buildLineRenderState(
-        self: *Editor,
-        tab: *Tab,
-        buffer_line_idx: usize,
-        content_width: usize,
-        selection_storage: *[64]SelectionRange,
-    ) LineRenderState {
-        return line_render.buildLineRenderState(self, tab, buffer_line_idx, content_width, selection_storage);
-    }
-
-    fn buildSelectionRanges(tab: *const Tab, row: usize, storage: *[64]SelectionRange) []const SelectionRange {
-        return line_render.buildSelectionRanges(tab, row, storage);
-    }
-
-    fn selectionRangeForRow(cursor: Cursor, row: usize) ?SelectionRange {
-        return line_render.selectionRangeForRow(cursor, row);
-    }
-
-    fn queueSyntaxParseForCurrentTab(self: *Editor) !void {
-        return editor_syntax.queueSyntaxParseForCurrentTab(self);
-    }
-
     fn notePendingLspChange(self: *Editor) void {
         editor_lsp.notePendingLspChange(self);
     }
 
-    fn flushPendingLspChanges(self: *Editor, force: bool) !void {
-        return editor_lsp.flushPendingLspChanges(self, force);
-    }
-
-    fn textViewportWidthForTab(self: *const Editor, tab: *const Tab) usize {
-        return viewport_mod.textViewportWidthForTab(self, tab);
-    }
-
     fn horizontalScrollForCursor(cursor_col: usize, scroll_col: usize, visible_width: usize) usize {
         return viewport_mod.horizontalScrollForCursor(cursor_col, scroll_col, visible_width);
-    }
-
-    fn visibleCursorCol(cursor_col: usize, scroll_col: usize, visible_width: usize) usize {
-        return viewport_mod.visibleCursorCol(cursor_col, scroll_col, visible_width);
-    }
-
-    fn maxVisibleLineLen(tab: *const Tab, visible_rows: usize) usize {
-        return viewport_mod.maxVisibleLineLen(tab, visible_rows);
-    }
-
-    fn visibleLineOffset(tab: *const Tab, start_line: usize, target_line: usize, max_rows: usize) ?usize {
-        return viewport_mod.visibleLineOffset(tab, start_line, target_line, max_rows);
-    }
-
-    fn visibleViewportEndLine(tab: *const Tab, start_line: usize, row_count: usize) usize {
-        return viewport_mod.visibleViewportEndLine(tab, start_line, row_count);
-    }
-
-    fn clampHorizontalScrollToVisibleLines(self: *Editor, tab: *Tab, visible_width: usize) void {
-        viewport_mod.clampHorizontalScrollToVisibleLines(self, tab, visible_width);
     }
 
     pub fn applyHorizontalScrollCommand(self: *Editor, command: HorizontalScrollCommand) void {
@@ -695,24 +477,12 @@ pub const Editor = struct {
         viewport_mod.clampScroll(self);
     }
 
-    fn getTabLabel(tabs: []const Tab, tab: *const Tab) TabLabel {
-        return tabbar.getTabLabel(tabs, tab);
-    }
-
     fn tabLabelWidth(tabs: []const Tab, tab: *const Tab) usize {
         return tabbar.tabLabelWidth(tabs, tab);
     }
 
-    fn totalTabBarWidth(tabs: []const Tab) usize {
-        return tabbar.totalTabBarWidth(tabs);
-    }
-
     fn tabStartCol(tabs: []const Tab, index: usize) usize {
         return tabbar.tabStartCol(tabs, index);
-    }
-
-    fn clampTabBarScroll(scroll_col: *usize, total_width: usize, available_width: usize) void {
-        tabbar.clampTabBarScroll(scroll_col, total_width, available_width);
     }
 
     fn ensureActiveTabVisible(tabs: []const Tab, active_index: usize, available_width: usize, scroll_col: *usize) void {
@@ -721,35 +491,6 @@ pub const Editor = struct {
 
     fn prepareTabBarLayout(self: *Editor, width: usize) TabBarLayout {
         return tabbar.prepareTabBarLayout(self.state.tabs.items, self.state.active_tab_index, width, &self.state.tab_bar_scroll_col);
-    }
-
-    fn writeVirtualClippedText(self: *Editor, row: usize, dest_base_col: usize, text_start_col: usize, viewport_start: usize, viewport_end: usize, text: []const u8, style: render_mod.RenderStyle) void {
-        tabbar.writeVirtualClippedText(&self.renderer.screen, row, dest_base_col, text_start_col, viewport_start, viewport_end, text, style);
-    }
-
-    fn writeVirtualClippedTabLabel(self: *Editor, row: usize, dest_base_col: usize, label_start_col: usize, viewport_start: usize, viewport_end: usize, tab: *const Tab, active: bool) void {
-        tabbar.writeVirtualClippedTabLabel(&self.renderer.screen, self.state.tabs.items, row, dest_base_col, label_start_col, viewport_start, viewport_end, tab, active);
-    }
-
-    fn popupGeometry(self: *const Editor, visible: bool, item_count: usize, show_items: bool, max_visible_items: usize) ?CommandPopupGeometry {
-        const viewport = self.bufferViewportGeometry();
-        return popup.popupGeometry(
-            self.height,
-            viewport.start_col,
-            viewport.width,
-            visible,
-            item_count,
-            show_items,
-            max_visible_items,
-        );
-    }
-
-    fn commandPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
-        return search_popups.commandPopupGeometry(self);
-    }
-
-    fn globalSearchPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
-        return search_popups.globalSearchPopupGeometry(self);
     }
 
     fn isSameContentDisplayPath(a: global_search.GlobalSearchResult, b: global_search.GlobalSearchResult) bool {
@@ -768,56 +509,12 @@ pub const Editor = struct {
         return search_popups.selectedGlobalSearchRenderRow(results, selected_index);
     }
 
-    fn adjustGlobalSearchRenderScroll(self: *Editor, view_height: usize) void {
-        search_popups.adjustGlobalSearchRenderScroll(self, view_height);
-    }
-
-    fn pickerTitle(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
-        return picker_help_popups.pickerTitle(mode, phase);
-    }
-
-    fn pickerFooter(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
-        return picker_help_popups.pickerFooter(mode, phase);
-    }
-
-    fn pickerPrompt(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase) []const u8 {
-        return picker_help_popups.pickerPrompt(mode, phase);
-    }
-
-    fn pickerFooterCompact(width: usize) bool {
-        return picker_help_popups.pickerFooterCompact(width);
-    }
-
-    fn pickerFooterLineOne(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, compact: bool) []const u8 {
-        return picker_help_popups.pickerFooterLineOne(mode, phase, compact);
-    }
-
-    fn pickerFooterLineTwo(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, compact: bool) ?[]const u8 {
-        return picker_help_popups.pickerFooterLineTwo(mode, phase, compact);
-    }
-
-    fn pickerFooterLineCount(mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, width: usize) usize {
-        return picker_help_popups.pickerFooterLineCount(mode, phase, width);
-    }
-
-    fn filesystemPickerGeometry(self: *const Editor, mode: filesystem_picker.PickerMode, phase: filesystem_picker.PickerPhase, has_error: bool) ?FilesystemPickerGeometry {
-        return picker_help_popups.filesystemPickerGeometry(self, mode, phase, has_error);
-    }
-
     fn helpPopupGeometry(self: *const Editor) ?FilesystemPickerGeometry {
         return picker_help_popups.helpPopupGeometry(self);
     }
 
     pub fn helpPopupBodyRows(self: *const Editor) usize {
         return picker_help_popups.helpPopupBodyRows(self);
-    }
-
-    fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
-        return prompt_save_popups.promptFooter(kind);
-    }
-
-    fn terminalCellStyle(cell: terminal_panel_mod.TerminalCell) render_mod.RenderStyle {
-        return terminal_panel_view.terminalCellStyle(cell);
     }
 
     /// Calculates total gutter width: 1 space + num_digits + 1 space separator.
@@ -827,283 +524,7 @@ pub const Editor = struct {
     }
 
     pub fn renderVirtual(self: *Editor, writer: anytype, metrics: *perf.FrameMetrics) !void {
-        if (try self.renderer.screen.resize(self.width, self.height)) {
-            self.renderer.screen_renderer.invalidate(.full);
-        }
-        self.renderer.screen.clear();
-
-        var status_buf: [160]u8 = undefined;
-        const ctx = self.buildRenderContext(&status_buf);
-
-        if (self.state.mode == .Dashboard or self.state.mode == .OpenFilePrompt or self.state.mode == .FilesystemPicker or
-            (self.state.mode == .Help and self.state.tabs.items.len == 0))
-        {
-            self.state.dash.renderToScreen(&self.renderer.screen);
-        } else {
-            self.renderVirtualExplorer();
-
-            const tabs_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
-            self.renderVirtualTabs(ctx);
-            if (self.active_keypress_trace) |trace| trace.tabs_ns += perf.elapsedNs(tabs_start);
-
-            if (ctx.tab) |t| {
-                t.scroll_row = t.buf.clampToVisibleLine(t.scroll_row);
-                const highlight_start = perf.nowNs();
-                const syntax_end = visibleViewportEndLine(t, t.scroll_row, ctx.visible_rows + 20);
-                self.prepareSyntaxForViewport(t, t.scroll_row, syntax_end, 20) catch {
-                    if (self.active_keypress_trace) |trace| trace.syntax_cache = syntax.ViewportCacheStatus.unknown.name();
-                };
-                const highlight_elapsed = perf.elapsedNs(highlight_start);
-                metrics.add(.highlight_viewport, highlight_elapsed);
-                if (self.active_keypress_trace) |trace| trace.highlight_ns += highlight_elapsed;
-
-                const visible_lines_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
-                var buffer_line_idx = t.scroll_row;
-                for (0..ctx.visible_rows) |screen_row| {
-                    const row = screen_row + 2;
-                    if (buffer_line_idx >= t.buf.lines.items.len) break;
-                    self.renderVirtualLine(t, buffer_line_idx, row, ctx);
-                    const next = t.buf.nextVisibleLine(buffer_line_idx);
-                    if (next == buffer_line_idx) break;
-                    buffer_line_idx = next;
-                }
-                if (self.active_keypress_trace) |trace| trace.visible_lines_ns += perf.elapsedNs(visible_lines_start);
-            }
-        }
-
-        const popup_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
-        self.renderVirtualCommandPopup();
-        self.renderVirtualGlobalSearchPopup();
-        self.renderVirtualFilesystemPickerPopup();
-        self.renderVirtualPromptPopup();
-        self.renderVirtualSaveConfirmationPopup();
-        self.renderVirtualHelpPopup();
-        self.renderVirtualCompletionMenu();
-        if (self.active_keypress_trace) |trace| trace.popup_ns += perf.elapsedNs(popup_start);
-        const status_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
-        self.renderVirtualStatus(ctx);
-        if (self.active_keypress_trace) |trace| trace.status_ns += perf.elapsedNs(status_start);
-        self.renderVirtualTerminalPanel();
-        self.setVirtualCursor(ctx);
-        const emit_start = if (self.active_keypress_trace != null) perf.nowNs() else 0;
-        const emit_bytes = try self.renderer.screen_renderer.emit(writer, &self.renderer.screen);
-        if (self.active_keypress_trace) |trace| {
-            trace.virtual_emit_ns += perf.elapsedNs(emit_start);
-            trace.virtual_emit_bytes += emit_bytes;
-        }
-    }
-
-    fn renderVirtualExplorer(self: *Editor) void {
-        if (!self.state.explorer_visible or self.state.tree == null or self.width == 0 or self.height < 2) return;
-        const exp_width = (self.width * @as(usize, self.config.explorer.width_percentage)) / 100;
-        if (exp_width == 0) return;
-        self.state.tree.?.renderAt(&self.renderer.screen, exp_width, self.height - 1, 1, 0, self.state.explorer_focused, if (self.state.git_snapshot) |*s| s else null);
-        const divider_col = exp_width;
-        if (divider_col < self.width) {
-            for (1..self.height) |row| {
-                self.renderer.screen.writeText(row, divider_col, "│", .dim);
-            }
-        }
-    }
-
-    fn renderVirtualTabs(self: *Editor, ctx: RenderContext) void {
-        if (self.height == 0 or ctx.buf_width == 0) return;
-        const start_col = ctx.buf_start_col -| 1;
-        tabbar.renderVirtualTabs(&self.renderer.screen, self.state.tabs.items, self.state.active_tab_index, &self.state.tab_bar_scroll_col, ctx.buf_width, start_col);
-    }
-
-    fn renderVirtualCommandPopup(self: *Editor) void {
-        search_popups.renderVirtualCommandPopup(self);
-    }
-
-    fn writeVirtualTruncated(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle) void {
-        popup.writeVirtualTruncated(&self.renderer.screen, row, col, end_col, text, style);
-    }
-
-    fn globalSearchFileStyle(selected: bool) render_mod.RenderStyle {
-        return search_popups.globalSearchFileStyle(selected);
-    }
-
-    fn globalSearchResultStyle(selected: bool) render_mod.RenderStyle {
-        return search_popups.globalSearchResultStyle(selected);
-    }
-
-    fn renderVirtualGlobalSearchRowText(self: *Editor, row: usize, start_col: usize, end_col: usize, render_row: GlobalSearchRenderRow, results: []const global_search.GlobalSearchResult, selected: bool) void {
-        search_popups.renderVirtualGlobalSearchRowText(self, row, start_col, end_col, render_row, results, selected);
-    }
-
-    fn renderVirtualGlobalSearchPopup(self: *Editor) void {
-        search_popups.renderVirtualGlobalSearchPopup(self);
-    }
-
-    fn renderVirtualFilesystemPickerPopup(self: *Editor) void {
-        picker_help_popups.renderVirtualFilesystemPickerPopup(self);
-    }
-
-    fn helpFooter(width: usize) []const u8 {
-        return picker_help_popups.helpFooter(width);
-    }
-
-    fn renderVirtualHelpPopup(self: *Editor) void {
-        picker_help_popups.renderVirtualHelpPopup(self);
-    }
-
-    fn renderVirtualPromptPopup(self: *Editor) void {
-        prompt_save_popups.renderVirtualPromptPopup(self);
-    }
-
-    fn renderVirtualSaveConfirmationPopup(self: *Editor) void {
-        prompt_save_popups.renderVirtualSaveConfirmationPopup(self);
-    }
-
-    fn renderVirtualCompletionMenu(self: *Editor) void {
-        completion_menu.renderVirtualCompletionMenu(self);
-    }
-
-    fn drawVirtualPopupTop(self: *Editor, geom: CommandPopupGeometry, title: []const u8, style: render_mod.RenderStyle) void {
-        popup.drawVirtualPopupTop(&self.renderer.screen, geom, title, style);
-    }
-
-    fn drawVirtualPopupRow(self: *Editor, row: usize, col: usize, width: usize, border_style: render_mod.RenderStyle, fill_style: render_mod.RenderStyle) void {
-        popup.drawVirtualPopupRow(&self.renderer.screen, row, col, width, border_style, fill_style);
-    }
-
-    fn drawVirtualPopupSeparator(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        popup.drawVirtualPopupSeparator(&self.renderer.screen, row, col, width, style);
-    }
-
-    fn drawVirtualPopupBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        popup.drawVirtualPopupBottom(&self.renderer.screen, row, col, width, style);
-    }
-
-    fn drawPickerTop(self: *Editor, geom: FilesystemPickerGeometry, title: []const u8, style: render_mod.RenderStyle) void {
-        popup.drawPickerTop(&self.renderer.screen, geom, title, style);
-    }
-
-    fn drawPickerSeparator(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        popup.drawPickerSeparator(&self.renderer.screen, row, col, width, style);
-    }
-
-    fn drawPickerRow(self: *Editor, row: usize, col: usize, width: usize, border_style: render_mod.RenderStyle, fill_style: render_mod.RenderStyle) void {
-        popup.drawPickerRow(&self.renderer.screen, row, col, width, border_style, fill_style);
-    }
-
-    fn drawPickerBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        popup.drawPickerBottom(&self.renderer.screen, row, col, width, style);
-    }
-
-    fn byteOffsetAfterCells(text: []const u8, cell_count: usize) usize {
-        return popup.byteOffsetAfterCells(text, cell_count);
-    }
-
-    fn writeVirtualCellsLimited(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, max_cells: usize, style: render_mod.RenderStyle) usize {
-        return popup.writeVirtualCellsLimited(&self.renderer.screen, row, col, end_col, text, max_cells, style);
-    }
-
-    fn writeVirtualTruncatedCells(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle, truncate_left: bool) void {
-        popup.writeVirtualTruncatedCells(&self.renderer.screen, row, col, end_col, text, style, truncate_left);
-    }
-
-    fn pickerEntryIcon(entry: filesystem_picker.PickerEntry) []const u8 {
-        return picker_help_popups.pickerEntryIcon(entry);
-    }
-
-    fn pickerEntryStyle(entry: filesystem_picker.PickerEntry, selected: bool) render_mod.RenderStyle {
-        return picker_help_popups.pickerEntryStyle(entry, selected);
-    }
-
-    fn renderVirtualTerminalPanel(self: *Editor) void {
-        terminal_panel_view.renderVirtualTerminalPanel(self);
-    }
-
-    fn renderVirtualLine(self: *Editor, tab: *Tab, buffer_line_idx: usize, row: usize, ctx: RenderContext) void {
-        line_render.renderVirtualLine(self, tab, buffer_line_idx, row, ctx);
-    }
-
-    fn renderVirtualStatus(self: *Editor, ctx: RenderContext) void {
-        statusline.renderVirtualStatus(self, ctx, self.statusRowIndex());
-    }
-
-    fn writeVirtualStatusText(self: *Editor, row: usize, col: *usize, text: []const u8, style: render_mod.RenderStyle) void {
-        statusline.writeVirtualStatusText(self, row, col, text, style);
-    }
-
-    fn writeVirtualStatusLeft(self: *Editor, row: usize, col: *usize, tab: ?*Tab) void {
-        statusline.writeVirtualStatusLeft(self, row, col, tab);
-    }
-
-    fn setVirtualCursor(self: *Editor, ctx: RenderContext) void {
-        if (self.state.mode == .Command) {
-            if (self.commandPopupGeometry()) |geom| {
-                const input_space = geom.width -| 5;
-                const cursor_col = @min(self.state.command_popup.input.items.len, input_space);
-                self.renderer.screen.setCursor(geom.row + 2, geom.col + 5 + cursor_col);
-            }
-            return;
-        }
-        if (self.state.mode == .GlobalSearch) {
-            if (self.globalSearchPopupGeometry()) |geom| {
-                const input_space = geom.width -| 5;
-                const cursor_col = @min(self.state.global_search.input.items.len, input_space);
-                self.renderer.screen.setCursor(geom.row + 2, geom.col + 5 + cursor_col);
-            }
-            return;
-        }
-        if (self.state.mode == .Search) {
-            self.renderer.screen.setCursor(self.statusTerminalRow(), 2 + self.state.search_buffer.items.len);
-            return;
-        }
-        if (self.state.mode == .OpenFilePrompt) {
-            self.renderer.screen.setCursor(self.statusTerminalRow(), @min(self.width, 12 + self.state.command_buffer.items.len));
-            return;
-        }
-        if (self.state.mode == .FilesystemPicker or self.state.mode == .Prompt or self.state.mode == .Help or
-            self.state.mode == .Dashboard or self.state.mode == .SaveConfirmation)
-        {
-            self.renderer.screen.hideCursor();
-            return;
-        }
-        if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null) {
-            self.renderer.screen.hideCursor();
-            return;
-        }
-        if (self.state.mode == .Terminal) {
-            const pos = self.terminalCursorScreenPosition();
-            self.renderer.screen.setCursor(pos.row, pos.col);
-            return;
-        }
-
-        const t = ctx.tab orelse {
-            self.renderer.screen.hideCursor();
-            return;
-        };
-        const content_width = ctx.buf_width -| ctx.gutter_width;
-        const mc = t.mainCursor();
-        const vis_col = visibleCursorCol(mc.col, t.scroll_col, content_width);
-        const vis_row = if (visibleLineOffset(t, t.scroll_row, mc.row, ctx.visible_rows)) |offset| offset + 3 else 3;
-        self.renderer.screen.setCursor(vis_row, ctx.buf_start_col + ctx.gutter_width + vis_col);
-    }
-
-    fn isSelected(self: *const Editor, tab: *const Tab, row: usize, col: usize) bool {
-        _ = self;
-        for (tab.cursors.items) |cursor| {
-            if (cursor.selection_start) |ss| {
-                const s_row = @min(ss.row, cursor.row);
-                const e_row = @max(ss.row, cursor.row);
-                const s_col = if (ss.row < cursor.row) ss.col else if (ss.row > cursor.row) cursor.col else @min(ss.col, cursor.col);
-                const e_col = if (ss.row < cursor.row) cursor.col else if (ss.row > cursor.row) ss.col else @max(ss.col, cursor.col);
-
-                if (row > s_row and row < e_row) return true;
-                if (row == s_row and row == e_row and col >= s_col and col < e_col) return true;
-                if (row == s_row and row != e_row and col >= s_col) return true;
-                if (row == e_row and row != s_row and col < e_col) return true;
-            }
-        }
-        return false;
-    }
-
-    fn renderStyleFromSyntax(style: syntax.Style) render_mod.RenderStyle {
-        return line_render.renderStyleFromSyntax(style);
+        return editor_render.renderVirtual(self, writer, metrics);
     }
 
     fn diagnosticUri(value: std.json.Value) ?[]const u8 {
