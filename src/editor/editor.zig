@@ -12,6 +12,7 @@ const normal_sequence = @import("input_router/normal_sequence.zig");
 const syntax = @import("syntax.zig");
 const perf = @import("../perf/perf.zig");
 const render_mod = @import("renderer/virtual_screen.zig");
+const popup = @import("renderer/popup.zig");
 const lsp_manager = @import("../lsp/manager.zig");
 const logger = @import("../logger.zig");
 const tab_mod = @import("model/tab.zig");
@@ -166,19 +167,8 @@ const RenderContext = struct {
     visible_rows: usize,
 };
 
-const CommandPopupGeometry = struct {
-    row: usize,
-    col: usize,
-    width: usize,
-    suggestion_count: usize,
-};
-
-const FilesystemPickerGeometry = struct {
-    row: usize,
-    col: usize,
-    width: usize,
-    height: usize,
-};
+const CommandPopupGeometry = popup.CommandPopupGeometry;
+const FilesystemPickerGeometry = popup.FilesystemPickerGeometry;
 
 const command_popup_title = " Cmdline ";
 const global_search_popup_title = " Search ";
@@ -2075,30 +2065,16 @@ pub const Editor = struct {
     }
 
     fn popupGeometry(self: *const Editor, visible: bool, item_count: usize, show_items: bool, max_visible_items: usize) ?CommandPopupGeometry {
-        if (!visible or self.height < 6) return null;
-
         const viewport = self.bufferViewportGeometry();
-        if (viewport.width < 16) return null;
-
-        const max_width = viewport.width -| 2;
-        const desired_width = @max(@as(usize, 40), (viewport.width * 9) / 10);
-        const popup_width = @min(max_width, desired_width);
-        if (popup_width < 16) return null;
-
-        const row: usize = 2;
-        const available_suggestions = self.height - row - 5;
-        const suggestion_count = if (show_items)
-            @min(item_count, @min(max_visible_items, available_suggestions))
-        else
-            0;
-        const viewport_col = viewport.start_col -| 1;
-        const col = viewport_col + (viewport.width - popup_width) / 2;
-        return .{
-            .row = row,
-            .col = col,
-            .width = popup_width,
-            .suggestion_count = suggestion_count,
-        };
+        return popup.popupGeometry(
+            self.height,
+            viewport.start_col,
+            viewport.width,
+            visible,
+            item_count,
+            show_items,
+            max_visible_items,
+        );
     }
 
     fn commandPopupGeometry(self: *const Editor) ?CommandPopupGeometry {
@@ -2508,7 +2484,7 @@ pub const Editor = struct {
 
     fn renderVirtualCommandPopup(self: *Editor) void {
         const geom = self.commandPopupGeometry() orelse return;
-        const popup = &self.state.command_popup;
+        const popup_state = &self.state.command_popup;
         const inner_width = geom.width - 2;
 
         self.drawVirtualPopupTop(geom, command_popup_title, .command_popup_border);
@@ -2517,7 +2493,7 @@ pub const Editor = struct {
         self.drawVirtualPopupRow(input_row, geom.col, geom.width, .command_popup_border, .command_popup);
         self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
         const input_space = inner_width -| 3;
-        const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+        const shown_input = popup_state.input.items[0..@min(popup_state.input.items.len, input_space)];
         self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
 
         const separator_row = geom.row + 2;
@@ -2525,13 +2501,13 @@ pub const Editor = struct {
 
         for (0..geom.suggestion_count) |i| {
             const row = geom.row + 3 + i;
-            const style: render_mod.RenderStyle = if (popup.selected_index != null and popup.selected_index.? == i)
+            const style: render_mod.RenderStyle = if (popup_state.selected_index != null and popup_state.selected_index.? == i)
                 .command_popup_selected
             else
                 .command_popup;
             self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, style);
             var suggestion_buf: [128]u8 = undefined;
-            const suggestion = popup.suggestions.items[i].displayText(&suggestion_buf);
+            const suggestion = popup_state.suggestions.items[i].displayText(&suggestion_buf);
             const shown = suggestion[0..@min(suggestion.len, inner_width -| 2)];
             self.renderer.screen.writeText(row, geom.col + 2, shown, style);
         }
@@ -2541,11 +2517,7 @@ pub const Editor = struct {
     }
 
     fn writeVirtualTruncated(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle) void {
-        if (col.* >= end_col) return;
-        const remaining = end_col - col.*;
-        const shown = text[0..@min(text.len, remaining)];
-        self.renderer.screen.writeText(row, col.*, shown, style);
-        col.* += shown.len;
+        popup.writeVirtualTruncated(&self.renderer.screen, row, col, end_col, text, style);
     }
 
     fn globalSearchFileStyle(selected: bool) render_mod.RenderStyle {
@@ -2580,7 +2552,7 @@ pub const Editor = struct {
 
     fn renderVirtualGlobalSearchPopup(self: *Editor) void {
         const geom = self.globalSearchPopupGeometry() orelse return;
-        const popup = &self.state.global_search;
+        const popup_state = &self.state.global_search;
         const inner_width = geom.width - 2;
 
         self.drawVirtualPopupTop(geom, global_search_popup_title, .global_search_popup_border);
@@ -2589,7 +2561,7 @@ pub const Editor = struct {
         self.drawVirtualPopupRow(input_row, geom.col, geom.width, .global_search_popup_border, .command_popup);
         self.renderer.screen.writeText(input_row, geom.col + 2, ">", .command_popup_prompt);
         const input_space = inner_width -| 3;
-        const shown_input = popup.input.items[0..@min(popup.input.items.len, input_space)];
+        const shown_input = popup_state.input.items[0..@min(popup_state.input.items.len, input_space)];
         self.renderer.screen.writeText(input_row, geom.col + 4, shown_input, .command_popup);
 
         const separator_row = geom.row + 2;
@@ -2598,11 +2570,11 @@ pub const Editor = struct {
         self.adjustGlobalSearchRenderScroll(geom.suggestion_count);
         for (0..geom.suggestion_count) |offset| {
             const render_row_index = self.state.global_search.scroll_offset + offset;
-            const render_row = globalSearchRenderRowAt(popup.results.items, render_row_index) orelse break;
+            const render_row = globalSearchRenderRowAt(popup_state.results.items, render_row_index) orelse break;
             const row = geom.row + 3 + offset;
             const selected = switch (render_row) {
-                .path => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
-                .content => |result_index| popup.selected_index != null and popup.selected_index.? == result_index,
+                .path => |result_index| popup_state.selected_index != null and popup_state.selected_index.? == result_index,
+                .content => |result_index| popup_state.selected_index != null and popup_state.selected_index.? == result_index,
                 .header => false,
             };
             const style: render_mod.RenderStyle = if (selected)
@@ -2610,7 +2582,7 @@ pub const Editor = struct {
             else
                 .command_popup;
             self.drawVirtualPopupRow(row, geom.col, geom.width, .global_search_popup_border, style);
-            self.renderVirtualGlobalSearchRowText(row, geom.col + 2, geom.col + geom.width - 1, render_row, popup.results.items, selected);
+            self.renderVirtualGlobalSearchRowText(row, geom.col + 2, geom.col + geom.width - 1, render_row, popup_state.results.items, selected);
         }
 
         const bottom_row = geom.row + 3 + geom.suggestion_count;
@@ -2789,28 +2761,28 @@ pub const Editor = struct {
 
     fn renderVirtualPromptPopup(self: *Editor) void {
         if (!self.state.prompt_popup.visible) return;
-        const popup = &self.state.prompt_popup;
+        const popup_state = &self.state.prompt_popup;
         const geom = self.popupGeometry(true, 4, true, 4) orelse return;
         const inner_width = geom.width - 2;
-        self.drawVirtualPopupTop(geom, popup.title, .command_popup_border);
+        self.drawVirtualPopupTop(geom, popup_state.title, .command_popup_border);
 
         const body_row = geom.row + 1;
         self.drawVirtualPopupRow(body_row, geom.col, geom.width, .command_popup_border, .command_popup);
-        if (popup.kind == .explorer_delete_confirm) {
+        if (popup_state.kind == .explorer_delete_confirm) {
             var col = geom.col + 2;
             self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, "Delete ", .command_popup);
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, popup.context_path, .command_popup);
+            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, popup_state.context_path, .command_popup);
             self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, "?", .command_popup);
         } else {
-            const shown_context = popup.context_path[0..@min(popup.context_path.len, inner_width / 2)];
+            const shown_context = popup_state.context_path[0..@min(popup_state.context_path.len, inner_width / 2)];
             var col = geom.col + 2;
             self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, shown_context, .command_popup);
             self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, " > ", .command_popup);
-            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, popup.input.items, .command_popup);
+            self.writeVirtualTruncated(body_row, &col, geom.col + geom.width - 1, popup_state.input.items, .command_popup);
         }
 
         var row_offset: usize = 2;
-        if (popup.error_message) |msg| {
+        if (popup_state.error_message) |msg| {
             const row = geom.row + row_offset;
             self.drawVirtualPopupRow(row, geom.col, geom.width, .command_popup_border, .popup_error);
             self.renderer.screen.writeText(row, geom.col + 2, msg[0..@min(msg.len, inner_width -| 2)], .popup_error);
@@ -2823,14 +2795,14 @@ pub const Editor = struct {
 
         const footer_row = geom.row + row_offset;
         self.drawVirtualPopupRow(footer_row, geom.col, geom.width, .command_popup_border, .popup_footer);
-        const footer = promptFooter(popup.kind);
+        const footer = promptFooter(popup_state.kind);
         self.renderer.screen.writeText(footer_row, geom.col + 2, footer[0..@min(footer.len, inner_width -| 2)], .popup_footer);
         self.drawVirtualPopupBottom(footer_row + 1, geom.col, geom.width, .command_popup_border);
     }
 
     fn renderVirtualSaveConfirmationPopup(self: *Editor) void {
         if (!self.state.save_confirmation.visible) return;
-        const popup = &self.state.save_confirmation;
+        const popup_state = &self.state.save_confirmation;
         const geom = self.popupGeometry(true, 0, false, 0) orelse return;
         const inner_width = geom.width - 2;
 
@@ -2840,7 +2812,7 @@ pub const Editor = struct {
         // Body: show filename
         const body_row = geom.row + 1;
         self.drawVirtualPopupRow(body_row, geom.col, geom.width, .command_popup_border, .command_popup);
-        const display = popup.displayName();
+        const display = popup_state.displayName();
         const shown = display[0..@min(display.len, inner_width -| 4)];
         var name_buf: [256]u8 = undefined;
         const name_line = std.fmt.bufPrint(&name_buf, "  {s}", .{shown}) catch "";
@@ -2916,104 +2888,47 @@ pub const Editor = struct {
     }
 
     fn drawVirtualPopupTop(self: *Editor, geom: CommandPopupGeometry, title: []const u8, style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(geom.row, geom.col, "╭", style);
-        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(geom.row, geom.col + i, horizontal_line, style);
-        self.renderer.screen.setGlyph(geom.row, geom.col + geom.width - 1, "╮", style);
-        if (render_mod.displayCellCount(title) + 4 < geom.width) {
-            self.renderer.screen.writeText(geom.row, geom.col + 2, title, style);
-        }
+        popup.drawVirtualPopupTop(&self.renderer.screen, geom, title, style);
     }
 
     fn drawVirtualPopupRow(self: *Editor, row: usize, col: usize, width: usize, border_style: render_mod.RenderStyle, fill_style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(row, col, "│", border_style);
-        self.renderer.screen.setGlyph(row, col + width - 1, "│", border_style);
-        for (1..width - 1) |i| self.renderer.screen.set(row, col + i, ' ', fill_style);
+        popup.drawVirtualPopupRow(&self.renderer.screen, row, col, width, border_style, fill_style);
     }
 
     fn drawVirtualPopupSeparator(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(row, col, "├", style);
-        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
-        self.renderer.screen.setGlyph(row, col + width - 1, "┤", style);
+        popup.drawVirtualPopupSeparator(&self.renderer.screen, row, col, width, style);
     }
 
     fn drawVirtualPopupBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(row, col, "╰", style);
-        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
-        self.renderer.screen.setGlyph(row, col + width - 1, "╯", style);
+        popup.drawVirtualPopupBottom(&self.renderer.screen, row, col, width, style);
     }
 
     fn drawPickerTop(self: *Editor, geom: FilesystemPickerGeometry, title: []const u8, style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(geom.row, geom.col, "╭", style);
-        for (1..geom.width - 1) |i| self.renderer.screen.setGlyph(geom.row, geom.col + i, horizontal_line, style);
-        self.renderer.screen.setGlyph(geom.row, geom.col + geom.width - 1, "╮", style);
-        if (render_mod.displayCellCount(title) + 4 < geom.width) {
-            self.renderer.screen.writeText(geom.row, geom.col + 2, title, style);
-        }
+        popup.drawPickerTop(&self.renderer.screen, geom, title, style);
     }
 
     fn drawPickerSeparator(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(row, col, "├", style);
-        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
-        self.renderer.screen.setGlyph(row, col + width - 1, "┤", style);
+        popup.drawPickerSeparator(&self.renderer.screen, row, col, width, style);
     }
 
     fn drawPickerRow(self: *Editor, row: usize, col: usize, width: usize, border_style: render_mod.RenderStyle, fill_style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(row, col, "│", border_style);
-        self.renderer.screen.setGlyph(row, col + width - 1, "│", border_style);
-        for (1..width - 1) |i| self.renderer.screen.set(row, col + i, ' ', fill_style);
+        popup.drawPickerRow(&self.renderer.screen, row, col, width, border_style, fill_style);
     }
 
     fn drawPickerBottom(self: *Editor, row: usize, col: usize, width: usize, style: render_mod.RenderStyle) void {
-        self.renderer.screen.setGlyph(row, col, "╰", style);
-        for (1..width - 1) |i| self.renderer.screen.setGlyph(row, col + i, horizontal_line, style);
-        self.renderer.screen.setGlyph(row, col + width - 1, "╯", style);
+        popup.drawPickerBottom(&self.renderer.screen, row, col, width, style);
     }
 
     fn byteOffsetAfterCells(text: []const u8, cell_count: usize) usize {
-        var i: usize = 0;
-        var cells: usize = 0;
-        while (i < text.len and cells < cell_count) : (cells += 1) {
-            i += @min(render_mod.utf8CellLen(text[i]), text.len - i);
-        }
-        return i;
+        return popup.byteOffsetAfterCells(text, cell_count);
     }
 
     fn writeVirtualCellsLimited(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, max_cells: usize, style: render_mod.RenderStyle) usize {
-        if (col.* >= end_col or max_cells == 0) return 0;
-        const end = byteOffsetAfterCells(text, max_cells);
-        const shown = text[0..end];
-        self.renderer.screen.writeText(row, col.*, shown, style);
-        const written = render_mod.displayCellCount(shown);
-        col.* += written;
-        return written;
+        return popup.writeVirtualCellsLimited(&self.renderer.screen, row, col, end_col, text, max_cells, style);
     }
 
     fn writeVirtualTruncatedCells(self: *Editor, row: usize, col: *usize, end_col: usize, text: []const u8, style: render_mod.RenderStyle, truncate_left: bool) void {
-        if (col.* >= end_col) return;
-        const remaining = end_col - col.*;
-        const text_cells = render_mod.displayCellCount(text);
-        if (text_cells <= remaining) {
-            self.renderer.screen.writeText(row, col.*, text, style);
-            col.* += text_cells;
-            return;
-        }
-
-        if (remaining <= 3) {
-            _ = self.writeVirtualCellsLimited(row, col, end_col, "...", remaining, style);
-            return;
-        }
-
-        if (truncate_left) {
-            _ = self.writeVirtualCellsLimited(row, col, end_col, "...", 3, style);
-            const tail_cells = remaining - 3;
-            const skip_cells = text_cells - tail_cells;
-            const start = byteOffsetAfterCells(text, skip_cells);
-            _ = self.writeVirtualCellsLimited(row, col, end_col, text[start..], tail_cells, style);
-        } else {
-            const head_cells = remaining - 3;
-            _ = self.writeVirtualCellsLimited(row, col, end_col, text, head_cells, style);
-            _ = self.writeVirtualCellsLimited(row, col, end_col, "...", 3, style);
-        }
+        popup.writeVirtualTruncatedCells(&self.renderer.screen, row, col, end_col, text, style, truncate_left);
     }
 
     fn pickerEntryIcon(entry: filesystem_picker.PickerEntry) []const u8 {
