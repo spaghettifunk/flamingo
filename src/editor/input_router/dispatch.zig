@@ -761,11 +761,11 @@ fn todoRoot(ed: *editor.Editor) []const u8 {
 fn saveManualTodosOrReport(ed: *editor.Editor) !bool {
     todos.saveManualTodos(ed.allocator, ed.io, todoRoot(ed), ed.state.todo_panel.manual_items.items) catch |err| switch (err) {
         error.NoWorkspace => {
-            ed.state.status_message = "Manual TODOs require a Flamingo workspace. Run Create Workspace first.";
+            ed.state.status_message = "Manual TODOs unavailable: could not create .flamingo workspace";
             return false;
         },
         error.InvalidWorkspace => {
-            ed.state.status_message = ".flamingo exists and is not a directory";
+            ed.state.status_message = "Cannot use workspace TODOs: .flamingo exists and is not a directory";
             return false;
         },
         else => return err,
@@ -853,8 +853,8 @@ fn executeTodoPanelActionCommand(ed: *editor.Editor, command: commands.CommandId
                 ed.allocator.free(path);
                 try openTodoPrompt(ed, .todo_new);
             } else |err| switch (err) {
-                error.NoWorkspace => ed.state.status_message = "Manual TODOs require a Flamingo workspace. Run Create Workspace first.",
-                error.InvalidWorkspace => ed.state.status_message = ".flamingo exists and is not a directory",
+                error.NoWorkspace => ed.state.status_message = "Manual TODOs unavailable: could not create .flamingo workspace",
+                error.InvalidWorkspace => ed.state.status_message = "Cannot use workspace TODOs: .flamingo exists and is not a directory",
                 else => return err,
             }
         },

@@ -430,3 +430,20 @@ test "rename update handles relative open buffer filenames" {
     try updateOpenBuffersAfterRename(&ed, old_absolute, new_absolute);
     try std.testing.expectEqualStrings(new_absolute, ed.currentTab().?.buf.filename.?);
 }
+
+test "opening folder does not create workspace marker" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(root);
+
+    var ed = try editor.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+
+    try openFolderInEditor(&ed, root);
+    try std.testing.expectEqual(workspace.WorkspaceStatus.none, try workspace.detectWorkspace(allocator, io, root));
+    try std.testing.expect(!ed.state.workspace.active);
+}

@@ -4,6 +4,7 @@ const navigation = @import("navigation.zig");
 const fs_ops = @import("filesystem_ops.zig");
 const commands = @import("commands.zig");
 const todos = @import("todos.zig");
+const workspace = @import("workspace.zig");
 
 pub const Command = enum {
     quit,
@@ -293,13 +294,16 @@ pub fn openTodoPanel(ed: *editor.Editor) !void {
     ed.state.todo_panel.visible = true;
     ed.state.todo_panel.focused = true;
 
+    const manual_available = try ensureTodoWorkspace(ed, root);
     ed.state.todo_panel.clearManual(ed.allocator);
-    todos.loadManualTodos(ed.allocator, ed.io, root, &ed.state.todo_panel.manual_items) catch |err| switch (err) {
-        error.NoWorkspace => ed.state.status_message = "Manual TODOs require a Flamingo workspace. Run Create Workspace first.",
-        error.InvalidWorkspace => ed.state.status_message = ".flamingo exists and is not a directory",
-        error.MalformedTodosJson => ed.state.error_message = "Could not read .flamingo/todos.json",
-        else => return err,
-    };
+    if (manual_available) {
+        todos.loadManualTodos(ed.allocator, ed.io, root, &ed.state.todo_panel.manual_items) catch |err| switch (err) {
+            error.NoWorkspace => ed.state.status_message = "Manual TODOs unavailable: could not create .flamingo workspace",
+            error.InvalidWorkspace => ed.state.status_message = "Cannot use workspace TODOs: .flamingo exists and is not a directory",
+            error.MalformedTodosJson => ed.state.error_message = "Could not read .flamingo/todos.json",
+            else => return err,
+        };
+    }
 
     const needs_scan = ed.state.todo_panel.scan_status == .not_scanned or
         ed.state.todo_panel.last_scan_root == null or
@@ -308,6 +312,45 @@ pub fn openTodoPanel(ed: *editor.Editor) !void {
         try refreshTodoPanelCode(ed, root);
     }
     ed.state.todo_panel.clampSelection();
+}
+
+fn ensureTodoWorkspace(ed: *editor.Editor, root: []const u8) !bool {
+    const status = workspace.detectWorkspace(ed.allocator, ed.io, root) catch {
+        ed.state.clearWorkspace(ed.allocator);
+        ed.state.status_message = "Could not inspect .flamingo workspace";
+        return false;
+    };
+
+    switch (status) {
+        .valid => {
+            try ed.state.setWorkspaceRoot(ed.allocator, root);
+            return true;
+        },
+        .invalid_path_exists => {
+            ed.state.clearWorkspace(ed.allocator);
+            ed.state.status_message = "Cannot use workspace TODOs: .flamingo exists and is not a directory";
+            return false;
+        },
+        .none => {
+            const result = workspace.createWorkspace(ed.allocator, ed.io, root) catch {
+                ed.state.clearWorkspace(ed.allocator);
+                ed.state.status_message = "Could not create .flamingo workspace for TODOs";
+                return false;
+            };
+            switch (result) {
+                .created, .already_exists => {
+                    try ed.state.setWorkspaceRoot(ed.allocator, root);
+                    if (result == .created) ed.state.status_message = "Workspace created for TODOs";
+                    return true;
+                },
+                .invalid_path_exists => {
+                    ed.state.clearWorkspace(ed.allocator);
+                    ed.state.status_message = "Cannot use workspace TODOs: .flamingo exists and is not a directory";
+                    return false;
+                },
+            }
+        },
+    }
 }
 
 pub fn refreshTodoPanelCode(ed: *editor.Editor, root: []const u8) !void {
@@ -319,6 +362,97 @@ pub fn refreshTodoPanelCode(ed: *editor.Editor, root: []const u8) !void {
     };
     ed.state.todo_panel.last_scan_root = try ed.allocator.dupe(u8, root);
     ed.state.todo_panel.scan_status = .scanned;
+}
+
+fn testingTmpRoot(allocator: std.mem.Allocator, tmp: anytype) ![]u8 {
+    return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+}
+
+test ":todos creates missing workspace marker and activates workspace state" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(root);
+
+    var ed = try editor.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+    try ed.state.setProjectRoot(allocator, root);
+
+    try openTodoPanel(&ed);
+
+    try std.testing.expectEqual(workspace.WorkspaceStatus.valid, try workspace.detectWorkspace(allocator, io, root));
+    try std.testing.expect(ed.state.workspace.active);
+    try std.testing.expectEqualStrings(root, ed.state.workspace.root_path.?);
+    try std.testing.expect(ed.state.todo_panel.visible);
+    try std.testing.expect(ed.state.todo_panel.focused);
+}
+
+test ":todos lazy workspace creation enables manual todo persistence" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(root);
+
+    var ed = try editor.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+    try ed.state.setProjectRoot(allocator, root);
+
+    try openTodoPanel(&ed);
+    try todos.appendManualTodo(&ed.state.todo_panel, allocator, io, "Write README");
+    try todos.saveManualTodos(allocator, io, root, ed.state.todo_panel.manual_items.items);
+
+    _ = try tmp.dir.statFile(io, ".flamingo/todos.json", .{});
+}
+
+test ":todos uses existing workspace marker" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, workspace.directory_name);
+
+    const root = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(root);
+
+    var ed = try editor.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+    try ed.state.setProjectRoot(allocator, root);
+
+    try openTodoPanel(&ed);
+
+    try std.testing.expect(ed.state.workspace.active);
+    try std.testing.expectEqualStrings(root, ed.state.workspace.root_path.?);
+    try std.testing.expectEqual(workspace.WorkspaceStatus.valid, try workspace.detectWorkspace(allocator, io, root));
+}
+
+test ":todos does not overwrite invalid workspace marker file" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = workspace.directory_name, .data = "not a directory" });
+
+    const root = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(root);
+
+    var ed = try editor.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+    try ed.state.setProjectRoot(allocator, root);
+
+    try openTodoPanel(&ed);
+
+    const stat = try tmp.dir.statFile(io, workspace.directory_name, .{});
+    try std.testing.expectEqual(.file, stat.kind);
+    try std.testing.expect(!ed.state.workspace.active);
+    try std.testing.expectEqual(workspace.WorkspaceStatus.invalid_path_exists, try workspace.detectWorkspace(allocator, io, root));
+    try std.testing.expect(ed.state.status_message != null);
+    try std.testing.expect(std.mem.indexOf(u8, ed.state.status_message.?, "not a directory") != null);
 }
 
 test "Command registry parses command names" {
