@@ -38,7 +38,12 @@ pub fn renderVirtualTodoPanel(editor: anytype) void {
     writeSection(screen, row, col, width, "Code TODOs", editor.state.todo_panel.code_items.items.len);
     row += 1;
 
-    const body_rows = status_row -| 5;
+    const footer_rows = footerLineCount(width);
+    if (status_row <= row + footer_rows + 2) return;
+    const footer_start = status_row - footer_rows;
+    const manual_row = footer_start - 1;
+    const manual_separator_row = manual_row - 1;
+    const body_rows = manual_separator_row -| row;
     editor.state.todo_panel.adjustScroll(body_rows);
     const total = editor.state.todo_panel.totalItems();
     if (total == 0) {
@@ -65,15 +70,13 @@ pub fn renderVirtualTodoPanel(editor: anytype) void {
         }
     }
 
-    const manual_row = status_row - 2;
-    drawSeparator(screen, manual_row - 1, col, width);
+    drawSeparator(screen, manual_separator_row, col, width);
     writeSection(screen, manual_row, col, width, "Manual TODOs", editor.state.todo_panel.manual_items.items.len);
     if (!editor.state.workspace.active) {
         writeRight(screen, manual_row, col, width, "workspace required", .popup_error);
     }
 
-    const footer = "r refresh  n new  e edit  x done  o open  q close";
-    writeLine(screen, status_row - 1, col, width, footer, .popup_footer, false);
+    writeFooter(screen, footer_start, col, width, footer_rows);
 }
 
 fn drawSeparator(screen: *render_mod.VirtualScreen, row: usize, col: usize, width: usize) void {
@@ -99,6 +102,63 @@ fn writeRight(screen: *render_mod.VirtualScreen, row: usize, col: usize, width: 
     const text_cells = render_mod.displayCellCount(text);
     if (text_cells + 1 >= width) return;
     screen.writeText(row, col + width - text_cells - 1, text, style);
+}
+
+const footer_commands = [_][]const u8{
+    "r refresh",
+    "n new",
+    "e edit",
+    "d delete",
+    "x done",
+    "o open",
+    "q close",
+};
+
+fn footerLineCount(width: usize) usize {
+    const inner_width = width -| 2;
+    if (inner_width == 0) return footer_commands.len;
+
+    var rows: usize = 1;
+    var line_cells: usize = 0;
+    for (footer_commands) |command| {
+        const command_cells = render_mod.displayCellCount(command);
+        const separator_cells: usize = if (line_cells == 0) 0 else 2;
+        if (line_cells > 0 and line_cells + separator_cells + command_cells > inner_width) {
+            rows += 1;
+            line_cells = command_cells;
+        } else {
+            line_cells += separator_cells + command_cells;
+        }
+    }
+    return rows;
+}
+
+fn writeFooter(screen: *render_mod.VirtualScreen, start_row: usize, col: usize, width: usize, max_rows: usize) void {
+    const inner_end = col + width -| 1;
+    var row = start_row;
+    var write_col = col + 1;
+
+    for (0..max_rows) |offset| {
+        for (0..width) |x| screen.set(start_row + offset, col + x, ' ', .popup_footer);
+    }
+
+    for (footer_commands) |command| {
+        const command_cells = render_mod.displayCellCount(command);
+        const separator: []const u8 = if (write_col == col + 1) "" else "  ";
+        const separator_cells = render_mod.displayCellCount(separator);
+        if (write_col + separator_cells + command_cells > inner_end and row + 1 < start_row + max_rows) {
+            row += 1;
+            write_col = col + 1;
+        }
+        if (separator.len > 0 and write_col + separator_cells <= inner_end) {
+            screen.writeText(row, write_col, separator, .popup_footer);
+            write_col += separator_cells;
+        }
+        if (write_col + command_cells <= inner_end) {
+            screen.writeText(row, write_col, command, .popup_footer);
+            write_col += command_cells;
+        }
+    }
 }
 
 fn renderCodeItem(
