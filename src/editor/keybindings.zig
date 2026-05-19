@@ -811,6 +811,19 @@ const default_bindings = [_]Binding{
     .{ .context = .global_search, .sequence = keySpecial(.Up), .command = .global_search_select_previous },
     .{ .context = .global_search, .sequence = keySpecial(.Enter), .command = .global_search_accept },
 
+    // TODO panel.
+    .{ .context = .todo_panel, .sequence = keySpecial(.Esc), .command = .todo_panel_close },
+    .{ .context = .todo_panel, .sequence = keyChar('q'), .command = .todo_panel_close },
+    .{ .context = .todo_panel, .sequence = keySpecial(.Up), .command = .todo_panel_move_up },
+    .{ .context = .todo_panel, .sequence = keySpecial(.Down), .command = .todo_panel_move_down },
+    .{ .context = .todo_panel, .sequence = keyChar('r'), .command = .todo_panel_refresh },
+    .{ .context = .todo_panel, .sequence = keyChar('n'), .command = .todo_panel_new },
+    .{ .context = .todo_panel, .sequence = keyChar('e'), .command = .todo_panel_edit },
+    .{ .context = .todo_panel, .sequence = keyChar('d'), .command = .todo_panel_delete },
+    .{ .context = .todo_panel, .sequence = keyChar('x'), .command = .todo_panel_toggle },
+    .{ .context = .todo_panel, .sequence = keyChar('o'), .command = .todo_panel_open_selected },
+    .{ .context = .todo_panel, .sequence = keySpecial(.Enter), .command = .todo_panel_open_selected },
+
     // Help.
     .{ .context = .help, .sequence = keySpecial(.Esc), .command = .help_close },
     .{ .context = .help, .sequence = keyChar('q'), .command = .help_close },

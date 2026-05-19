@@ -225,6 +225,10 @@ pub fn openFolderInEditor(ed: *editor.Editor, path: []const u8) !void {
     defer ed.allocator.free(root);
 
     ed.closeAllTabs();
+    ed.state.todo_panel.visible = false;
+    ed.state.todo_panel.focused = false;
+    ed.state.todo_panel.clearCode(ed.allocator);
+    ed.state.todo_panel.clearManual(ed.allocator);
     try ed.state.setProjectRoot(ed.allocator, root);
     if (ed.state.tree) |*tree| {
         tree.deinit();

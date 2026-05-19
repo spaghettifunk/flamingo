@@ -4,6 +4,9 @@ pub const PromptKind = enum {
     explorer_new_file,
     explorer_rename,
     explorer_delete_confirm,
+    todo_new,
+    todo_edit,
+    todo_delete_confirm,
 };
 
 pub const PromptPopup = struct {

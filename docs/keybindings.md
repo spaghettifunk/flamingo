@@ -106,6 +106,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:deleteFile <path>`      | `:df` | Delete file at `<path>`                                    |
 | `:search`                 |       | Open project-wide Global Search                            |
 | `:help`                   |       | Open the Help popup                                        |
+| `:todos`                  |       | Open/focus the workspace TODO panel                        |
 | `:<number>`               |       | Jump to line `<number>`                                    |
 | `:goto <number>`          |       | Jump to line `<number>`                                    |
 | `:line <number>`          |       | Jump to line `<number>`                                    |
@@ -119,7 +120,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | Action                     | Keybinding                                          |
 | :------------------------- | :-------------------------------------------------- |
 | **Toggle Explorer**        | `CTRL + B`                                          |
-| **Switch Focus**           | `CTRL + E` (between Editor, Explorer, and Terminal) |
+| **Switch Focus**           | `CTRL + E` (between Editor, Explorer, TODO, and Terminal) |
 | **Move Selection**         | `Up / Down`                                         |
 | **Open File / Toggle Dir** | `Enter`                                             |
 | **New File in Dir**        | `Option + N`                                        |
@@ -135,6 +136,20 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | **Scroll Output**    | `PageUp / PageDown` |
 | **Scroll to Bottom** | `Shift + End`       |
 | **Return to Editor** | `Esc`               |
+
+### TODO Panel
+
+| Action                 | Keybinding           |
+| :--------------------- | :------------------- |
+| **Open TODO Panel**    | `:todos`             |
+| **Move Selection**     | `Up / Down` or `j/k` |
+| **Open Selected TODO** | `Enter` or `o`       |
+| **Refresh Code TODOs** | `r`                  |
+| **New Manual TODO**    | `n`                  |
+| **Edit Manual TODO**   | `e`                  |
+| **Delete Manual TODO** | `d`                  |
+| **Toggle Done/Open**   | `x`                  |
+| **Close TODO Panel**   | `q` or `Esc`         |
 
 ### LSP Completion
 

@@ -316,6 +316,8 @@ pub const Editor = struct {
         without_shift.shift = false;
         const context: commands.CommandContext = if (self.state.explorer_focused and self.state.explorer_visible and self.state.tree != null)
             if (self.state.tree.?.search_active) .explorer_search else .explorer
+        else if (self.state.todo_panel.visible and self.state.todo_panel.focused)
+            .todo_panel
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -333,6 +335,8 @@ pub const Editor = struct {
             .navigation_word_right,
             .explorer_move_up,
             .explorer_move_down,
+            .todo_panel_move_up,
+            .todo_panel_move_down,
             => true,
             else => false,
         };

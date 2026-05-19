@@ -3,6 +3,7 @@ const editor = @import("editor.zig");
 const navigation = @import("navigation.zig");
 const fs_ops = @import("filesystem_ops.zig");
 const commands = @import("commands.zig");
+const todos = @import("todos.zig");
 
 pub const Command = enum {
     quit,
@@ -13,6 +14,7 @@ pub const Command = enum {
     write_quit,
     search,
     help,
+    todos,
     rename_file,
     delete_file,
     new_file,
@@ -27,6 +29,7 @@ pub const Command = enum {
             .write_quit => .file_write_quit,
             .search => .command_search_open,
             .help => .help_open,
+            .todos => .todos_open,
             .rename_file => .file_rename,
             .delete_file => .file_delete,
             .new_file => .file_new,
@@ -59,6 +62,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .file_write_quit => .write_quit,
         .command_search_open => .search,
         .help_open => .help,
+        .todos_open => .todos,
         .file_rename => .rename_file,
         .file_delete => .delete_file,
         .file_new => .new_file,
@@ -209,6 +213,14 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.state.mode = .Help;
             ed.markDirty(.full);
         },
+        .todos => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            try openTodoPanel(ed);
+            ed.state.mode = .Normal;
+            ed.state.explorer_focused = false;
+            ed.terminal_panel.blur();
+            ed.markDirty(.full);
+        },
         .new_file => {
             const input_path = requireArg(ed, &it) orelse return;
             if (!requireNoMoreArgs(ed, &it)) return;
@@ -270,6 +282,45 @@ pub fn execute(ed: *editor.Editor) !void {
     }
 }
 
+fn todoRoot(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    return ".";
+}
+
+pub fn openTodoPanel(ed: *editor.Editor) !void {
+    const root = todoRoot(ed);
+    ed.state.todo_panel.visible = true;
+    ed.state.todo_panel.focused = true;
+
+    ed.state.todo_panel.clearManual(ed.allocator);
+    todos.loadManualTodos(ed.allocator, ed.io, root, &ed.state.todo_panel.manual_items) catch |err| switch (err) {
+        error.NoWorkspace => ed.state.status_message = "Manual TODOs require a Flamingo workspace. Run Create Workspace first.",
+        error.InvalidWorkspace => ed.state.status_message = ".flamingo exists and is not a directory",
+        error.MalformedTodosJson => ed.state.error_message = "Could not read .flamingo/todos.json",
+        else => return err,
+    };
+
+    const needs_scan = ed.state.todo_panel.scan_status == .not_scanned or
+        ed.state.todo_panel.last_scan_root == null or
+        !std.mem.eql(u8, ed.state.todo_panel.last_scan_root.?, root);
+    if (needs_scan) {
+        try refreshTodoPanelCode(ed, root);
+    }
+    ed.state.todo_panel.clampSelection();
+}
+
+pub fn refreshTodoPanelCode(ed: *editor.Editor, root: []const u8) !void {
+    ed.state.todo_panel.clearCode(ed.allocator);
+    todos.scanRoot(ed.allocator, ed.io, root, &ed.state.todo_panel.code_items) catch |err| {
+        ed.state.todo_panel.scan_status = .scan_failed;
+        ed.state.error_message = "Could not scan TODOs";
+        return err;
+    };
+    ed.state.todo_panel.last_scan_root = try ed.allocator.dupe(u8, root);
+    ed.state.todo_panel.scan_status = .scanned;
+}
+
 test "Command registry parses command names" {
     try std.testing.expectEqual(Command.quit, Command.fromString("q").?);
     try std.testing.expectEqual(Command.quit_all, Command.fromString("qall").?);
@@ -281,6 +332,7 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.write_quit, Command.fromString("wq").?);
     try std.testing.expectEqual(Command.search, Command.fromString("search").?);
     try std.testing.expectEqual(Command.help, Command.fromString("help").?);
+    try std.testing.expectEqual(Command.todos, Command.fromString("todos").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("renameFile").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("rf").?);
     try std.testing.expectEqual(Command.delete_file, Command.fromString("deleteFile").?);

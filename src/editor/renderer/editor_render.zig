@@ -11,6 +11,7 @@ const prompt_save_popups = @import("prompt_save_popups.zig");
 const completion_menu = @import("completion_menu.zig");
 const statusline = @import("statusline.zig");
 const terminal_panel_view = @import("terminal_panel_view.zig");
+const todo_panel_view = @import("todo_panel_view.zig");
 
 pub const RenderContext = struct {
     tab: ?*tab_mod.Tab,
@@ -55,6 +56,7 @@ pub fn renderVirtual(editor: anytype, writer: anytype, metrics: *perf.FrameMetri
         editor.state.dash.renderToScreen(&editor.renderer.screen);
     } else {
         renderVirtualExplorer(editor);
+        todo_panel_view.renderVirtualTodoPanel(editor);
 
         const tabs_start = if (editor.active_keypress_trace != null) perf.nowNs() else 0;
         renderVirtualTabs(editor, ctx);
@@ -152,6 +154,10 @@ pub fn setVirtualCursor(editor: anytype, ctx: RenderContext) void {
         return;
     }
     if (editor.state.explorer_focused and editor.state.explorer_visible and editor.state.tree != null) {
+        editor.renderer.screen.hideCursor();
+        return;
+    }
+    if (editor.state.todo_panel.visible and editor.state.todo_panel.focused) {
         editor.renderer.screen.hideCursor();
         return;
     }

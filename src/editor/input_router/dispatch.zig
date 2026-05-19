@@ -14,6 +14,7 @@ const filesystem_picker = @import("../filesystem_picker.zig");
 const fs_ops = @import("../filesystem_ops.zig");
 const prompt_popup = @import("../prompt_popup.zig");
 const terminal_panel = @import("../terminal_panel.zig");
+const todos = @import("../todos.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -41,6 +42,19 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .global_search_accept,
             .global_search_select_next,
             .global_search_select_previous,
+            => true,
+            else => false,
+        },
+        .todo_panel => switch (id) {
+            .todo_panel_close,
+            .todo_panel_move_up,
+            .todo_panel_move_down,
+            .todo_panel_refresh,
+            .todo_panel_new,
+            .todo_panel_edit,
+            .todo_panel_delete,
+            .todo_panel_toggle,
+            .todo_panel_open_selected,
             => true,
             else => false,
         },
@@ -188,6 +202,7 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .command_line,
         .search,
         .global_search,
+        .todo_panel,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -294,6 +309,10 @@ fn globalSearchActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEven
     return resolveDefaultContextCommand(ed, .global_search, event);
 }
 
+fn todoPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .todo_panel, event);
+}
+
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     const command = resolveDefaultContextCommand(ed, .explorer, event) orelse return null;
     return switch (command) {
@@ -361,7 +380,8 @@ fn helpActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?comm
 }
 
 fn promptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
-    const is_delete_confirm = ed.state.prompt_popup.kind == .explorer_delete_confirm;
+    const is_delete_confirm = ed.state.prompt_popup.kind == .explorer_delete_confirm or
+        ed.state.prompt_popup.kind == .todo_delete_confirm;
     const command = resolveDefaultContextCommand(ed, .prompt, event) orelse return null;
     return switch (command) {
         .prompt_cancel => if (is_delete_confirm or !isPlainPromptNoKey(event)) .prompt_cancel else null,
@@ -732,6 +752,130 @@ fn acceptGlobalSearchResult(ed: *editor.Editor) !void {
     }
 }
 
+fn todoRoot(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    return ".";
+}
+
+fn saveManualTodosOrReport(ed: *editor.Editor) !bool {
+    todos.saveManualTodos(ed.allocator, ed.io, todoRoot(ed), ed.state.todo_panel.manual_items.items) catch |err| switch (err) {
+        error.NoWorkspace => {
+            ed.state.status_message = "Manual TODOs require a Flamingo workspace. Run Create Workspace first.";
+            return false;
+        },
+        error.InvalidWorkspace => {
+            ed.state.status_message = ".flamingo exists and is not a directory";
+            return false;
+        },
+        else => return err,
+    };
+    return true;
+}
+
+fn refreshTodoPanel(ed: *editor.Editor) !void {
+    const root = todoRoot(ed);
+    const command_module = @import("../command.zig");
+    try command_module.refreshTodoPanelCode(ed, root);
+    ed.state.status_message = "TODOs refreshed";
+}
+
+fn selectedManualTodoIndex(ed: *editor.Editor) ?usize {
+    return switch (ed.state.todo_panel.selectedKind() orelse return null) {
+        .manual => |index| index,
+        .code => null,
+    };
+}
+
+fn openTodoPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
+    switch (kind) {
+        .todo_new => try ed.state.prompt_popup.open(ed.allocator, .todo_new, "New TODO", "", ""),
+        .todo_edit => {
+            const index = selectedManualTodoIndex(ed) orelse {
+                ed.state.status_message = "Code TODOs must be edited in the source file";
+                return;
+            };
+            const title = ed.state.todo_panel.manual_items.items[index].title;
+            try ed.state.prompt_popup.open(ed.allocator, .todo_edit, "Edit TODO", "", title);
+        },
+        .todo_delete_confirm => {
+            const index = selectedManualTodoIndex(ed) orelse {
+                ed.state.status_message = "Code TODOs must be edited in the source file";
+                return;
+            };
+            const title = ed.state.todo_panel.manual_items.items[index].title;
+            try ed.state.prompt_popup.open(ed.allocator, .todo_delete_confirm, "Delete TODO", title, "");
+        },
+        else => unreachable,
+    }
+    ed.state.mode = .Prompt;
+    ed.markDirty(.full);
+}
+
+fn openSelectedTodo(ed: *editor.Editor) !void {
+    switch (ed.state.todo_panel.selectedKind() orelse return) {
+        .manual => {
+            try openTodoPrompt(ed, .todo_edit);
+        },
+        .code => |index| {
+            const item = ed.state.todo_panel.code_items.items[index];
+            var b = buffer.Buffer.loadFromFile(ed.allocator, ed.io, item.open_path) catch {
+                ed.state.error_message = "Could not open TODO file";
+                return;
+            };
+            var consumed = false;
+            errdefer if (!consumed) b.deinit();
+            try navigation.recordCurrentJump(ed);
+            try ed.addTab(b);
+            consumed = true;
+            _ = try navigation.jumpTo(ed, item.line -| 1, item.column -| 1, .{ .record_history = false });
+            ed.state.todo_panel.focused = false;
+            ed.state.explorer_focused = false;
+            ed.state.mode = .Normal;
+        },
+    }
+}
+
+fn executeTodoPanelActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    clearPendingNormalSequence(ed);
+    switch (command) {
+        .todo_panel_close => {
+            ed.state.todo_panel.visible = false;
+            ed.state.todo_panel.focused = false;
+            ed.state.mode = .Normal;
+            ed.markDirty(.full);
+        },
+        .todo_panel_move_up => ed.state.todo_panel.moveUp(),
+        .todo_panel_move_down => ed.state.todo_panel.moveDown(),
+        .todo_panel_refresh => try refreshTodoPanel(ed),
+        .todo_panel_new => {
+            if (todos.manualTodosPath(ed.allocator, ed.io, todoRoot(ed))) |path| {
+                ed.allocator.free(path);
+                try openTodoPrompt(ed, .todo_new);
+            } else |err| switch (err) {
+                error.NoWorkspace => ed.state.status_message = "Manual TODOs require a Flamingo workspace. Run Create Workspace first.",
+                error.InvalidWorkspace => ed.state.status_message = ".flamingo exists and is not a directory",
+                else => return err,
+            }
+        },
+        .todo_panel_edit => try openTodoPrompt(ed, .todo_edit),
+        .todo_panel_delete => try openTodoPrompt(ed, .todo_delete_confirm),
+        .todo_panel_toggle => {
+            const index = selectedManualTodoIndex(ed) orelse {
+                ed.state.status_message = "Code TODOs must be edited in the source file";
+                return;
+            };
+            const old_status = ed.state.todo_panel.manual_items.items[index].status;
+            todos.toggleManualTodo(&ed.state.todo_panel, ed.io, index);
+            if (!(try saveManualTodosOrReport(ed))) {
+                ed.state.todo_panel.manual_items.items[index].status = old_status;
+            }
+        },
+        .todo_panel_open_selected => try openSelectedTodo(ed),
+        else => unreachable,
+    }
+}
+
 fn pickerStartDir(ed: *editor.Editor) []const u8 {
     if (ed.state.project_root) |root| return root;
     if (ed.state.tree) |tree| return tree.root_path;
@@ -1092,11 +1236,13 @@ fn openExplorerPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
     const context_path = switch (kind) {
         .explorer_new_file => tree.selectedBaseDirectory(),
         .explorer_rename, .explorer_delete_confirm => if (node) |n| n.absolute_path else return,
+        else => unreachable,
     };
     const title = switch (kind) {
         .explorer_new_file => "New File",
         .explorer_rename => "Rename",
         .explorer_delete_confirm => "Delete",
+        else => unreachable,
     };
     const initial = switch (kind) {
         .explorer_rename => std.fs.path.basename(context_path),
@@ -1251,6 +1397,58 @@ fn applyPrompt(ed: *editor.Editor) !void {
             ed.state.prompt_popup.close(ed.allocator);
             ed.state.mode = .Normal;
         },
+        .todo_new => {
+            const title = std.mem.trim(u8, input_text, " \t\r\n");
+            if (title.len == 0) {
+                ed.state.prompt_popup.error_message = "TODO title is required";
+                return;
+            }
+            const before_len = ed.state.todo_panel.manual_items.items.len;
+            try todos.appendManualTodo(&ed.state.todo_panel, ed.allocator, ed.io, title);
+            if (!(try saveManualTodosOrReport(ed))) {
+                todos.deleteManualTodo(&ed.state.todo_panel, ed.allocator, before_len);
+                return;
+            }
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.todo_panel.focused = true;
+        },
+        .todo_edit => {
+            const title = std.mem.trim(u8, input_text, " \t\r\n");
+            if (title.len == 0) {
+                ed.state.prompt_popup.error_message = "TODO title is required";
+                return;
+            }
+            const index = selectedManualTodoIndex(ed) orelse {
+                ed.state.prompt_popup.error_message = "No manual TODO selected";
+                return;
+            };
+            const item = &ed.state.todo_panel.manual_items.items[index];
+            const old_title = try ed.allocator.dupe(u8, item.title);
+            defer ed.allocator.free(old_title);
+            try todos.editManualTodo(&ed.state.todo_panel, ed.allocator, ed.io, index, title);
+            if (!(try saveManualTodosOrReport(ed))) {
+                _ = todos.editManualTodo(&ed.state.todo_panel, ed.allocator, ed.io, index, old_title) catch {};
+                return;
+            }
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.todo_panel.focused = true;
+        },
+        .todo_delete_confirm => {
+            const index = selectedManualTodoIndex(ed) orelse {
+                ed.state.prompt_popup.error_message = "No manual TODO selected";
+                return;
+            };
+            todos.deleteManualTodo(&ed.state.todo_panel, ed.allocator, index);
+            if (!(try saveManualTodosOrReport(ed))) {
+                ed.state.prompt_popup.error_message = "Could not persist TODO delete";
+                return;
+            }
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.todo_panel.focused = true;
+        },
     }
 }
 
@@ -1265,6 +1463,7 @@ fn showAndFocusTerminal(ed: *editor.Editor) !void {
     try ed.terminal_panel.ensureStarted(ed.runtime.event_queue, ed.width, panel_rows);
     ed.terminal_panel.focus();
     ed.state.explorer_focused = false;
+    ed.state.todo_panel.focused = false;
     ed.state.mode = .Terminal;
     ed.markDirty(.full);
 }
@@ -1278,39 +1477,38 @@ fn hideTerminal(ed: *editor.Editor) void {
 fn cyclePanelFocus(ed: *editor.Editor) !bool {
     const explorer_available = ed.state.explorer_visible;
     const terminal_available = ed.terminal_panel.visible;
-    if (!explorer_available and !terminal_available) return false;
+    const todo_available = ed.state.todo_panel.visible;
+    if (!explorer_available and !terminal_available and !todo_available) return false;
 
-    if (explorer_available and terminal_available) {
-        if (!ed.state.explorer_focused and !ed.terminal_panel.focused) {
+    if (explorer_available or terminal_available or todo_available) {
+        if (explorer_available and !ed.state.explorer_focused and !ed.terminal_panel.focused and !ed.state.todo_panel.focused) {
             ed.state.explorer_focused = true;
             ed.terminal_panel.blur();
             if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
-        } else if (ed.state.explorer_focused) {
+        } else if (ed.state.explorer_focused and todo_available) {
             ed.state.explorer_focused = false;
+            ed.state.todo_panel.focused = true;
+            ed.terminal_panel.blur();
+            if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
+        } else if ((ed.state.explorer_focused or ed.state.todo_panel.focused) and terminal_available) {
+            ed.state.explorer_focused = false;
+            ed.state.todo_panel.focused = false;
             try showAndFocusTerminal(ed);
-        } else {
+        } else if (ed.terminal_panel.focused) {
             enterNormalFromTerminal(ed);
+            ed.state.todo_panel.focused = false;
+        } else if (todo_available) {
+            ed.state.todo_panel.focused = !ed.state.todo_panel.focused;
+            ed.state.explorer_focused = false;
+            ed.terminal_panel.blur();
+            if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
+        } else if (explorer_available) {
+            ed.state.explorer_focused = !ed.state.explorer_focused;
+            ed.state.todo_panel.focused = false;
         }
         ed.markDirty(.full);
         return true;
     }
-
-    if (terminal_available) {
-        if (ed.terminal_panel.focused) {
-            enterNormalFromTerminal(ed);
-        } else {
-            try showAndFocusTerminal(ed);
-        }
-        ed.markDirty(.full);
-        return true;
-    }
-
-    if (explorer_available) {
-        ed.state.explorer_focused = !ed.state.explorer_focused;
-        ed.markDirty(.full);
-        return true;
-    }
-
     return false;
 }
 
@@ -1370,6 +1568,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         ed.state.explorer_visible = !ed.state.explorer_visible;
         if (ed.state.explorer_visible) {
             ed.state.explorer_focused = true;
+            ed.state.todo_panel.focused = false;
             ed.terminal_panel.blur();
             if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
         } else {
@@ -1401,6 +1600,15 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 }
             }
             ed.closeTab();
+            return;
+        }
+    }
+
+    if (ed.state.todo_panel.visible and ed.state.todo_panel.focused and
+        (ed.state.mode == .Normal or ed.state.mode == .Insert))
+    {
+        if (todoPanelActionCommandForEvent(ed, event)) |command| {
+            try executeTodoPanelActionCommand(ed, command);
             return;
         }
     }

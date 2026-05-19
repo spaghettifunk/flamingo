@@ -50,7 +50,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
 - [x] BUG: cannot scroll the tabs
 - [ ] implement Comments for non-programming files (like google docs)
-- [ ] implement TODO list based on both `//TODO` or `//FIXME` etc and actual todo inputs from user
+- [x] implement TODO list based on both `//TODO` or `//FIXME` etc and actual todo inputs from user
 
 ## Plugins System TODO
 
@@ -67,3 +67,4 @@ A set of todos without order or priority. Simply grouped by category
   - [ ] Async/background indexing
   - [ ] Persistent search index
   - [x] Preview pane
+

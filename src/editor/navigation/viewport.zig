@@ -18,6 +18,16 @@ pub const BufferViewportGeometry = struct {
     width: usize,
 };
 
+pub fn todoPanelWidth(editor: anytype) usize {
+    if (!editor.state.todo_panel.visible or editor.width < 72) return 0;
+    const preferred: usize = 40;
+    const minimum: usize = 32;
+    const max_panel = editor.width / 3;
+    const width = @min(preferred, max_panel);
+    if (width < minimum) return 0;
+    return width;
+}
+
 pub fn bufferViewportGeometry(editor: anytype) BufferViewportGeometry {
     var buf_start_col: usize = 1;
     var buf_width: usize = editor.width;
@@ -28,6 +38,11 @@ pub fn bufferViewportGeometry(editor: anytype) BufferViewportGeometry {
             buf_start_col = exp_width + 2;
             buf_width = editor.width -| (exp_width + 1);
         }
+    }
+
+    const todo_width = todoPanelWidth(editor);
+    if (todo_width > 0) {
+        buf_width -|= todo_width + 1;
     }
 
     return .{ .start_col = buf_start_col, .width = buf_width };
