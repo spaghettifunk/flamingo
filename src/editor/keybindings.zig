@@ -684,6 +684,8 @@ const default_bindings = [_]Binding{
     .{ .context = .normal, .sequence = charSeq("zM"), .command = .fold_close_all },
     .{ .context = .normal, .sequence = charSeq("zR"), .command = .fold_open_all },
     .{ .context = .normal, .sequence = charSeq("zA"), .command = .fold_toggle_all },
+    .{ .context = .normal, .sequence = charSeq("]c"), .command = .navigation_next_comment },
+    .{ .context = .normal, .sequence = charSeq("[c"), .command = .navigation_previous_comment },
     .{ .context = .normal, .sequence = keySpecial(.Up), .command = .navigation_move_up },
     .{ .context = .normal, .sequence = keySpecial(.Down), .command = .navigation_move_down },
     .{ .context = .normal, .sequence = keySpecial(.Left), .command = .navigation_move_left },
@@ -823,6 +825,18 @@ const default_bindings = [_]Binding{
     .{ .context = .todo_panel, .sequence = keyChar('x'), .command = .todo_panel_toggle },
     .{ .context = .todo_panel, .sequence = keyChar('o'), .command = .todo_panel_open_selected },
     .{ .context = .todo_panel, .sequence = keySpecial(.Enter), .command = .todo_panel_open_selected },
+
+    // Comments panel.
+    .{ .context = .comments_panel, .sequence = keySpecial(.Esc), .command = .comments_panel_close },
+    .{ .context = .comments_panel, .sequence = keyChar('q'), .command = .comments_panel_close },
+    .{ .context = .comments_panel, .sequence = keySpecial(.Up), .command = .comments_panel_move_up },
+    .{ .context = .comments_panel, .sequence = keySpecial(.Down), .command = .comments_panel_move_down },
+    .{ .context = .comments_panel, .sequence = keyChar('R'), .command = .comments_panel_refresh },
+    .{ .context = .comments_panel, .sequence = keyChar('r'), .command = .comments_panel_reply },
+    .{ .context = .comments_panel, .sequence = keyChar('e'), .command = .comments_panel_edit },
+    .{ .context = .comments_panel, .sequence = keyChar('d'), .command = .comments_panel_delete },
+    .{ .context = .comments_panel, .sequence = keyChar('n'), .command = .comments_panel_new },
+    .{ .context = .comments_panel, .sequence = keySpecial(.Enter), .command = .comments_panel_open_selected },
 
     // Help.
     .{ .context = .help, .sequence = keySpecial(.Esc), .command = .help_close },

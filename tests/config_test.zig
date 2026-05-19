@@ -74,6 +74,24 @@ test "Config: parse explorer width_percentage" {
     try std.testing.expectEqual(@as(u8, 30), result.value.explorer.width_percentage);
 }
 
+test "Config: parse author table" {
+    const allocator = std.testing.allocator;
+    var parser = toml.Parser(config.Config).init(allocator);
+    defer parser.deinit();
+
+    const src =
+        \\[author]
+        \\name = "Davide"
+        \\email = "davide@example.com"
+    ;
+
+    var result = try parser.parseString(src);
+    defer result.deinit();
+
+    try std.testing.expectEqualStrings("Davide", result.value.author.name.?);
+    try std.testing.expectEqualStrings("davide@example.com", result.value.author.email.?);
+}
+
 test "Config: validate passes on default config" {
     const cfg = config.Config{};
     // Should not return an error

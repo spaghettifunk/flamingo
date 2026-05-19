@@ -25,6 +25,18 @@ pub const CommandId = enum {
     help_page_up,
     help_page_down,
     todos_open,
+    comment_create,
+    comments_open,
+    comments_refresh,
+    comments_panel_close,
+    comments_panel_move_up,
+    comments_panel_move_down,
+    comments_panel_refresh,
+    comments_panel_reply,
+    comments_panel_edit,
+    comments_panel_delete,
+    comments_panel_new,
+    comments_panel_open_selected,
     todo_panel_close,
     todo_panel_move_up,
     todo_panel_move_down,
@@ -48,6 +60,8 @@ pub const CommandId = enum {
     navigation_goto_definition,
     navigation_jump_back,
     navigation_jump_forward,
+    navigation_next_comment,
+    navigation_previous_comment,
     navigation_move_up,
     navigation_move_down,
     navigation_move_left,
@@ -153,6 +167,7 @@ pub const CommandCategory = enum {
     global_search,
     help,
     todos,
+    comments,
     lsp,
     folding,
     editing,
@@ -176,6 +191,7 @@ pub const CommandContext = enum {
     global_search,
     help,
     todo_panel,
+    comments_panel,
     terminal,
     picker,
     picker_new_file,
@@ -200,8 +216,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 12;
-const command_line_visible_count = 13;
+const command_popup_visible_count = 14;
+const command_line_visible_count = 15;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -320,6 +336,24 @@ const command_metadata = [_]CommandMeta{
         .show_in_command_popup = true,
     },
     .{
+        .id = .comment_create,
+        .canonical_name = "comments.create",
+        .command_names = &.{"comment"},
+        .short_description = "Comment on selected prose text",
+        .category = .comments,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .comments_open,
+        .canonical_name = "comments.open",
+        .command_names = &.{"comments"},
+        .short_description = "Open comments panel",
+        .category = .comments,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
         .id = .navigation_goto_line,
         .canonical_name = "navigation.goto_line",
         .command_names = &.{ "<number>", "goto", "line" },
@@ -330,10 +364,31 @@ const command_metadata = [_]CommandMeta{
         .show_in_command_popup = false,
     },
     .{
+        .id = .comments_refresh,
+        .canonical_name = "comments.refresh",
+        .short_description = "Reload workspace comments",
+        .category = .comments,
+        .contexts = &.{.command_line},
+    },
+    .{
         .id = .navigation_goto_file_start,
         .canonical_name = "navigation.goto_file_start",
         .short_description = "Go to file start",
         .category = .navigation,
+        .contexts = &.{.normal},
+    },
+    .{
+        .id = .navigation_next_comment,
+        .canonical_name = "comments.next_anchor",
+        .short_description = "Jump to next comment anchor",
+        .category = .comments,
+        .contexts = &.{.normal},
+    },
+    .{
+        .id = .navigation_previous_comment,
+        .canonical_name = "comments.previous_anchor",
+        .short_description = "Jump to previous comment anchor",
+        .category = .comments,
         .contexts = &.{.normal},
     },
     .{
@@ -608,6 +663,69 @@ const command_metadata = [_]CommandMeta{
         .short_description = "Open selected code TODO",
         .category = .todos,
         .contexts = &.{.todo_panel},
+    },
+    .{
+        .id = .comments_panel_close,
+        .canonical_name = "comments_panel.close",
+        .short_description = "Close comments panel",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_move_up,
+        .canonical_name = "comments_panel.move_up",
+        .short_description = "Move comments selection up",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_move_down,
+        .canonical_name = "comments_panel.move_down",
+        .short_description = "Move comments selection down",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_refresh,
+        .canonical_name = "comments_panel.refresh",
+        .short_description = "Reload comments",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_reply,
+        .canonical_name = "comments_panel.reply",
+        .short_description = "Reply to selected comment thread",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_edit,
+        .canonical_name = "comments_panel.edit",
+        .short_description = "Edit selected comment",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_delete,
+        .canonical_name = "comments_panel.delete",
+        .short_description = "Delete selected comment",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_new,
+        .canonical_name = "comments_panel.new",
+        .short_description = "Create comment from editor selection",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .comments_panel_open_selected,
+        .canonical_name = "comments_panel.open_selected",
+        .short_description = "Jump to selected comment anchor",
+        .category = .comments,
+        .contexts = &.{.comments_panel},
     },
     .{
         .id = .mode_normal,
@@ -1370,6 +1488,8 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "search", .id = .command_search_open },
         .{ .name = "help", .id = .help_open },
         .{ .name = "todos", .id = .todos_open },
+        .{ .name = "comment", .id = .comment_create },
+        .{ .name = "comments", .id = .comments_open },
         .{ .name = "newFile", .id = .file_new },
         .{ .name = "nf", .id = .file_new },
         .{ .name = "renameFile", .id = .file_rename },
@@ -1404,6 +1524,8 @@ test "command line visible commands preserve current popup order" {
         .file_rename,
         .file_delete,
         .file_new,
+        .comment_create,
+        .comments_open,
     };
 
     for (expected, 0..) |id, idx| {
@@ -1456,6 +1578,8 @@ test "normal sequence commands have metadata" {
         .fold_close_all,
         .fold_open_all,
         .fold_toggle_all,
+        .navigation_next_comment,
+        .navigation_previous_comment,
     };
 
     for (expected) |id| {

@@ -3,6 +3,7 @@ const buffer = @import("../model/buffer.zig");
 const search = @import("../search.zig");
 const syntax = @import("../syntax.zig");
 const tab_mod = @import("../model/tab.zig");
+const comments = @import("../comments.zig");
 const render_mod = @import("virtual_screen.zig");
 
 const Cursor = tab_mod.Cursor;
@@ -24,6 +25,7 @@ pub const LineRenderState = struct {
     search_match: ?search.Match,
     active_match_col: ?usize,
     selection_ranges: []const SelectionRange,
+    comment_ranges: []const comments.RenderRange,
 
     fn syntaxStyleAt(self: *LineRenderState, col: usize) ?syntax.Style {
         return self.syntax_cursor.styleAt(col);
@@ -35,6 +37,13 @@ pub const LineRenderState = struct {
         }
         return false;
     }
+
+    fn commentStyleAt(self: *const LineRenderState, col: usize) ?render_mod.RenderStyle {
+        for (self.comment_ranges) |range| {
+            if (range.contains(col)) return if (range.stale) .comment_stale_highlight else .comment_highlight;
+        }
+        return null;
+    }
 };
 
 pub fn buildLineRenderState(
@@ -43,6 +52,7 @@ pub fn buildLineRenderState(
     buffer_line_idx: usize,
     content_width: usize,
     selection_storage: *[64]SelectionRange,
+    comment_storage: *[64]comments.RenderRange,
 ) LineRenderState {
     const search_match = if (editor.state.search_buffer.items.len > 0)
         if (editor.state.search_system) |s| s.matchForRow(buffer_line_idx) else null
@@ -60,6 +70,10 @@ pub fn buildLineRenderState(
         null;
 
     const selection_ranges = buildSelectionRanges(tab, buffer_line_idx, selection_storage);
+    const comment_ranges = if (tab.buf.filename) |filename|
+        comments.buildRenderRangesForLine(&editor.state.comments_panel.store, editor.state.workspace.root_path, filename, buffer_line_idx, comment_storage)
+    else
+        comment_storage[0..0];
     return .{
         .line = &tab.buf.lines.items[buffer_line_idx],
         .content_width = content_width,
@@ -67,6 +81,7 @@ pub fn buildLineRenderState(
         .search_match = search_match,
         .active_match_col = active_match_col,
         .selection_ranges = selection_ranges,
+        .comment_ranges = comment_ranges,
     };
 }
 
@@ -134,7 +149,8 @@ pub fn renderVirtualLine(editor: anytype, tab: *Tab, buffer_line_idx: usize, row
     const line_len = line.len();
 
     var selection_storage: [64]SelectionRange = undefined;
-    var line_state = buildLineRenderState(editor, tab, buffer_line_idx, content_width, &selection_storage);
+    var comment_storage: [64]comments.RenderRange = undefined;
+    var line_state = buildLineRenderState(editor, tab, buffer_line_idx, content_width, &selection_storage, &comment_storage);
 
     var char_idx: usize = tab.scroll_col;
     var m_idx: usize = 0;
@@ -152,6 +168,10 @@ pub fn renderVirtualLine(editor: anytype, tab: *Tab, buffer_line_idx: usize, row
             renderStyleFromSyntax(syntax_style)
         else
             .normal;
+
+        if (line_state.commentStyleAt(char_idx)) |comment_style| {
+            style = comment_style;
+        }
 
         if (line_state.isSelected(char_idx)) {
             style = .selection;

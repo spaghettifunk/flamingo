@@ -85,6 +85,37 @@ fn replaceBinding(
     });
 }
 
+fn tmpRootPath(allocator: std.mem.Allocator, tmp: anytype) ![]u8 {
+    return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+}
+
+fn makeCommentEditor(allocator: std.mem.Allocator, root_path: []const u8, filename: []const u8) !editor_mod.Editor {
+    const cfg = @import("../src/config.zig").Config{
+        .author = .{ .name = "Davide", .email = "davide@example.com" },
+    };
+    var ed = try editor_mod.Editor.init(allocator, std.testing.io, cfg);
+    errdefer ed.deinit();
+    ed.width = 100;
+    ed.height = 30;
+    try ed.state.setProjectRoot(allocator, root_path);
+
+    var buf = try Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+    try buf.lines.append(allocator, try Line.fromSlice(allocator, "The scheduler picks regions"));
+    const path = try std.fs.path.join(allocator, &.{ root_path, filename });
+    defer allocator.free(path);
+    try buf.setFilename(path);
+    try ed.addTab(buf);
+    ed.state.mode = .Normal;
+    const cursor = ed.currentTab().?.mainCursor();
+    cursor.selection_start = .{ .row = 0, .col = 4 };
+    cursor.row = 0;
+    cursor.col = 13;
+    return ed;
+}
+
 // ── Mode transitions ──────────────────────────────────────────────────────────
 
 test "Dashboard → filesystem picker via Enter on 'New File'" {
@@ -1243,6 +1274,102 @@ test "Command: :help opens help popup and q closes it" {
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('q')});
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
     try std.testing.expect(!ed.state.help_popup.visible);
+}
+
+test "Command: :comment creates comment thread from selection" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root_path = try tmpRootPath(a, tmp);
+    defer a.free(root_path);
+
+    var ed = try makeCommentEditor(a, root_path, "notes.md");
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('c'),
+        th.keyChar('o'),
+        th.keyChar('m'),
+        th.keyChar('m'),
+        th.keyChar('e'),
+        th.keyChar('n'),
+        th.keyChar('t'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Prompt, ed.state.mode);
+    try std.testing.expectEqual(prompt_mod.PromptKind.comment_new, ed.state.prompt_popup.kind);
+    try std.testing.expect(ed.state.comments_panel.visible);
+    try std.testing.expectEqualStrings("scheduler", ed.state.comments_panel.pending_action.new_thread.anchor.selected_text);
+
+    try feedText(&ed, "Clarify this");
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(ed.state.comments_panel.focused);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.comments_panel.store.threads.items.len);
+    try std.testing.expectEqualStrings("notes.md", ed.state.comments_panel.store.threads.items[0].file_path);
+    try std.testing.expectEqualStrings("Clarify this", ed.state.comments_panel.store.threads.items[0].comments.items[0].body);
+    _ = try tmp.dir.statFile(io, ".flamingo/comments.json", .{});
+}
+
+test "Command: :comment rejects unsupported files before workspace writes" {
+    const a = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root_path = try tmpRootPath(a, tmp);
+    defer a.free(root_path);
+
+    var ed = try makeCommentEditor(a, root_path, "main.py");
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('c'),
+        th.keyChar('o'),
+        th.keyChar('m'),
+        th.keyChar('m'),
+        th.keyChar('e'),
+        th.keyChar('n'),
+        th.keyChar('t'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqualStrings("Comments are currently supported only for text and markdown-like files", ed.state.error_message.?);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(std.testing.io, ".flamingo", .{}));
+}
+
+test "Command: malformed comments json blocks creation" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, ".flamingo");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".flamingo/comments.json", .data = "{ nope" });
+    const root_path = try tmpRootPath(a, tmp);
+    defer a.free(root_path);
+
+    var ed = try makeCommentEditor(a, root_path, "notes.md");
+    defer ed.deinit();
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyChar(':'),
+        th.keyChar('c'),
+        th.keyChar('o'),
+        th.keyChar('m'),
+        th.keyChar('m'),
+        th.keyChar('e'),
+        th.keyChar('n'),
+        th.keyChar('t'),
+        th.keySpecial(.Enter),
+    });
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqualStrings("Cannot load comments.json: invalid JSON", ed.state.error_message.?);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.comments_panel.store.threads.items.len);
 }
 
 test "Help: Esc closes to dashboard when no tabs are open" {

@@ -4,6 +4,7 @@ const navigation = @import("navigation.zig");
 const fs_ops = @import("filesystem_ops.zig");
 const commands = @import("commands.zig");
 const todos = @import("todos.zig");
+const comments = @import("comments.zig");
 const workspace = @import("workspace.zig");
 
 pub const Command = enum {
@@ -16,6 +17,8 @@ pub const Command = enum {
     search,
     help,
     todos,
+    comment,
+    comments,
     rename_file,
     delete_file,
     new_file,
@@ -31,6 +34,8 @@ pub const Command = enum {
             .search => .command_search_open,
             .help => .help_open,
             .todos => .todos_open,
+            .comment => .comment_create,
+            .comments => .comments_open,
             .rename_file => .file_rename,
             .delete_file => .file_delete,
             .new_file => .file_new,
@@ -64,6 +69,8 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .command_search_open => .search,
         .help_open => .help,
         .todos_open => .todos,
+        .comment_create => .comment,
+        .comments_open => .comments,
         .file_rename => .rename_file,
         .file_delete => .delete_file,
         .file_new => .new_file,
@@ -219,6 +226,33 @@ pub fn execute(ed: *editor.Editor) !void {
             try openTodoPanel(ed);
             ed.state.mode = .Normal;
             ed.state.explorer_focused = false;
+            ed.state.comments_panel.focused = false;
+            ed.terminal_panel.blur();
+            ed.markDirty(.full);
+        },
+        .comment => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            try beginNewCommentFromSelection(ed);
+        },
+        .comments => {
+            if (nextArg(&it)) |arg| {
+                if (!std.mem.eql(u8, arg, "refresh")) {
+                    ed.state.error_message = "Unknown comments command";
+                    ed.state.mode = .Normal;
+                    return;
+                }
+                if (!requireNoMoreArgs(ed, &it)) return;
+                try openCommentsPanel(ed);
+                try refreshCommentsPanel(ed);
+                if (ed.state.comments_panel.load_error == null) {
+                    ed.state.status_message = "Comments refreshed";
+                }
+            } else {
+                try openCommentsPanel(ed);
+            }
+            ed.state.mode = .Normal;
+            ed.state.explorer_focused = false;
+            ed.state.todo_panel.focused = false;
             ed.terminal_panel.blur();
             ed.markDirty(.full);
         },
@@ -293,6 +327,8 @@ pub fn openTodoPanel(ed: *editor.Editor) !void {
     const root = todoRoot(ed);
     ed.state.todo_panel.visible = true;
     ed.state.todo_panel.focused = true;
+    ed.state.comments_panel.visible = false;
+    ed.state.comments_panel.focused = false;
 
     const manual_available = try ensureTodoWorkspace(ed, root);
     ed.state.todo_panel.clearManual(ed.allocator);
@@ -362,6 +398,155 @@ pub fn refreshTodoPanelCode(ed: *editor.Editor, root: []const u8) !void {
     };
     ed.state.todo_panel.last_scan_root = try ed.allocator.dupe(u8, root);
     ed.state.todo_panel.scan_status = .scanned;
+}
+
+fn commentsRoot(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    return ".";
+}
+
+pub fn openCommentsPanel(ed: *editor.Editor) !void {
+    const root = commentsRoot(ed);
+    ed.state.comments_panel.visible = true;
+    ed.state.comments_panel.focused = true;
+    ed.state.todo_panel.visible = false;
+    ed.state.todo_panel.focused = false;
+
+    const storage_available = try ensureCommentsWorkspace(ed, root);
+    if (storage_available) {
+        try refreshCommentsPanel(ed);
+    }
+    ed.state.comments_panel.clampSelection();
+    validateActiveFileComments(ed);
+}
+
+pub fn refreshCommentsPanel(ed: *editor.Editor) !void {
+    const root = commentsRoot(ed);
+    ed.state.comments_panel.load_error = null;
+    comments.loadComments(ed.allocator, ed.io, root, &ed.state.comments_panel.store) catch |err| switch (err) {
+        error.NoWorkspace => {
+            ed.state.comments_panel.load_error = "Comments unavailable: could not create .flamingo workspace";
+            ed.state.status_message = "Comments unavailable: could not create .flamingo workspace";
+            return;
+        },
+        error.InvalidWorkspace => {
+            ed.state.comments_panel.load_error = "Cannot use workspace comments: .flamingo exists and is not a directory";
+            ed.state.status_message = "Cannot use workspace comments: .flamingo exists and is not a directory";
+            return;
+        },
+        error.MalformedCommentsJson => {
+            ed.state.comments_panel.load_error = comments.malformed_json_message;
+            ed.state.error_message = comments.malformed_json_message;
+            return;
+        },
+        else => return err,
+    };
+    ed.state.comments_panel.clampSelection();
+    validateActiveFileComments(ed);
+}
+
+fn ensureCommentsWorkspace(ed: *editor.Editor, root: []const u8) !bool {
+    const status = workspace.detectWorkspace(ed.allocator, ed.io, root) catch {
+        ed.state.clearWorkspace(ed.allocator);
+        ed.state.status_message = "Could not inspect .flamingo workspace";
+        ed.state.comments_panel.load_error = "Could not inspect .flamingo workspace";
+        return false;
+    };
+
+    switch (status) {
+        .valid => {
+            try ed.state.setWorkspaceRoot(ed.allocator, root);
+            return true;
+        },
+        .invalid_path_exists => {
+            ed.state.clearWorkspace(ed.allocator);
+            ed.state.status_message = "Cannot use workspace comments: .flamingo exists and is not a directory";
+            ed.state.comments_panel.load_error = "Cannot use workspace comments: .flamingo exists and is not a directory";
+            return false;
+        },
+        .none => {
+            const result = workspace.createWorkspace(ed.allocator, ed.io, root) catch {
+                ed.state.clearWorkspace(ed.allocator);
+                ed.state.status_message = "Could not create .flamingo workspace for comments";
+                ed.state.comments_panel.load_error = "Comments unavailable: could not create .flamingo workspace";
+                return false;
+            };
+            switch (result) {
+                .created, .already_exists => {
+                    try ed.state.setWorkspaceRoot(ed.allocator, root);
+                    if (result == .created) ed.state.status_message = "Workspace created for comments";
+                    return true;
+                },
+                .invalid_path_exists => {
+                    ed.state.clearWorkspace(ed.allocator);
+                    ed.state.status_message = "Cannot use workspace comments: .flamingo exists and is not a directory";
+                    ed.state.comments_panel.load_error = "Cannot use workspace comments: .flamingo exists and is not a directory";
+                    return false;
+                },
+            }
+        },
+    }
+}
+
+pub fn beginNewCommentFromSelection(ed: *editor.Editor) !void {
+    const tab = ed.currentTab() orelse {
+        ed.state.error_message = "No active file";
+        ed.state.mode = .Normal;
+        return;
+    };
+    const filename = tab.buf.filename orelse {
+        ed.state.error_message = "Comments require a saved file";
+        ed.state.mode = .Normal;
+        return;
+    };
+    if (!comments.isSupportedFilePath(filename)) {
+        ed.state.error_message = comments.unsupported_file_message;
+        ed.state.mode = .Normal;
+        return;
+    }
+
+    try openCommentsPanel(ed);
+    if (ed.state.comments_panel.hasLoadError()) {
+        ed.state.mode = .Normal;
+        return;
+    }
+
+    var author = (try comments.resolveAuthor(ed.allocator, ed.io, commentsRoot(ed), &ed.config)) orelse {
+        ed.state.error_message = comments.missing_author_message;
+        ed.state.mode = .Normal;
+        return;
+    };
+    author.deinit(ed.allocator);
+
+    const cursor = tab.mainCursor().*;
+    const range = comments.selectedRange(cursor) orelse {
+        ed.state.error_message = "Select text before creating a comment";
+        ed.state.mode = .Normal;
+        return;
+    };
+    var anchor = try comments.anchorFromSelection(ed.allocator, &tab.buf, range.start_row, range.start_col, range.end_row, range.end_col);
+    errdefer anchor.deinit(ed.allocator);
+    if (std.mem.trim(u8, anchor.selected_text, " \t\r\n").len == 0) {
+        anchor.deinit(ed.allocator);
+        ed.state.error_message = "Select text before creating a comment";
+        ed.state.mode = .Normal;
+        return;
+    }
+
+    const relative_path = try comments.relativeFilePath(ed.allocator, commentsRoot(ed), filename);
+    errdefer ed.allocator.free(relative_path);
+    ed.state.comments_panel.pending_action.deinit(ed.allocator);
+    ed.state.comments_panel.pending_action = .{ .new_thread = .{ .file_path = relative_path, .anchor = anchor } };
+    try ed.state.prompt_popup.open(ed.allocator, .comment_new, "Add Comment", anchor.selected_text, "");
+    ed.state.mode = .Prompt;
+    ed.markDirty(.full);
+}
+
+pub fn validateActiveFileComments(ed: *editor.Editor) void {
+    const tab = ed.currentTab() orelse return;
+    const filename = tab.buf.filename orelse return;
+    comments.validateAnchorsForFile(&ed.state.comments_panel.store, ed.state.workspace.root_path, filename, &tab.buf);
 }
 
 fn testingTmpRoot(allocator: std.mem.Allocator, tmp: anytype) ![]u8 {

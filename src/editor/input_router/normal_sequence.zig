@@ -23,6 +23,8 @@ pub const NormalCommand = enum {
     fold_all,
     unfold_all,
     toggle_fold_all,
+    next_comment,
+    previous_comment,
 };
 
 pub const ResolveResult = union(enum) {
@@ -49,6 +51,8 @@ pub fn normalCommandFromCommandId(id: commands.CommandId) ?NormalCommand {
         .fold_close_all => .fold_all,
         .fold_open_all => .unfold_all,
         .fold_toggle_all => .toggle_fold_all,
+        .navigation_next_comment => .next_comment,
+        .navigation_previous_comment => .previous_comment,
         else => null,
     };
 }
@@ -235,6 +239,8 @@ test "normal resolver uses central registry for all legacy sequences" {
         .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('M') }), .command = .fold_all },
         .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('R') }), .command = .unfold_all },
         .{ .keys = KeySequence.fromKeys(&.{ charKey('z'), charKey('A') }), .command = .toggle_fold_all },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey(']'), charKey('c') }), .command = .next_comment },
+        .{ .keys = KeySequence.fromKeys(&.{ charKey('['), charKey('c') }), .command = .previous_comment },
     };
 
     for (cases) |case| {
@@ -392,6 +398,8 @@ test "normal command mapping covers registry-backed normal sequence commands" {
         .fold_close_all,
         .fold_open_all,
         .fold_toggle_all,
+        .navigation_next_comment,
+        .navigation_previous_comment,
     };
 
     for (expected) |id| {

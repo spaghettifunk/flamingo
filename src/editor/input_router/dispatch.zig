@@ -15,6 +15,7 @@ const fs_ops = @import("../filesystem_ops.zig");
 const prompt_popup = @import("../prompt_popup.zig");
 const terminal_panel = @import("../terminal_panel.zig");
 const todos = @import("../todos.zig");
+const comments = @import("../comments.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -55,6 +56,19 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .todo_panel_delete,
             .todo_panel_toggle,
             .todo_panel_open_selected,
+            => true,
+            else => false,
+        },
+        .comments_panel => switch (id) {
+            .comments_panel_close,
+            .comments_panel_move_up,
+            .comments_panel_move_down,
+            .comments_panel_refresh,
+            .comments_panel_reply,
+            .comments_panel_edit,
+            .comments_panel_delete,
+            .comments_panel_new,
+            .comments_panel_open_selected,
             => true,
             else => false,
         },
@@ -203,6 +217,7 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .search,
         .global_search,
         .todo_panel,
+        .comments_panel,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -313,6 +328,10 @@ fn todoPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) 
     return resolveDefaultContextCommand(ed, .todo_panel, event);
 }
 
+fn commentsPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .comments_panel, event);
+}
+
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     const command = resolveDefaultContextCommand(ed, .explorer, event) orelse return null;
     return switch (command) {
@@ -381,7 +400,8 @@ fn helpActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?comm
 
 fn promptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     const is_delete_confirm = ed.state.prompt_popup.kind == .explorer_delete_confirm or
-        ed.state.prompt_popup.kind == .todo_delete_confirm;
+        ed.state.prompt_popup.kind == .todo_delete_confirm or
+        ed.state.prompt_popup.kind == .comment_delete_confirm;
     const command = resolveDefaultContextCommand(ed, .prompt, event) orelse return null;
     return switch (command) {
         .prompt_cancel => if (is_delete_confirm or !isPlainPromptNoKey(event)) .prompt_cancel else null,
@@ -500,6 +520,80 @@ fn executeNormalCommand(ed: *editor.Editor, command: normal_sequence.NormalComma
                 clampAfterFoldChange(ed);
             }
         },
+        .next_comment => try jumpCommentAnchor(ed, .next),
+        .previous_comment => try jumpCommentAnchor(ed, .previous),
+    }
+}
+
+const CommentJumpDirection = enum { next, previous };
+
+fn commentPanelRowForThread(panel: *const comments.CommentsPanel, thread_index: usize) ?usize {
+    var row: usize = 0;
+    for (panel.store.threads.items, 0..) |thread, index| {
+        if (index == thread_index) return row;
+        row += 1 + thread.comments.items.len;
+    }
+    return null;
+}
+
+fn jumpCommentAnchor(ed: *editor.Editor, direction: CommentJumpDirection) !void {
+    const tab = ed.currentTab() orelse return;
+    const filename = tab.buf.filename orelse return;
+    {
+        const command_module = @import("../command.zig");
+        command_module.validateActiveFileComments(ed);
+    }
+    const mc = tab.mainCursor();
+    var best_index: ?usize = null;
+    var best_row: usize = 0;
+    var best_col: usize = 0;
+    var wrap_index: ?usize = null;
+    var wrap_row: usize = 0;
+    var wrap_col: usize = 0;
+
+    for (ed.state.comments_panel.store.threads.items, 0..) |thread, thread_index| {
+        if (!comments.pathMatchesThread(ed.state.workspace.root_path, filename, thread.file_path)) continue;
+        if (thread.anchor.start_line == 0 or thread.anchor.start_col == 0) continue;
+        const row = thread.anchor.start_line - 1;
+        const col = thread.anchor.start_col - 1;
+        const after_cursor = row > mc.row or (row == mc.row and col > mc.col);
+        const before_cursor = row < mc.row or (row == mc.row and col < mc.col);
+        switch (direction) {
+            .next => {
+                if (wrap_index == null or row < wrap_row or (row == wrap_row and col < wrap_col)) {
+                    wrap_index = thread_index;
+                    wrap_row = row;
+                    wrap_col = col;
+                }
+                if (after_cursor and (best_index == null or row < best_row or (row == best_row and col < best_col))) {
+                    best_index = thread_index;
+                    best_row = row;
+                    best_col = col;
+                }
+            },
+            .previous => {
+                if (wrap_index == null or row > wrap_row or (row == wrap_row and col > wrap_col)) {
+                    wrap_index = thread_index;
+                    wrap_row = row;
+                    wrap_col = col;
+                }
+                if (before_cursor and (best_index == null or row > best_row or (row == best_row and col > best_col))) {
+                    best_index = thread_index;
+                    best_row = row;
+                    best_col = col;
+                }
+            },
+        }
+    }
+
+    const target_index = best_index orelse wrap_index orelse {
+        ed.state.status_message = "No comments in current file";
+        return;
+    };
+    const target = ed.state.comments_panel.store.threads.items[target_index];
+    _ = try navigation.jumpTo(ed, target.anchor.start_line -| 1, target.anchor.start_col -| 1, .{ .record_history = true });
+    if (commentPanelRowForThread(&ed.state.comments_panel, target_index)) |row| {
+        ed.state.comments_panel.selected_row = row;
     }
 }
 
@@ -758,6 +852,12 @@ fn todoRoot(ed: *editor.Editor) []const u8 {
     return ".";
 }
 
+fn commentsRoot(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    return ".";
+}
+
 fn saveManualTodosOrReport(ed: *editor.Editor) !bool {
     todos.saveManualTodos(ed.allocator, ed.io, todoRoot(ed), ed.state.todo_panel.manual_items.items) catch |err| switch (err) {
         error.NoWorkspace => {
@@ -778,6 +878,33 @@ fn refreshTodoPanel(ed: *editor.Editor) !void {
     const command_module = @import("../command.zig");
     try command_module.refreshTodoPanelCode(ed, root);
     ed.state.status_message = "TODOs refreshed";
+}
+
+fn saveCommentsOrReport(ed: *editor.Editor) !bool {
+    if (ed.state.comments_panel.load_error) |message| {
+        ed.state.prompt_popup.error_message = message;
+        return false;
+    }
+    comments.saveComments(ed.allocator, ed.io, commentsRoot(ed), &ed.state.comments_panel.store) catch |err| switch (err) {
+        error.NoWorkspace => {
+            ed.state.prompt_popup.error_message = "Comments unavailable: could not create .flamingo workspace";
+            return false;
+        },
+        error.InvalidWorkspace => {
+            ed.state.prompt_popup.error_message = "Cannot use workspace comments: .flamingo exists and is not a directory";
+            return false;
+        },
+        else => return err,
+    };
+    return true;
+}
+
+fn refreshCommentsPanel(ed: *editor.Editor) !void {
+    const command_module = @import("../command.zig");
+    try command_module.refreshCommentsPanel(ed);
+    if (ed.state.comments_panel.load_error == null) {
+        ed.state.status_message = "Comments refreshed";
+    }
 }
 
 fn selectedManualTodoIndex(ed: *editor.Editor) ?usize {
@@ -872,6 +999,110 @@ fn executeTodoPanelActionCommand(ed: *editor.Editor, command: commands.CommandId
             }
         },
         .todo_panel_open_selected => try openSelectedTodo(ed),
+        else => unreachable,
+    }
+}
+
+fn selectedCommentDeleteLabel(ed: *editor.Editor) []const u8 {
+    const message_ref = ed.state.comments_panel.selectedMessageRefOrRoot() orelse return "selected comment";
+    if (message_ref.thread_index >= ed.state.comments_panel.store.threads.items.len) return "selected comment";
+    const thread = ed.state.comments_panel.store.threads.items[message_ref.thread_index];
+    if (message_ref.message_index >= thread.comments.items.len) return "selected comment";
+    return thread.comments.items[message_ref.message_index].body;
+}
+
+fn openCommentPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
+    if (ed.state.comments_panel.load_error) |message| {
+        ed.state.error_message = message;
+        return;
+    }
+    ed.state.comments_panel.pending_action.deinit(ed.allocator);
+    switch (kind) {
+        .comment_reply => {
+            const thread_index = ed.state.comments_panel.selectedThreadIndex() orelse {
+                ed.state.status_message = "No comment thread selected";
+                return;
+            };
+            ed.state.comments_panel.pending_action = .{ .reply = .{ .thread_index = thread_index } };
+            try ed.state.prompt_popup.open(ed.allocator, .comment_reply, "Reply", "", "");
+        },
+        .comment_edit => {
+            const message_ref = ed.state.comments_panel.selectedMessageRefOrRoot() orelse {
+                ed.state.status_message = "No comment selected";
+                return;
+            };
+            const thread = ed.state.comments_panel.store.threads.items[message_ref.thread_index];
+            const body = thread.comments.items[message_ref.message_index].body;
+            ed.state.comments_panel.pending_action = .{ .edit = message_ref };
+            try ed.state.prompt_popup.open(ed.allocator, .comment_edit, "Edit Comment", "", body);
+        },
+        .comment_delete_confirm => {
+            const message_ref = ed.state.comments_panel.selectedMessageRefOrRoot() orelse {
+                ed.state.status_message = "No comment selected";
+                return;
+            };
+            ed.state.comments_panel.pending_action = .{ .delete = message_ref };
+            try ed.state.prompt_popup.open(ed.allocator, .comment_delete_confirm, "Delete Comment", selectedCommentDeleteLabel(ed), "");
+        },
+        else => unreachable,
+    }
+    ed.state.mode = .Prompt;
+    ed.markDirty(.full);
+}
+
+fn openSelectedComment(ed: *editor.Editor) !void {
+    const thread_index = ed.state.comments_panel.selectedThreadIndex() orelse return;
+    if (thread_index >= ed.state.comments_panel.store.threads.items.len) return;
+    const thread = ed.state.comments_panel.store.threads.items[thread_index];
+    const open_path = try comments.openPathForThread(ed.allocator, commentsRoot(ed), thread.file_path);
+    defer ed.allocator.free(open_path);
+
+    if (ed.currentTab()) |tab| {
+        if (tab.buf.filename) |filename| {
+            if (comments.pathMatchesThread(ed.state.workspace.root_path, filename, thread.file_path)) {
+                _ = try navigation.jumpTo(ed, thread.anchor.start_line -| 1, thread.anchor.start_col -| 1, .{ .record_history = true });
+                ed.state.comments_panel.focused = false;
+                ed.state.mode = .Normal;
+                return;
+            }
+        }
+    }
+
+    var b = buffer.Buffer.loadFromFile(ed.allocator, ed.io, open_path) catch {
+        ed.state.error_message = "Could not open comment file";
+        return;
+    };
+    var consumed = false;
+    errdefer if (!consumed) b.deinit();
+    try navigation.recordCurrentJump(ed);
+    try ed.addTab(b);
+    consumed = true;
+    _ = try navigation.jumpTo(ed, thread.anchor.start_line -| 1, thread.anchor.start_col -| 1, .{ .record_history = false });
+    ed.state.comments_panel.focused = false;
+    ed.state.explorer_focused = false;
+    ed.state.mode = .Normal;
+}
+
+fn executeCommentsPanelActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    clearPendingNormalSequence(ed);
+    switch (command) {
+        .comments_panel_close => {
+            ed.state.comments_panel.visible = false;
+            ed.state.comments_panel.focused = false;
+            ed.state.mode = .Normal;
+            ed.markDirty(.full);
+        },
+        .comments_panel_move_up => ed.state.comments_panel.moveUp(),
+        .comments_panel_move_down => ed.state.comments_panel.moveDown(),
+        .comments_panel_refresh => try refreshCommentsPanel(ed),
+        .comments_panel_reply => try openCommentPrompt(ed, .comment_reply),
+        .comments_panel_edit => try openCommentPrompt(ed, .comment_edit),
+        .comments_panel_delete => try openCommentPrompt(ed, .comment_delete_confirm),
+        .comments_panel_new => {
+            const command_module = @import("../command.zig");
+            try command_module.beginNewCommentFromSelection(ed);
+        },
+        .comments_panel_open_selected => try openSelectedComment(ed),
         else => unreachable,
     }
 }
@@ -1166,6 +1397,12 @@ fn executePromptActionCommand(ed: *editor.Editor, command: commands.CommandId) !
     switch (command) {
         .prompt_cancel => {
             clearPendingNormalSequence(ed);
+            switch (ed.state.prompt_popup.kind) {
+                .comment_new, .comment_reply, .comment_edit, .comment_delete_confirm => {
+                    ed.state.comments_panel.pending_action.deinit(ed.allocator);
+                },
+                else => {},
+            }
             ed.state.prompt_popup.close(ed.allocator);
             ed.state.mode = .Normal;
             ed.markDirty(.full);
@@ -1449,6 +1686,128 @@ fn applyPrompt(ed: *editor.Editor) !void {
             ed.state.mode = .Normal;
             ed.state.todo_panel.focused = true;
         },
+        .comment_new => {
+            const body = std.mem.trim(u8, input_text, " \t\r\n");
+            if (body.len == 0) {
+                ed.state.prompt_popup.error_message = "Comment body is required";
+                return;
+            }
+            const pending = switch (ed.state.comments_panel.pending_action) {
+                .new_thread => |*pending| pending,
+                else => {
+                    ed.state.prompt_popup.error_message = "No pending comment selection";
+                    return;
+                },
+            };
+            var author = (try comments.resolveAuthor(ed.allocator, ed.io, commentsRoot(ed), &ed.config)) orelse {
+                ed.state.prompt_popup.error_message = comments.missing_author_message;
+                return;
+            };
+            defer author.deinit(ed.allocator);
+            const before_len = ed.state.comments_panel.store.threads.items.len;
+            try comments.appendThread(&ed.state.comments_panel, ed.allocator, ed.io, pending.file_path, &pending.anchor, &author, body);
+            if (!(try saveCommentsOrReport(ed))) {
+                if (ed.state.comments_panel.store.threads.items.len > before_len) {
+                    var thread = ed.state.comments_panel.store.threads.orderedRemove(before_len);
+                    thread.deinit(ed.allocator);
+                    ed.state.comments_panel.clampSelection();
+                }
+                return;
+            }
+            ed.state.comments_panel.pending_action.deinit(ed.allocator);
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.comments_panel.focused = true;
+            {
+                const command_module = @import("../command.zig");
+                command_module.validateActiveFileComments(ed);
+            }
+        },
+        .comment_reply => {
+            const body = std.mem.trim(u8, input_text, " \t\r\n");
+            if (body.len == 0) {
+                ed.state.prompt_popup.error_message = "Reply body is required";
+                return;
+            }
+            const thread_ref = switch (ed.state.comments_panel.pending_action) {
+                .reply => |thread_ref| thread_ref,
+                else => {
+                    ed.state.prompt_popup.error_message = "No pending comment thread";
+                    return;
+                },
+            };
+            if (thread_ref.thread_index >= ed.state.comments_panel.store.threads.items.len) {
+                ed.state.prompt_popup.error_message = "No comment thread selected";
+                return;
+            }
+            var author = (try comments.resolveAuthor(ed.allocator, ed.io, commentsRoot(ed), &ed.config)) orelse {
+                ed.state.prompt_popup.error_message = comments.missing_author_message;
+                return;
+            };
+            defer author.deinit(ed.allocator);
+            const before_len = ed.state.comments_panel.store.threads.items[thread_ref.thread_index].comments.items.len;
+            try comments.appendReply(&ed.state.comments_panel, ed.allocator, ed.io, thread_ref.thread_index, &author, body);
+            if (!(try saveCommentsOrReport(ed))) {
+                comments.deleteMessage(&ed.state.comments_panel, ed.allocator, .{
+                    .thread_index = thread_ref.thread_index,
+                    .message_index = before_len,
+                });
+                return;
+            }
+            ed.state.comments_panel.pending_action.deinit(ed.allocator);
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.comments_panel.focused = true;
+        },
+        .comment_edit => {
+            const body = std.mem.trim(u8, input_text, " \t\r\n");
+            if (body.len == 0) {
+                ed.state.prompt_popup.error_message = "Comment body is required";
+                return;
+            }
+            const message_ref = switch (ed.state.comments_panel.pending_action) {
+                .edit => |message_ref| message_ref,
+                else => {
+                    ed.state.prompt_popup.error_message = "No pending comment edit";
+                    return;
+                },
+            };
+            if (message_ref.thread_index >= ed.state.comments_panel.store.threads.items.len or
+                message_ref.message_index >= ed.state.comments_panel.store.threads.items[message_ref.thread_index].comments.items.len)
+            {
+                ed.state.prompt_popup.error_message = "No comment selected";
+                return;
+            }
+            const old_body = try ed.allocator.dupe(u8, ed.state.comments_panel.store.threads.items[message_ref.thread_index].comments.items[message_ref.message_index].body);
+            defer ed.allocator.free(old_body);
+            try comments.editMessage(&ed.state.comments_panel, ed.allocator, ed.io, message_ref, body);
+            if (!(try saveCommentsOrReport(ed))) {
+                _ = comments.editMessage(&ed.state.comments_panel, ed.allocator, ed.io, message_ref, old_body) catch {};
+                return;
+            }
+            ed.state.comments_panel.pending_action.deinit(ed.allocator);
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.comments_panel.focused = true;
+        },
+        .comment_delete_confirm => {
+            const message_ref = switch (ed.state.comments_panel.pending_action) {
+                .delete => |message_ref| message_ref,
+                else => {
+                    ed.state.prompt_popup.error_message = "No pending comment delete";
+                    return;
+                },
+            };
+            comments.deleteMessage(&ed.state.comments_panel, ed.allocator, message_ref);
+            if (!(try saveCommentsOrReport(ed))) {
+                ed.state.prompt_popup.error_message = "Could not persist comment delete";
+                return;
+            }
+            ed.state.comments_panel.pending_action.deinit(ed.allocator);
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+            ed.state.comments_panel.focused = true;
+        },
     }
 }
 
@@ -1464,6 +1823,7 @@ fn showAndFocusTerminal(ed: *editor.Editor) !void {
     ed.terminal_panel.focus();
     ed.state.explorer_focused = false;
     ed.state.todo_panel.focused = false;
+    ed.state.comments_panel.focused = false;
     ed.state.mode = .Terminal;
     ed.markDirty(.full);
 }
@@ -1478,33 +1838,41 @@ fn cyclePanelFocus(ed: *editor.Editor) !bool {
     const explorer_available = ed.state.explorer_visible;
     const terminal_available = ed.terminal_panel.visible;
     const todo_available = ed.state.todo_panel.visible;
-    if (!explorer_available and !terminal_available and !todo_available) return false;
+    const comments_available = ed.state.comments_panel.visible;
+    const right_panel_available = todo_available or comments_available;
+    const right_panel_focused = ed.state.todo_panel.focused or ed.state.comments_panel.focused;
+    if (!explorer_available and !terminal_available and !right_panel_available) return false;
 
-    if (explorer_available or terminal_available or todo_available) {
-        if (explorer_available and !ed.state.explorer_focused and !ed.terminal_panel.focused and !ed.state.todo_panel.focused) {
+    if (explorer_available or terminal_available or right_panel_available) {
+        if (explorer_available and !ed.state.explorer_focused and !ed.terminal_panel.focused and !right_panel_focused) {
             ed.state.explorer_focused = true;
             ed.terminal_panel.blur();
             if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
-        } else if (ed.state.explorer_focused and todo_available) {
+        } else if (ed.state.explorer_focused and right_panel_available) {
             ed.state.explorer_focused = false;
-            ed.state.todo_panel.focused = true;
+            ed.state.todo_panel.focused = todo_available;
+            ed.state.comments_panel.focused = comments_available;
             ed.terminal_panel.blur();
             if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
-        } else if ((ed.state.explorer_focused or ed.state.todo_panel.focused) and terminal_available) {
+        } else if ((ed.state.explorer_focused or right_panel_focused) and terminal_available) {
             ed.state.explorer_focused = false;
             ed.state.todo_panel.focused = false;
+            ed.state.comments_panel.focused = false;
             try showAndFocusTerminal(ed);
         } else if (ed.terminal_panel.focused) {
             enterNormalFromTerminal(ed);
             ed.state.todo_panel.focused = false;
-        } else if (todo_available) {
-            ed.state.todo_panel.focused = !ed.state.todo_panel.focused;
+            ed.state.comments_panel.focused = false;
+        } else if (right_panel_available) {
+            ed.state.todo_panel.focused = todo_available and !right_panel_focused;
+            ed.state.comments_panel.focused = comments_available and !right_panel_focused;
             ed.state.explorer_focused = false;
             ed.terminal_panel.blur();
             if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
         } else if (explorer_available) {
             ed.state.explorer_focused = !ed.state.explorer_focused;
             ed.state.todo_panel.focused = false;
+            ed.state.comments_panel.focused = false;
         }
         ed.markDirty(.full);
         return true;
@@ -1569,6 +1937,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         if (ed.state.explorer_visible) {
             ed.state.explorer_focused = true;
             ed.state.todo_panel.focused = false;
+            ed.state.comments_panel.focused = false;
             ed.terminal_panel.blur();
             if (ed.state.mode == .Terminal) ed.state.mode = .Normal;
         } else {
@@ -1609,6 +1978,15 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     {
         if (todoPanelActionCommandForEvent(ed, event)) |command| {
             try executeTodoPanelActionCommand(ed, command);
+            return;
+        }
+    }
+
+    if (ed.state.comments_panel.visible and ed.state.comments_panel.focused and
+        (ed.state.mode == .Normal or ed.state.mode == .Insert))
+    {
+        if (commentsPanelActionCommandForEvent(ed, event)) |command| {
+            try executeCommentsPanelActionCommand(ed, command);
             return;
         }
     }
@@ -1744,7 +2122,11 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         .Prompt => {
             if (promptActionCommandForEvent(ed, event)) |command| {
                 try executePromptActionCommand(ed, command);
-            } else if (event.key == .Char and !event.ctrl and !event.alt and ed.state.prompt_popup.kind != .explorer_delete_confirm) {
+            } else if (event.key == .Char and !event.ctrl and !event.alt and
+                ed.state.prompt_popup.kind != .explorer_delete_confirm and
+                ed.state.prompt_popup.kind != .todo_delete_confirm and
+                ed.state.prompt_popup.kind != .comment_delete_confirm)
+            {
                 try ed.state.prompt_popup.appendChar(ed.allocator, event.char);
                 ed.markDirty(.full);
             }

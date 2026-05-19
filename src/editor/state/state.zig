@@ -17,6 +17,7 @@ const jump_history_mod = @import("jump_history.zig");
 const git_status = @import("../git_status.zig");
 const workspace_mod = @import("../workspace.zig");
 const todos_mod = @import("../todos.zig");
+const comments_mod = @import("../comments.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -56,6 +57,7 @@ pub const EditorState = struct {
     global_search: global_search.GlobalSearch = .{},
     help_popup: help.HelpPopup = .{},
     todo_panel: todos_mod.TodoPanel = .{},
+    comments_panel: comments_mod.CommentsPanel = .{},
     clipboard: ?[]u8 = null,
     render_dirty: bool = true,
     force_full_render: bool = true,
@@ -98,6 +100,7 @@ pub const EditorState = struct {
         }
         self.workspace.deinit(allocator);
         self.todo_panel.deinit(allocator);
+        self.comments_panel.deinit(allocator);
         if (self.search_system) |*s| {
             s.deinit();
             self.search_system = null;

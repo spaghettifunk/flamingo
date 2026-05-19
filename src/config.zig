@@ -14,6 +14,7 @@ pub const KeybindingsConfig = struct {
     search: ?toml.Table = null,
     global_search: ?toml.Table = null,
     todo_panel: ?toml.Table = null,
+    comments_panel: ?toml.Table = null,
     help: ?toml.Table = null,
     terminal: ?toml.Table = null,
     picker: ?toml.Table = null,
@@ -58,12 +59,18 @@ pub const ExplorerConfig = struct {
     width_percentage: u8 = 20,
 };
 
+pub const AuthorConfig = struct {
+    name: ?[]const u8 = null,
+    email: ?[]const u8 = null,
+};
+
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
     debug: bool = false,
     keybindings: KeybindingsConfig = .{},
     explorer: ExplorerConfig = .{},
+    author: AuthorConfig = .{},
 };
 
 // ── Validation ───────────────────────────────────────────────────────────────
@@ -87,6 +94,7 @@ fn contextTable(cfg: *const KeybindingsConfig, context: command_keybindings.Bind
         .search => cfg.search,
         .global_search => cfg.global_search,
         .todo_panel => cfg.todo_panel,
+        .comments_panel => cfg.comments_panel,
         .help => cfg.help,
         .terminal => cfg.terminal,
         .picker => cfg.picker,

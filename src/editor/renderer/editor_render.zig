@@ -1,6 +1,7 @@
 const perf = @import("../../perf/perf.zig");
 const syntax = @import("../syntax.zig");
 const editor_syntax = @import("../syntax_editor.zig");
+const comments = @import("../comments.zig");
 const viewport_mod = @import("../navigation/viewport.zig");
 const tab_mod = @import("../model/tab.zig");
 const tabbar = @import("tabbar.zig");
@@ -12,6 +13,7 @@ const completion_menu = @import("completion_menu.zig");
 const statusline = @import("statusline.zig");
 const terminal_panel_view = @import("terminal_panel_view.zig");
 const todo_panel_view = @import("todo_panel_view.zig");
+const comments_panel_view = @import("comments_panel_view.zig");
 
 pub const RenderContext = struct {
     tab: ?*tab_mod.Tab,
@@ -57,6 +59,7 @@ pub fn renderVirtual(editor: anytype, writer: anytype, metrics: *perf.FrameMetri
     } else {
         renderVirtualExplorer(editor);
         todo_panel_view.renderVirtualTodoPanel(editor);
+        comments_panel_view.renderVirtualCommentsPanel(editor);
 
         const tabs_start = if (editor.active_keypress_trace != null) perf.nowNs() else 0;
         renderVirtualTabs(editor, ctx);
@@ -64,6 +67,9 @@ pub fn renderVirtual(editor: anytype, writer: anytype, metrics: *perf.FrameMetri
 
         if (ctx.tab) |t| {
             t.scroll_row = t.buf.clampToVisibleLine(t.scroll_row);
+            if (t.buf.filename) |filename| {
+                comments.validateAnchorsForFile(&editor.state.comments_panel.store, editor.state.workspace.root_path, filename, &t.buf);
+            }
             const highlight_start = perf.nowNs();
             const syntax_end = viewport_mod.visibleViewportEndLine(t, t.scroll_row, ctx.visible_rows + 20);
             editor_syntax.prepareSyntaxForViewport(editor, t, t.scroll_row, syntax_end, 20) catch {
@@ -158,6 +164,10 @@ pub fn setVirtualCursor(editor: anytype, ctx: RenderContext) void {
         return;
     }
     if (editor.state.todo_panel.visible and editor.state.todo_panel.focused) {
+        editor.renderer.screen.hideCursor();
+        return;
+    }
+    if (editor.state.comments_panel.visible and editor.state.comments_panel.focused) {
         editor.renderer.screen.hideCursor();
         return;
     }

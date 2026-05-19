@@ -19,7 +19,7 @@ pub const BufferViewportGeometry = struct {
 };
 
 pub fn todoPanelWidth(editor: anytype) usize {
-    if (!editor.state.todo_panel.visible or editor.width < 72) return 0;
+    if ((!editor.state.todo_panel.visible and !editor.state.comments_panel.visible) or editor.width < 72) return 0;
     const preferred: usize = 40;
     const minimum: usize = 32;
     const max_panel = editor.width / 3;

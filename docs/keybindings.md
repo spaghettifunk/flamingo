@@ -24,6 +24,8 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 | **Jump to Bottom of File**   | `G`              |
 | **Jump to Matching Bracket** | `%`              |
 | **Jump to Definition (LSP)** | `f`              |
+| **Next Comment Anchor**      | `]c`             |
+| **Previous Comment Anchor**  | `[c`             |
 | **Next Tab**                 | `Option + ]`     |
 | **Previous Tab**             | `Option + [`     |
 | **Jump Back (History)**      | `Option + O`     |
@@ -107,6 +109,9 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:search`                 |       | Open project-wide Global Search                            |
 | `:help`                   |       | Open the Help popup                                        |
 | `:todos`                  |       | Open/focus the workspace TODO panel                        |
+| `:comment`                |       | Create a comment from the active text selection            |
+| `:comments`               |       | Open/focus the workspace comments panel                    |
+| `:comments refresh`       |       | Reload `.flamingo/comments.json`                           |
 | `:<number>`               |       | Jump to line `<number>`                                    |
 | `:goto <number>`          |       | Jump to line `<number>`                                    |
 | `:line <number>`          |       | Jump to line `<number>`                                    |
@@ -120,7 +125,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | Action                     | Keybinding                                          |
 | :------------------------- | :-------------------------------------------------- |
 | **Toggle Explorer**        | `CTRL + B`                                          |
-| **Switch Focus**           | `CTRL + E` (between Editor, Explorer, TODO, and Terminal) |
+| **Switch Focus**           | `CTRL + E` (between Editor, Explorer, right panel, and Terminal) |
 | **Move Selection**         | `Up / Down`                                         |
 | **Open File / Toggle Dir** | `Enter`                                             |
 | **New File in Dir**        | `Option + N`                                        |
@@ -150,6 +155,25 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | **Delete Manual TODO** | `d`                  |
 | **Toggle Done/Open**   | `x`                  |
 | **Close TODO Panel**   | `q` or `Esc`         |
+
+### Comments Panel
+
+Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.org` files in a Flamingo workspace. Creating the first comment lazily creates `.flamingo/comments.json`.
+
+| Action                    | Keybinding     |
+| :------------------------ | :------------- |
+| **Create Comment**        | `:comment`     |
+| **Open Comments Panel**   | `:comments`    |
+| **Move Selection**        | `Up / Down`    |
+| **Jump to Anchor**        | `Enter`        |
+| **Reply to Thread**       | `r`            |
+| **Edit Comment/Reply**    | `e`            |
+| **Delete Comment/Reply**  | `d`            |
+| **New From Selection**    | `n`            |
+| **Reload From Disk**      | `R`            |
+| **Close Comments Panel**  | `q` or `Esc`   |
+| **Next Comment Anchor**   | `]c`           |
+| **Previous Comment Anchor** | `[c`         |
 
 ### LSP Completion
 
@@ -216,8 +240,20 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 "tab" = "command.suggestion_next"
 "esc" = "command.cancel"
 
+[keybindings.comments_panel]
+"r" = "comments_panel.reply"
+"R" = "comments_panel.refresh"
+
 [keybindings.normal.unbind]
 keys = ["ctrl+w"]
+```
+
+Comment authors can be configured as a fallback when Git identity is unavailable:
+
+```toml
+[author]
+name = "Davide"
+email = "davide@example.com"
 ```
 
 Supported key spellings include plain sequences like `gg` and `zM`, modifiers like `ctrl+s`, `C-S-k`, `alt+delete`, `shift+tab`, and special keys like `enter`, `esc`, `tab`, `backspace`, arrows, `pageup`, `pagedown`, `home`, `end`, and `space`.

@@ -318,6 +318,8 @@ pub const Editor = struct {
             if (self.state.tree.?.search_active) .explorer_search else .explorer
         else if (self.state.todo_panel.visible and self.state.todo_panel.focused)
             .todo_panel
+        else if (self.state.comments_panel.visible and self.state.comments_panel.focused)
+            .comments_panel
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -337,6 +339,8 @@ pub const Editor = struct {
             .explorer_move_down,
             .todo_panel_move_up,
             .todo_panel_move_down,
+            .comments_panel_move_up,
+            .comments_panel_move_down,
             => true,
             else => false,
         };

@@ -7,6 +7,10 @@ pub const PromptKind = enum {
     todo_new,
     todo_edit,
     todo_delete_confirm,
+    comment_new,
+    comment_reply,
+    comment_edit,
+    comment_delete_confirm,
 };
 
 pub const PromptPopup = struct {

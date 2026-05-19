@@ -11,6 +11,10 @@ pub fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
         .todo_new => "Enter create  Backspace edit  Esc cancel",
         .todo_edit => "Enter update  Backspace edit  Esc cancel",
         .todo_delete_confirm => "Enter/y confirm  Esc/n cancel",
+        .comment_new => "Enter save  Backspace edit  Esc cancel",
+        .comment_reply => "Enter reply  Backspace edit  Esc cancel",
+        .comment_edit => "Enter update  Backspace edit  Esc cancel",
+        .comment_delete_confirm => "Enter/y confirm  Esc/n cancel",
     };
 }
 
@@ -36,9 +40,14 @@ pub fn renderVirtualPromptPopup(editor: anytype) void {
 
     const body_row = geom.row + 1;
     popup.drawVirtualPopupRow(&editor.renderer.screen, body_row, geom.col, geom.width, .command_popup_border, .command_popup);
-    if (popup_state.kind == .explorer_delete_confirm or popup_state.kind == .todo_delete_confirm) {
+    if (popup_state.kind == .explorer_delete_confirm or popup_state.kind == .todo_delete_confirm or popup_state.kind == .comment_delete_confirm) {
         var col = geom.col + 2;
-        const label = if (popup_state.kind == .todo_delete_confirm) "Delete TODO " else "Delete ";
+        const label = if (popup_state.kind == .todo_delete_confirm)
+            "Delete TODO "
+        else if (popup_state.kind == .comment_delete_confirm)
+            "Delete comment "
+        else
+            "Delete ";
         popup.writeVirtualTruncated(&editor.renderer.screen, body_row, &col, geom.col + geom.width - 1, label, .command_popup);
         popup.writeVirtualTruncated(&editor.renderer.screen, body_row, &col, geom.col + geom.width - 1, popup_state.context_path, .command_popup);
         popup.writeVirtualTruncated(&editor.renderer.screen, body_row, &col, geom.col + geom.width - 1, "?", .command_popup);
