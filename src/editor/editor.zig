@@ -320,6 +320,8 @@ pub const Editor = struct {
             .todo_panel
         else if (self.state.comments_panel.visible and self.state.comments_panel.focused)
             .comments_panel
+        else if (self.state.mode == .GitGraph)
+            .git_graph
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -341,6 +343,10 @@ pub const Editor = struct {
             .todo_panel_move_down,
             .comments_panel_move_up,
             .comments_panel_move_down,
+            .git_graph_move_up,
+            .git_graph_move_down,
+            .git_graph_page_up,
+            .git_graph_page_down,
             => true,
             else => false,
         };

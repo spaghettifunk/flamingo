@@ -232,6 +232,7 @@ pub fn openFolderInEditor(ed: *editor.Editor, path: []const u8) !void {
     ed.state.comments_panel.visible = false;
     ed.state.comments_panel.focused = false;
     ed.state.comments_panel.clearLoaded(ed.allocator);
+    ed.state.git_graph_panel.close();
     try ed.state.setProjectRoot(ed.allocator, root);
     if (ed.state.tree) |*tree| {
         tree.deinit();

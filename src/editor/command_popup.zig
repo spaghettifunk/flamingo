@@ -208,6 +208,12 @@ test "CommandPopup suggestions are metadata-backed and hide non-popup commands" 
 
     try popup.open(allocator);
     try popup.appendChar(allocator, 'g');
+    try expectSuggestionNames(popup.suggestions.items, &.{ "git-graph", "ggraph" });
+
+    popup.close();
+    try popup.open(allocator);
+    try popup.appendChar(allocator, 'g');
+    try popup.appendChar(allocator, 'o');
     try std.testing.expectEqual(@as(usize, 0), popup.suggestions.items.len);
     try std.testing.expect(commands.metadata(.navigation_goto_line).show_in_command_popup == false);
 

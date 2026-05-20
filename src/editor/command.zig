@@ -6,6 +6,7 @@ const commands = @import("commands.zig");
 const todos = @import("todos.zig");
 const comments = @import("comments.zig");
 const workspace = @import("workspace.zig");
+const git_graph = @import("git_graph.zig");
 
 pub const Command = enum {
     quit,
@@ -19,6 +20,7 @@ pub const Command = enum {
     todos,
     comment,
     comments,
+    git_graph,
     rename_file,
     delete_file,
     new_file,
@@ -36,6 +38,7 @@ pub const Command = enum {
             .todos => .todos_open,
             .comment => .comment_create,
             .comments => .comments_open,
+            .git_graph => .git_graph_open,
             .rename_file => .file_rename,
             .delete_file => .file_delete,
             .new_file => .file_new,
@@ -71,6 +74,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .todos_open => .todos,
         .comment_create => .comment,
         .comments_open => .comments,
+        .git_graph_open => .git_graph,
         .file_rename => .rename_file,
         .file_delete => .delete_file,
         .file_new => .new_file,
@@ -256,6 +260,10 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.terminal_panel.blur();
             ed.markDirty(.full);
         },
+        .git_graph => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            try openGitGraphPanel(ed);
+        },
         .new_file => {
             const input_path = requireArg(ed, &it) orelse return;
             if (!requireNoMoreArgs(ed, &it)) return;
@@ -404,6 +412,30 @@ fn commentsRoot(ed: *editor.Editor) []const u8 {
     if (ed.state.project_root) |root| return root;
     if (ed.state.tree) |tree| return tree.root_path;
     return ".";
+}
+
+pub fn openGitGraphPanel(ed: *editor.Editor) !void {
+    const explorer_root = if (ed.state.tree) |tree| tree.root_path else null;
+    const current_file = if (ed.currentTab()) |tab| tab.buf.filename else null;
+    ed.state.git_graph_panel.open(ed.allocator, ed.io, .{
+        .project_root = ed.state.project_root,
+        .explorer_root = explorer_root,
+        .current_file = current_file,
+    }) catch |err| switch (err) {
+        error.NotGitRepository => {
+            ed.state.error_message = "Not a Git repository";
+            ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+            ed.markDirty(.full);
+            return;
+        },
+        else => return err,
+    };
+    ed.state.mode = .GitGraph;
+    ed.state.explorer_focused = false;
+    ed.state.todo_panel.focused = false;
+    ed.state.comments_panel.focused = false;
+    ed.terminal_panel.blur();
+    ed.markDirty(.full);
 }
 
 pub fn openCommentsPanel(ed: *editor.Editor) !void {

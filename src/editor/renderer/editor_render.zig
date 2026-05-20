@@ -14,6 +14,7 @@ const statusline = @import("statusline.zig");
 const terminal_panel_view = @import("terminal_panel_view.zig");
 const todo_panel_view = @import("todo_panel_view.zig");
 const comments_panel_view = @import("comments_panel_view.zig");
+const git_graph_panel_view = @import("git_graph_panel_view.zig");
 
 pub const RenderContext = struct {
     tab: ?*tab_mod.Tab,
@@ -100,6 +101,7 @@ pub fn renderVirtual(editor: anytype, writer: anytype, metrics: *perf.FrameMetri
     prompt_save_popups.renderVirtualPromptPopup(editor);
     prompt_save_popups.renderVirtualSaveConfirmationPopup(editor);
     picker_help_popups.renderVirtualHelpPopup(editor);
+    git_graph_panel_view.renderVirtualGitGraphPanel(editor);
     completion_menu.renderVirtualCompletionMenu(editor);
     if (editor.active_keypress_trace) |trace| trace.popup_ns += perf.elapsedNs(popup_start);
     const status_start = if (editor.active_keypress_trace != null) perf.nowNs() else 0;
@@ -153,7 +155,7 @@ pub fn setVirtualCursor(editor: anytype, ctx: RenderContext) void {
         editor.renderer.screen.setCursor(viewport_mod.statusTerminalRow(editor), @min(editor.width, 12 + editor.state.command_buffer.items.len));
         return;
     }
-    if (editor.state.mode == .FilesystemPicker or editor.state.mode == .Prompt or editor.state.mode == .Help or
+    if (editor.state.mode == .FilesystemPicker or editor.state.mode == .Prompt or editor.state.mode == .Help or editor.state.mode == .GitGraph or
         editor.state.mode == .Dashboard or editor.state.mode == .SaveConfirmation)
     {
         editor.renderer.screen.hideCursor();

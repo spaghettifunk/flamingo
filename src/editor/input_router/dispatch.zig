@@ -72,6 +72,19 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             => true,
             else => false,
         },
+        .git_graph => switch (id) {
+            .git_graph_close,
+            .git_graph_move_up,
+            .git_graph_move_down,
+            .git_graph_page_up,
+            .git_graph_page_down,
+            .git_graph_first,
+            .git_graph_last,
+            .git_graph_refresh,
+            .git_graph_toggle_details,
+            => true,
+            else => false,
+        },
         .explorer => switch (id) {
             .explorer_move_up,
             .explorer_move_down,
@@ -218,6 +231,7 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .global_search,
         .todo_panel,
         .comments_panel,
+        .git_graph,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -330,6 +344,38 @@ fn todoPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) 
 
 fn commentsPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     return resolveDefaultContextCommand(ed, .comments_panel, event);
+}
+
+const GitGraphInputResult = union(enum) {
+    none,
+    prefix,
+    command: commands.CommandId,
+};
+
+fn gitGraphActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) GitGraphInputResult {
+    var sequence = ed.state.git_graph_panel.pending_sequence;
+    if (!sequence.append(event)) {
+        ed.state.git_graph_panel.pending_sequence.clear();
+        return .none;
+    }
+
+    switch (ed.keybinding_registry.resolve(.git_graph, sequence)) {
+        .command => |command| {
+            ed.state.git_graph_panel.pending_sequence.clear();
+            return if (commandAllowedInResolvedContext(.git_graph, command))
+                .{ .command = command }
+            else
+                .none;
+        },
+        .prefix => {
+            ed.state.git_graph_panel.pending_sequence = sequence;
+            return .prefix;
+        },
+        .none => {
+            ed.state.git_graph_panel.pending_sequence.clear();
+            return .none;
+        },
+    }
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1103,6 +1149,66 @@ fn executeCommentsPanelActionCommand(ed: *editor.Editor, command: commands.Comma
             try command_module.beginNewCommentFromSelection(ed);
         },
         .comments_panel_open_selected => try openSelectedComment(ed),
+        else => unreachable,
+    }
+}
+
+fn gitGraphPageRows(ed: *const editor.Editor) usize {
+    return @max(@as(usize, 1), (ed.height * 70) / 100 -| 6);
+}
+
+fn closeGitGraph(ed: *editor.Editor) void {
+    ed.state.git_graph_panel.close();
+    ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+    ed.markDirty(.full);
+}
+
+fn executeGitGraphActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .git_graph_close => closeGitGraph(ed),
+        .git_graph_move_up => {
+            ed.state.git_graph_panel.moveUp();
+            ed.markDirty(.full);
+        },
+        .git_graph_move_down => {
+            ed.state.git_graph_panel.moveDown();
+            ed.markDirty(.full);
+        },
+        .git_graph_page_up => {
+            ed.state.git_graph_panel.pageUp(gitGraphPageRows(ed));
+            ed.markDirty(.full);
+        },
+        .git_graph_page_down => {
+            ed.state.git_graph_panel.pageDown(gitGraphPageRows(ed));
+            ed.markDirty(.full);
+        },
+        .git_graph_first => {
+            ed.state.git_graph_panel.firstCommit();
+            ed.markDirty(.full);
+        },
+        .git_graph_last => {
+            ed.state.git_graph_panel.lastCommit();
+            ed.markDirty(.full);
+        },
+        .git_graph_refresh => {
+            ed.state.git_graph_panel.refresh(ed.allocator, ed.io) catch |err| switch (err) {
+                error.NotGitRepository => {
+                    ed.state.git_graph_panel.error_message = "Not a Git repository";
+                    ed.state.error_message = "Not a Git repository";
+                    ed.markDirty(.full);
+                    return;
+                },
+                else => return err,
+            };
+            if (ed.state.git_graph_panel.error_message == null) {
+                ed.state.status_message = "Git Graph refreshed";
+            }
+            ed.markDirty(.full);
+        },
+        .git_graph_toggle_details => {
+            _ = ed.state.git_graph_panel.toggleDetails();
+            ed.markDirty(.full);
+        },
         else => unreachable,
     }
 }
@@ -1905,6 +2011,13 @@ fn handleHelpInput(ed: *editor.Editor, event: terminal.KeyEvent) void {
     }
 }
 
+fn handleGitGraphInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    switch (gitGraphActionCommandForEvent(ed, event)) {
+        .command => |command| try executeGitGraphActionCommand(ed, command),
+        .prefix, .none => {},
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -1915,6 +2028,11 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (ed.state.mode == .Help) {
         handleHelpInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .GitGraph) {
+        try handleGitGraphInput(ed, event);
         return;
     }
 
@@ -2150,6 +2268,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .Help => {
             handleHelpInput(ed, event);
+        },
+        .GitGraph => {
+            try handleGitGraphInput(ed, event);
         },
         .SaveConfirmation => {
             if (saveConfirmationActionCommandForEvent(ed, event)) |command| {
