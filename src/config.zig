@@ -3,6 +3,8 @@ const toml = @import("toml");
 const commands = @import("editor/commands.zig");
 const command_keybindings = @import("editor/keybindings.zig");
 
+pub const default_config_toml = @embedFile("config/default_config.toml");
+
 pub const KeybindingsConfig = struct {
     global: ?toml.Table = null,
     normal: ?toml.Table = null,
@@ -317,6 +319,141 @@ pub fn buildKeybindingRegistry(
     }
 
     return command_keybindings.Registry.fromDefaultsAndConfig(allocator, overrides.items, unbinds.items, diagnostics);
+}
+
+// ── User config path/bootstrap ───────────────────────────────────────────────
+
+pub const UserConfigPaths = struct {
+    dir: []const u8,
+    file: []const u8,
+
+    pub fn deinit(self: UserConfigPaths, allocator: std.mem.Allocator) void {
+        allocator.free(self.file);
+        allocator.free(self.dir);
+    }
+};
+
+pub const ConfigPathSource = enum {
+    cli,
+    env,
+    default_user,
+};
+
+pub const SelectedConfigPath = struct {
+    path: []const u8,
+    source: ConfigPathSource,
+
+    pub fn deinit(self: SelectedConfigPath, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+    }
+};
+
+pub const ConfigPathError = error{
+    MissingConfigPath,
+    UnknownCliArgument,
+    MissingHome,
+};
+
+pub fn resolveUserConfigPathsFromHome(allocator: std.mem.Allocator, home: []const u8) !UserConfigPaths {
+    if (home.len == 0) return error.MissingHome;
+
+    const dir = try std.fs.path.join(allocator, &.{ home, ".flamingo" });
+    errdefer allocator.free(dir);
+
+    const file = try std.fs.path.join(allocator, &.{ dir, "config.toml" });
+    errdefer allocator.free(file);
+
+    return .{ .dir = dir, .file = file };
+}
+
+pub fn resolveUserConfigPaths(
+    allocator: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+) !UserConfigPaths {
+    const home = environ.get("HOME") orelse return error.MissingHome;
+    return resolveUserConfigPathsFromHome(allocator, home);
+}
+
+/// Ensures the default user config exists and returns the allocator-owned path
+/// to the config file. Existing files are preserved without modification.
+pub fn ensureUserConfigInHome(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    home: []const u8,
+) ![]const u8 {
+    const paths = try resolveUserConfigPathsFromHome(allocator, home);
+    errdefer paths.deinit(allocator);
+
+    try std.Io.Dir.cwd().createDirPath(io, paths.dir);
+
+    if (std.Io.Dir.cwd().statFile(io, paths.file, .{})) |_| {
+        const file = paths.file;
+        allocator.free(paths.dir);
+        return file;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
+    const file = try std.Io.Dir.cwd().createFile(io, paths.file, .{ .exclusive = true });
+    defer file.close(io);
+    try file.writeStreamingAll(io, default_config_toml);
+
+    const file_path = paths.file;
+    allocator.free(paths.dir);
+    return file_path;
+}
+
+/// Ensures the default user config exists and returns the allocator-owned path
+/// to the config file. Existing files are preserved without modification.
+pub fn ensureUserConfig(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: *const std.process.Environ.Map,
+) ![]const u8 {
+    const home = environ.get("HOME") orelse return error.MissingHome;
+    return ensureUserConfigInHome(allocator, io, home);
+}
+
+pub fn resolveSelectedConfigPathFromHome(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    env_config: ?[]const u8,
+    home: []const u8,
+) !SelectedConfigPath {
+    if (try configPathFromArgs(allocator, args)) |path| {
+        return .{ .path = path, .source = .cli };
+    }
+
+    if (env_config) |path| {
+        if (path.len != 0) {
+            return .{ .path = try allocator.dupe(u8, path), .source = .env };
+        }
+    }
+
+    const paths = try resolveUserConfigPathsFromHome(allocator, home);
+    defer allocator.free(paths.dir);
+    return .{ .path = paths.file, .source = .default_user };
+}
+
+pub fn configPathFromArgs(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+) !?[]const u8 {
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--config")) {
+            index += 1;
+            if (index >= args.len or args[index].len == 0) return error.MissingConfigPath;
+            if (index + 1 < args.len) return error.UnknownCliArgument;
+            return try allocator.dupe(u8, args[index]);
+        }
+
+        return error.UnknownCliArgument;
+    }
+
+    return null;
 }
 
 // ── Loading ──────────────────────────────────────────────────────────────────

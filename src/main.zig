@@ -16,7 +16,22 @@ pub fn main(init: std.process.Init) !void {
     global_io = io;
     const allocator = std.heap.smp_allocator;
 
-    var result = try config.loadFile(io, allocator, "config.toml");
+    var argv = std.ArrayListUnmanaged([]const u8).empty;
+    defer argv.deinit(allocator);
+    var arg_iter = std.process.Args.Iterator.init(init.minimal.args);
+    defer arg_iter.deinit();
+    _ = arg_iter.skip();
+    while (arg_iter.next()) |arg| {
+        try argv.append(allocator, arg);
+    }
+
+    const selected_config_path = try selectedConfigPath(allocator, io, argv.items, init.environ_map);
+    defer allocator.free(selected_config_path);
+
+    var result = config.loadFile(io, allocator, selected_config_path) catch |err| {
+        std.debug.print("Failed to load config: {s}: {s}\n", .{ selected_config_path, @errorName(err) });
+        return err;
+    };
     defer result.deinit();
 
     const cfg = result.value;
@@ -43,6 +58,39 @@ pub fn main(init: std.process.Init) !void {
     defer terminal.restoreTerminal(io, stdout);
 
     try editor.start_editor(io, allocator, cfg);
+}
+
+fn selectedConfigPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    args: []const []const u8,
+    environ: *const std.process.Environ.Map,
+) ![]const u8 {
+    if (config.configPathFromArgs(allocator, args)) |path_or_null| {
+        if (path_or_null) |path| return path;
+    } else |err| switch (err) {
+        error.MissingConfigPath => {
+            std.debug.print("Missing value for --config\n", .{});
+            return err;
+        },
+        error.UnknownCliArgument => {
+            std.debug.print("Unknown CLI argument\n", .{});
+            return err;
+        },
+        else => return err,
+    }
+
+    if (environ.get("FLAMINGO_CONFIG")) |env_path| {
+        if (env_path.len != 0) return try allocator.dupe(u8, env_path);
+    }
+
+    return config.ensureUserConfig(allocator, io, environ) catch |err| {
+        switch (err) {
+            error.MissingHome => std.debug.print("Unable to determine home directory: HOME is not set\n", .{}),
+            else => std.debug.print("Unable to create or load default user config: {s}\n", .{@errorName(err)}),
+        }
+        return err;
+    };
 }
 
 pub fn handleSignal(sig: c_int) callconv(.c) void {

@@ -9,7 +9,7 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] `homebrew` formula for installation
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
 - [x] UI overhaul using nerdfonts
-- [ ] git Graphs and commit history panel
+- [x] git Graphs and commit history panel
 
 ## Performance TODO
 
@@ -25,8 +25,8 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement "New File" by using a popup to show the filesystem (and navigate it) and create the file
 - [x] implement "Open Folder" by selecting a specific folder (and not just `.`) using a popup to show the filesystem (and navigate it)
 - [x] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
-- [ ] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
-- [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file. This step cannot happen until I find a way to automatically put the file in a specific folder at startup time
+- [x] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
+- [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file.
 - [x] implement opening the current folder with `.` button when the Filesystem pane is open
 - [x] UI rehaul for the Filesystem pane
 - [x] implement `create project`(or workspace) feature

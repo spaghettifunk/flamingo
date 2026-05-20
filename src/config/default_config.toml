@@ -1,0 +1,43 @@
+# flamingo configuration
+debug = false
+
+# Keybindings use context-specific tables that map key sequences to canonical
+# command names from src/editor/commands.zig.
+#
+# [keybindings.normal]
+# "gg" = "navigation.goto_file_start"
+# "G" = "navigation.goto_file_end"
+# "ctrl+s" = "file.write"
+#
+# [keybindings.insert]
+# "esc" = "mode.normal"
+# "ctrl+s" = "file.write"
+#
+# [keybindings.command_line]
+# "enter" = "command.execute"
+# "tab" = "command.suggestion_next"
+# "esc" = "command.cancel"
+#
+# [keybindings.search]
+# "enter" = "search.accept"
+# "esc" = "search.cancel"
+# "down" = "search.next_match"
+# "up" = "search.previous_match"
+#
+# [keybindings.terminal]
+# "esc" = "terminal.unfocus"
+# "pageup" = "terminal.scroll_page_up"
+# "pagedown" = "terminal.scroll_page_down"
+#
+# [keybindings.normal.unbind]
+# keys = ["ctrl+q", "ctrl+w"]
+#
+# The :help popup reflects resolved defaults, overrides, and unbinds. The
+# command popup uses command metadata for command names, aliases, and
+# descriptions.
+#
+# Printable editor text, prompt text, and terminal PTY input are raw input,
+# not command keybindings.
+
+[explorer]
+width_percentage = 20

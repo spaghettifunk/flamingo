@@ -8,6 +8,10 @@ const keybindings = @import("../src/editor/keybindings.zig");
 const commands = @import("../src/editor/commands.zig");
 const toml = @import("toml");
 
+fn testingTmpRoot(allocator: std.mem.Allocator, tmp: anytype) ![]u8 {
+    return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+}
+
 test "Config: zero-value has correct defaults" {
     const cfg = config.Config{};
     try std.testing.expect(!cfg.debug);
@@ -203,4 +207,138 @@ test "Config: legacy flat keybindings are rejected" {
     try std.testing.expectError(error.InvalidKeybindingConfig, config.buildKeybindingRegistry(allocator, &result.value, &diagnostics));
     try std.testing.expect(diagnostics.hasErrors());
     try std.testing.expect(std.mem.indexOf(u8, diagnostics.items.items[0].message, "legacy flat [keybindings] field") != null);
+}
+
+test "Config bootstrap: resolves default user config path from home" {
+    const allocator = std.testing.allocator;
+    var paths = try config.resolveUserConfigPathsFromHome(allocator, "/tmp/flamingo-home");
+    defer paths.deinit(allocator);
+
+    try std.testing.expectEqualStrings("/tmp/flamingo-home/.flamingo", paths.dir);
+    try std.testing.expectEqualStrings("/tmp/flamingo-home/.flamingo/config.toml", paths.file);
+}
+
+test "Config bootstrap: creates directory and default config when missing" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(home);
+
+    const config_path = try config.ensureUserConfigInHome(allocator, io, home);
+    defer allocator.free(config_path);
+
+    _ = try tmp.dir.statFile(io, ".flamingo", .{});
+    _ = try tmp.dir.statFile(io, ".flamingo/config.toml", .{});
+
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, config_path, allocator, std.Io.Limit.limited(4 * 1024 * 1024));
+    defer allocator.free(source);
+    try std.testing.expectEqualStrings(config.default_config_toml, source);
+}
+
+test "Config bootstrap: does not overwrite existing config" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, ".flamingo");
+    try tmp.dir.writeFile(io, .{ .sub_path = ".flamingo/config.toml", .data = "# custom marker\n" });
+
+    const home = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(home);
+
+    const config_path = try config.ensureUserConfigInHome(allocator, io, home);
+    defer allocator.free(config_path);
+
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, config_path, allocator, std.Io.Limit.limited(4 * 1024 * 1024));
+    defer allocator.free(source);
+    try std.testing.expectEqualStrings("# custom marker\n", source);
+}
+
+test "Config bootstrap: generated default config parses successfully" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(home);
+
+    const config_path = try config.ensureUserConfigInHome(allocator, io, home);
+    defer allocator.free(config_path);
+
+    var result = try config.loadFile(io, allocator, config_path);
+    defer result.deinit();
+    try config.validate(&result.value);
+}
+
+test "Config bootstrap: embedded default matches repository local config" {
+    const allocator = std.testing.allocator;
+    const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "config.toml", allocator, std.Io.Limit.limited(4 * 1024 * 1024));
+    defer allocator.free(source);
+
+    try std.testing.expectEqualStrings(source, config.default_config_toml);
+}
+
+test "Config bootstrap: missing home is rejected" {
+    try std.testing.expectError(error.MissingHome, config.resolveUserConfigPathsFromHome(std.testing.allocator, ""));
+    try std.testing.expectError(error.MissingHome, config.ensureUserConfigInHome(std.testing.allocator, std.testing.io, ""));
+}
+
+test "Config path priority: --config wins over environment and default" {
+    const allocator = std.testing.allocator;
+    var selected = try config.resolveSelectedConfigPathFromHome(
+        allocator,
+        &.{ "--config", "./explicit.toml" },
+        "/tmp/env.toml",
+        "/tmp/home",
+    );
+    defer selected.deinit(allocator);
+
+    try std.testing.expectEqual(config.ConfigPathSource.cli, selected.source);
+    try std.testing.expectEqualStrings("./explicit.toml", selected.path);
+}
+
+test "Config path priority: invalid CLI config args are rejected" {
+    try std.testing.expectError(error.MissingConfigPath, config.configPathFromArgs(std.testing.allocator, &.{"--config"}));
+    try std.testing.expectError(error.UnknownCliArgument, config.configPathFromArgs(std.testing.allocator, &.{"--bogus"}));
+    try std.testing.expectError(error.UnknownCliArgument, config.configPathFromArgs(std.testing.allocator, &.{ "--config", "a.toml", "--bogus" }));
+}
+
+test "Config path priority: FLAMINGO_CONFIG wins over default" {
+    const allocator = std.testing.allocator;
+    var selected = try config.resolveSelectedConfigPathFromHome(
+        allocator,
+        &.{},
+        "/tmp/env.toml",
+        "/tmp/home",
+    );
+    defer selected.deinit(allocator);
+
+    try std.testing.expectEqual(config.ConfigPathSource.env, selected.source);
+    try std.testing.expectEqualStrings("/tmp/env.toml", selected.path);
+}
+
+test "Config path priority: explicit config does not create default user config" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const home = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(home);
+
+    var selected = try config.resolveSelectedConfigPathFromHome(
+        allocator,
+        &.{ "--config", "./config.toml" },
+        null,
+        home,
+    );
+    defer selected.deinit(allocator);
+
+    try std.testing.expectEqual(config.ConfigPathSource.cli, selected.source);
+    try std.testing.expectError(error.FileNotFound, tmp.dir.statFile(io, ".flamingo", .{}));
 }
