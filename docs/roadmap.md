@@ -29,7 +29,7 @@ A set of todos without order or priority. Simply grouped by category
 - [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file. This step cannot happen until I find a way to automatically put the file in a specific folder at startup time
 - [x] implement opening the current folder with `.` button when the Filesystem pane is open
 - [x] UI rehaul for the Filesystem pane
-- [ ] implement `create project`(or workspace) feature
+- [x] implement `create project`(or workspace) feature
 
 ## Editing TODO
 
@@ -49,7 +49,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement folding/unfolding feature for when `{}` are found (add also keybinding)
 - [x] BUG: editor doesn't have word-wrapping nor I can scroll right beyond the current size of the terminal. Implement the ability of scrolling the text.
 - [x] BUG: cannot scroll the tabs
-- [ ] implement Comments for non-programming files (like google docs)
+- [x] implement Comments for non-programming files (like google docs)
 - [x] implement TODO list based on both `//TODO` or `//FIXME` etc and actual todo inputs from user
 
 ## Plugins System TODO
@@ -67,4 +67,3 @@ A set of todos without order or priority. Simply grouped by category
   - [ ] Async/background indexing
   - [ ] Persistent search index
   - [x] Preview pane
-
