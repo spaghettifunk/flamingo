@@ -28,6 +28,16 @@ pub const CommandId = enum {
     comment_create,
     comments_open,
     comments_refresh,
+    git_graph_open,
+    git_graph_close,
+    git_graph_move_up,
+    git_graph_move_down,
+    git_graph_page_up,
+    git_graph_page_down,
+    git_graph_first,
+    git_graph_last,
+    git_graph_refresh,
+    git_graph_toggle_details,
     comments_panel_close,
     comments_panel_move_up,
     comments_panel_move_down,
@@ -165,6 +175,7 @@ pub const CommandCategory = enum {
     navigation,
     search,
     global_search,
+    git,
     help,
     todos,
     comments,
@@ -189,6 +200,7 @@ pub const CommandContext = enum {
     explorer_search,
     search,
     global_search,
+    git_graph,
     help,
     todo_panel,
     comments_panel,
@@ -216,8 +228,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 14;
-const command_line_visible_count = 15;
+const command_popup_visible_count = 15;
+const command_line_visible_count = 16;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -350,6 +362,16 @@ const command_metadata = [_]CommandMeta{
         .command_names = &.{"comments"},
         .short_description = "Open comments panel",
         .category = .comments,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .git_graph_open,
+        .canonical_name = "git_graph.open",
+        .command_names = &.{"git-graph"},
+        .aliases = &.{"ggraph"},
+        .short_description = "Open read-only Git commit graph",
+        .category = .git,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
     },
@@ -726,6 +748,69 @@ const command_metadata = [_]CommandMeta{
         .short_description = "Jump to selected comment anchor",
         .category = .comments,
         .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .git_graph_close,
+        .canonical_name = "git_graph.close",
+        .short_description = "Close Git Graph",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_move_up,
+        .canonical_name = "git_graph.move_up",
+        .short_description = "Move Git Graph selection up",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_move_down,
+        .canonical_name = "git_graph.move_down",
+        .short_description = "Move Git Graph selection down",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_page_up,
+        .canonical_name = "git_graph.page_up",
+        .short_description = "Page Git Graph up",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_page_down,
+        .canonical_name = "git_graph.page_down",
+        .short_description = "Page Git Graph down",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_first,
+        .canonical_name = "git_graph.first",
+        .short_description = "Move to first Git commit",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_last,
+        .canonical_name = "git_graph.last",
+        .short_description = "Move to last loaded Git commit",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_refresh,
+        .canonical_name = "git_graph.refresh",
+        .short_description = "Refresh Git Graph",
+        .category = .git,
+        .contexts = &.{.git_graph},
+    },
+    .{
+        .id = .git_graph_toggle_details,
+        .canonical_name = "git_graph.toggle_details",
+        .short_description = "Toggle selected commit details",
+        .category = .git,
+        .contexts = &.{.git_graph},
     },
     .{
         .id = .mode_normal,
@@ -1490,6 +1575,8 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "todos", .id = .todos_open },
         .{ .name = "comment", .id = .comment_create },
         .{ .name = "comments", .id = .comments_open },
+        .{ .name = "git-graph", .id = .git_graph_open },
+        .{ .name = "ggraph", .id = .git_graph_open },
         .{ .name = "newFile", .id = .file_new },
         .{ .name = "nf", .id = .file_new },
         .{ .name = "renameFile", .id = .file_rename },
@@ -1526,6 +1613,7 @@ test "command line visible commands preserve current popup order" {
         .file_new,
         .comment_create,
         .comments_open,
+        .git_graph_open,
     };
 
     for (expected, 0..) |id, idx| {

@@ -18,6 +18,7 @@ const git_status = @import("../git_status.zig");
 const workspace_mod = @import("../workspace.zig");
 const todos_mod = @import("../todos.zig");
 const comments_mod = @import("../comments.zig");
+const git_graph_mod = @import("../git_graph.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -29,6 +30,7 @@ pub const EditorMode = enum {
     Prompt,
     Search,
     GlobalSearch,
+    GitGraph,
     Help,
     Terminal,
     SaveConfirmation,
@@ -58,6 +60,7 @@ pub const EditorState = struct {
     help_popup: help.HelpPopup = .{},
     todo_panel: todos_mod.TodoPanel = .{},
     comments_panel: comments_mod.CommentsPanel = .{},
+    git_graph_panel: git_graph_mod.GitGraphPanel,
     clipboard: ?[]u8 = null,
     render_dirty: bool = true,
     force_full_render: bool = true,
@@ -73,6 +76,7 @@ pub const EditorState = struct {
             .tabs = std.ArrayList(tab_mod.Tab).empty,
             .search_system = search.SearchSystem.init(allocator),
             .lsp_ui = lsp_state.LspUiState.init(allocator),
+            .git_graph_panel = git_graph_mod.GitGraphPanel.init(allocator),
         };
     }
 
@@ -101,6 +105,7 @@ pub const EditorState = struct {
         self.workspace.deinit(allocator);
         self.todo_panel.deinit(allocator);
         self.comments_panel.deinit(allocator);
+        self.git_graph_panel.deinit();
         if (self.search_system) |*s| {
             s.deinit();
             self.search_system = null;

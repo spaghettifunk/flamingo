@@ -108,6 +108,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:deleteFile <path>`      | `:df` | Delete file at `<path>`                                    |
 | `:search`                 |       | Open project-wide Global Search                            |
 | `:help`                   |       | Open the Help popup                                        |
+| `:git-graph`              | `:ggraph` | Open the read-only Git commit graph panel              |
 | `:todos`                  |       | Open/focus the workspace TODO panel                        |
 | `:comment`                |       | Create a comment from the active text selection            |
 | `:comments`               |       | Open/focus the workspace comments panel                    |
@@ -174,6 +175,19 @@ Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.or
 | **Close Comments Panel**  | `q` or `Esc`   |
 | **Next Comment Anchor**   | `]c`           |
 | **Previous Comment Anchor** | `[c`         |
+
+### Git Graph Panel
+
+| Action                  | Keybinding              |
+| :---------------------- | :---------------------- |
+| **Open Git Graph**      | `:git-graph` or `:ggraph` |
+| **Move Selection**      | `Up / Down` or `j/k`    |
+| **Page Selection**      | `PageUp / PageDown`     |
+| **First Commit**        | `gg`                    |
+| **Last Commit**         | `G`                     |
+| **Toggle Details**      | `Enter`                 |
+| **Refresh Graph**       | `r`                     |
+| **Close Git Graph**     | `q` or `Esc`            |
 
 ### LSP Completion
 

@@ -21,6 +21,7 @@ test {
     _ = @import("src/editor/global_search.zig");
     _ = @import("src/editor/help.zig");
     _ = @import("src/editor/git_status.zig");
+    _ = @import("src/editor/git_graph.zig");
     _ = @import("src/editor/workspace.zig");
     _ = @import("src/editor/todos.zig");
     _ = @import("src/editor/comments.zig");
@@ -32,5 +33,6 @@ test {
     _ = @import("src/editor/runtime/event_queue.zig");
     _ = @import("src/perf/perf.zig");
     _ = @import("src/editor/renderer/virtual_screen.zig");
+    _ = @import("src/editor/renderer/git_graph_panel_view.zig");
     _ = @import("src/editor/terminal_panel.zig");
 }

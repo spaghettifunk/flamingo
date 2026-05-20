@@ -13,6 +13,7 @@ const prompt_mod = @import("../src/editor/prompt_popup.zig");
 const navigation = @import("../src/editor/navigation.zig");
 const commands = @import("../src/editor/commands.zig");
 const keybindings = @import("../src/editor/keybindings.zig");
+const git_graph = @import("../src/editor/git_graph.zig");
 const Buffer = buffer_mod.Buffer;
 const Line = buffer_mod.Line;
 const terminal = @import("../src/terminal.zig");
@@ -1410,6 +1411,40 @@ test "Help: q closes popup through help context" {
     try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('q')});
     try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
     try std.testing.expect(!ed.state.help_popup.visible);
+}
+
+test "Git Graph: panel-local keys move toggle details and close" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"buffer text"});
+    defer ed.deinit();
+
+    ed.state.mode = .GitGraph;
+    ed.state.git_graph_panel.visible = true;
+    const arena_allocator = ed.state.git_graph_panel.arena.allocator();
+    try git_graph.parseLogOutput(
+        arena_allocator,
+        "* \x1fone1111\x1fone111111\x1fHEAD -> main\x1fAda\x1f2026-05-20\x1fNewest\x1e\n" ++
+            "|\\\n" ++
+            "| * \x1ftwo2222\x1ftwo222222\x1ffeature\x1fGrace\x1f2026-05-19\x1fFeature\x1e\n" ++
+            "* \x1fthr3333\x1fthr333333\x1f\x1fAda\x1f2026-05-18\x1fOlder\x1e\n",
+        &ed.state.git_graph_panel.rows,
+    );
+    ed.state.git_graph_panel.selected_index = 3;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('g')});
+    try std.testing.expectEqual(@as(usize, 3), ed.state.git_graph_panel.selected_index);
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('g')});
+    try std.testing.expectEqual(@as(usize, 0), ed.state.git_graph_panel.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Down)});
+    try std.testing.expectEqual(@as(usize, 2), ed.state.git_graph_panel.selected_index);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try std.testing.expect(ed.state.git_graph_panel.show_details);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('q')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.git_graph_panel.visible);
 }
 
 test "GlobalSearch: Esc closes and typing/backspace refreshes query" {
