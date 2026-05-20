@@ -66,6 +66,8 @@ pub const Editor = struct {
     runtime: runtime_mod.EditorRuntime,
     renderer: renderer_mod.EditorRenderer,
     keypress_profiler: perf.KeypressProfiler,
+    active_config_path: []const u8,
+    active_config_source: config.ConfigPathSource,
     active_keypress_trace: ?*perf.KeypressTrace = null,
     pending_key: ?terminal.KeyEvent = null,
     pending_definition_request_id: ?usize = null,
@@ -78,24 +80,50 @@ pub const Editor = struct {
     is_deinitialized: bool = false,
     last_status_minute: i64 = -1,
     status_cache: statusline.StatusLayoutCache = .{},
+    message_buf: [256]u8 = undefined,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config) !Editor {
-        return initWithRuntimeOptions(allocator, io, cfg, .{});
+        return initWithConfigPathAndRuntimeOptions(allocator, io, cfg, "config.toml", .cli, .{});
     }
 
     pub fn initWithRuntimeOptions(allocator: std.mem.Allocator, io: std.Io, cfg: config.Config, runtime_options: runtime_mod.EditorRuntime.Options) !Editor {
+        return initWithConfigPathAndRuntimeOptions(allocator, io, cfg, "config.toml", .cli, runtime_options);
+    }
+
+    pub fn initWithConfigPath(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        cfg: config.Config,
+        active_config_path: []const u8,
+        active_config_source: config.ConfigPathSource,
+    ) !Editor {
+        return initWithConfigPathAndRuntimeOptions(allocator, io, cfg, active_config_path, active_config_source, .{});
+    }
+
+    pub fn initWithConfigPathAndRuntimeOptions(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        cfg: config.Config,
+        active_config_path: []const u8,
+        active_config_source: config.ConfigPathSource,
+        runtime_options: runtime_mod.EditorRuntime.Options,
+    ) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
         var keybinding_diagnostics = command_keybindings.BuildDiagnostics{};
         defer keybinding_diagnostics.deinit(allocator);
         var keybinding_registry = try config.buildKeybindingRegistry(allocator, &cfg, &keybinding_diagnostics);
         errdefer keybinding_registry.deinit(allocator);
+        const owned_config_path = try allocator.dupe(u8, active_config_path);
+        errdefer allocator.free(owned_config_path);
 
         return Editor{
             .allocator = allocator,
             .io = io,
             .config = cfg,
             .keybinding_registry = keybinding_registry,
+            .active_config_path = owned_config_path,
+            .active_config_source = active_config_source,
             .state = state_mod.EditorState.init(allocator),
             .terminal_panel = terminal_panel_mod.TerminalPanel.init(allocator),
             .runtime = runtime,
@@ -109,6 +137,7 @@ pub const Editor = struct {
         self.is_deinitialized = true;
 
         self.terminal_panel.deinit();
+        self.allocator.free(self.active_config_path);
         self.keybinding_registry.deinit(self.allocator);
         self.runtime.deinit(self.allocator);
         self.state.deinit(self.allocator);
@@ -203,18 +232,52 @@ pub const Editor = struct {
         var error_occurred = false;
         for (self.state.tabs.items) |*tab| {
             if (tab.buf.is_dirty) {
-                if (tab.buf.filename) |f| {
-                    tab.buf.saveToFile(self.io, f) catch {
-                        error_occurred = true;
-                    };
-                } else {
+                self.saveTab(tab) catch {
                     error_occurred = true;
-                }
+                };
             }
         }
         if (error_occurred) {
             self.state.error_message = "Failed to save some files";
         }
+    }
+
+    pub fn saveCurrentBuffer(self: *Editor) !void {
+        const tab = self.currentTab() orelse return;
+        try self.saveTab(tab);
+    }
+
+    pub fn saveTab(self: *Editor, tab: *Tab) !void {
+        const filename = tab.buf.filename orelse return error.MissingFilename;
+
+        if (tab.buf.kind == .settings_config) {
+            const snapshot = try tab.buf.toOwnedTextSnapshot(self.allocator);
+            defer self.allocator.free(snapshot);
+
+            if (try config.validateConfigBytesForSave(self.allocator, filename, snapshot)) |message| {
+                defer self.allocator.free(message);
+                self.setStatusFmt("Config save rejected: {s}", .{message});
+                self.markDirty(.full);
+                return error.InvalidConfig;
+            }
+
+            try tab.buf.saveTextToFile(self.io, filename, snapshot);
+            self.setStatus("Config saved. Restart Flamingo for all settings to take effect.");
+            self.markDirty(.full);
+            return;
+        }
+
+        try tab.buf.saveToFile(self.io, filename);
+    }
+
+    pub fn setStatus(self: *Editor, message: []const u8) void {
+        const len = @min(message.len, self.message_buf.len);
+        @memcpy(self.message_buf[0..len], message[0..len]);
+        self.state.status_message = self.message_buf[0..len];
+    }
+
+    pub fn setStatusFmt(self: *Editor, comptime fmt: []const u8, args: anytype) void {
+        self.state.status_message = std.fmt.bufPrint(&self.message_buf, fmt, args) catch "Status message too long";
     }
 
     pub fn markDirty(self: *Editor, invalidation: render_mod.RenderInvalidation) void {
@@ -634,8 +697,14 @@ fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
     return ed;
 }
 
-pub fn start_editor(io: std.Io, allocator: std.mem.Allocator, cfg: config.Config) !void {
-    var editor = try Editor.init(allocator, io, cfg);
+pub fn start_editor(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    cfg: config.Config,
+    active_config_path: []const u8,
+    active_config_source: config.ConfigPathSource,
+) !void {
+    var editor = try Editor.initWithConfigPath(allocator, io, cfg, active_config_path, active_config_source);
     defer editor.deinit();
     try editor.run();
 }

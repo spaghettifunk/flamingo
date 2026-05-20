@@ -1193,8 +1193,8 @@ const command_metadata = [_]CommandMeta{
     .{
         .id = .dashboard_settings,
         .canonical_name = "dashboard.settings",
-        .short_description = "Select dashboard settings",
-        .long_description = "The dashboard currently exposes this action, but runtime behavior is not implemented yet.",
+        .short_description = "Open the active config file",
+        .long_description = "Open the active Flamingo config.toml in a normal editor buffer.",
         .category = .dashboard,
         .contexts = &.{.dashboard},
     },

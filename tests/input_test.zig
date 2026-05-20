@@ -90,6 +90,25 @@ fn tmpRootPath(allocator: std.mem.Allocator, tmp: anytype) ![]u8 {
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
 }
 
+fn setBufferText(allocator: std.mem.Allocator, buf: *Buffer, text: []const u8) !void {
+    while (buf.lines.items.len > 0) {
+        var line = buf.lines.orderedRemove(0);
+        line.deinit();
+    }
+
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line_text| {
+        try buf.lines.append(allocator, try Line.fromSlice(allocator, line_text));
+    }
+
+    if (buf.lines.items.len == 0) {
+        try buf.lines.append(allocator, try Line.init(allocator));
+    }
+
+    buf.revision += 1;
+    buf.is_dirty = true;
+}
+
 fn makeCommentEditor(allocator: std.mem.Allocator, root_path: []const u8, filename: []const u8) !editor_mod.Editor {
     const cfg = @import("../src/config.zig").Config{
         .author = .{ .name = "Davide", .email = "davide@example.com" },
@@ -143,6 +162,65 @@ test "Dashboard: Create Workspace opens folder picker with workspace purpose" {
     try std.testing.expect(ed.state.filesystem_picker.visible);
     try std.testing.expectEqual(.open_folder, ed.state.filesystem_picker.mode);
     try std.testing.expectEqual(.create_workspace, ed.state.filesystem_picker.folder_purpose);
+}
+
+test "Dashboard: Settings opens active config path as settings buffer" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try tmpRootPath(a, tmp);
+    defer a.free(root);
+    const config_path = try std.fs.path.join(a, &.{ root, "custom.toml" });
+    defer a.free(config_path);
+    try tmp.dir.writeFile(io, .{ .sub_path = "custom.toml", .data = "debug = false\n" });
+
+    var ed = try editor_mod.Editor.initWithConfigPath(a, io, .{}, config_path, .cli);
+    defer ed.deinit();
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.dash.selected_index = 4;
+    try std.testing.expectEqualStrings(config_path, ed.active_config_path);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    const tab = ed.currentTab().?;
+    try std.testing.expectEqualStrings(config_path, tab.buf.filename.?);
+    try std.testing.expectEqual(buffer_mod.BufferKind.settings_config, tab.buf.kind);
+}
+
+test "Dashboard: Settings reuses existing config tab" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try tmpRootPath(a, tmp);
+    defer a.free(root);
+    const config_path = try std.fs.path.join(a, &.{ root, "config.toml" });
+    defer a.free(config_path);
+    try tmp.dir.writeFile(io, .{ .sub_path = "config.toml", .data = "debug = false\n" });
+
+    var ed = try editor_mod.Editor.initWithConfigPath(a, io, .{}, config_path, .cli);
+    defer ed.deinit();
+    var existing = try Buffer.loadFromFile(a, io, config_path);
+    errdefer existing.deinit();
+    try ed.addTab(existing);
+    ed.state.mode = .Dashboard;
+    ed.state.dash.selected_index = 4;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    try std.testing.expectEqual(@as(usize, 1), ed.state.tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ed.state.active_tab_index);
+    try std.testing.expectEqual(buffer_mod.BufferKind.settings_config, ed.currentTab().?.buf.kind);
 }
 
 test "Dashboard: Up Down and configured movement key change selection" {
@@ -1118,6 +1196,110 @@ test "Command: :w saves file to disk" {
     const stat = try std.Io.Dir.cwd().statFile(std.testing.io, file_path, .{});
     try std.testing.expect(stat.size > 0);
     try std.testing.expect(!ed.currentTab().?.buf.is_dirty);
+}
+
+test "Settings save validates and writes valid config" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try tmpRootPath(a, tmp);
+    defer a.free(root);
+    const config_path = try std.fs.path.join(a, &.{ root, "settings.toml" });
+    defer a.free(config_path);
+    try tmp.dir.writeFile(io, .{ .sub_path = "settings.toml", .data = "debug = false\n" });
+
+    var ed = try editor_mod.Editor.initWithConfigPath(a, io, .{}, config_path, .cli);
+    defer ed.deinit();
+    ed.state.dash.selected_index = 4;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    try setBufferText(a, &ed.currentTab().?.buf, "debug = true");
+    try ed.saveCurrentBuffer();
+
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, config_path, a, std.Io.Limit.limited(1024));
+    defer a.free(source);
+    try std.testing.expectEqualStrings("debug = true\n", source);
+    try std.testing.expect(!ed.currentTab().?.buf.is_dirty);
+}
+
+test "Settings save rejects invalid TOML without writing" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try tmpRootPath(a, tmp);
+    defer a.free(root);
+    const config_path = try std.fs.path.join(a, &.{ root, "settings.toml" });
+    defer a.free(config_path);
+    try tmp.dir.writeFile(io, .{ .sub_path = "settings.toml", .data = "debug = false\n" });
+
+    var ed = try editor_mod.Editor.initWithConfigPath(a, io, .{}, config_path, .env);
+    defer ed.deinit();
+    ed.state.dash.selected_index = 4;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    try setBufferText(a, &ed.currentTab().?.buf, "debug = true\n[");
+    try std.testing.expectError(error.InvalidConfig, ed.saveCurrentBuffer());
+
+    const source = try std.Io.Dir.cwd().readFileAlloc(io, config_path, a, std.Io.Limit.limited(1024));
+    defer a.free(source);
+    try std.testing.expectEqualStrings("debug = false\n", source);
+    try std.testing.expect(ed.currentTab().?.buf.is_dirty);
+    try std.testing.expect(std.mem.indexOf(u8, ed.state.status_message.?, "Config save rejected") != null);
+}
+
+test "Settings save rejects duplicate key and unknown command without writing" {
+    const a = std.testing.allocator;
+    const log = try th.setupLogger(a);
+    defer log.deinit();
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try tmpRootPath(a, tmp);
+    defer a.free(root);
+    const config_path = try std.fs.path.join(a, &.{ root, "settings.toml" });
+    defer a.free(config_path);
+    try tmp.dir.writeFile(io, .{ .sub_path = "settings.toml", .data = "debug = false\n" });
+
+    var ed = try editor_mod.Editor.initWithConfigPath(a, io, .{}, config_path, .cli);
+    defer ed.deinit();
+    ed.state.dash.selected_index = 4;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+
+    try setBufferText(a, &ed.currentTab().?.buf,
+        \\[keybindings.normal]
+        \\"x" = "file.write"
+        \\"x" = "mode.insert"
+    );
+    try std.testing.expectError(error.InvalidConfig, ed.saveCurrentBuffer());
+
+    {
+        const source = try std.Io.Dir.cwd().readFileAlloc(io, config_path, a, std.Io.Limit.limited(1024));
+        defer a.free(source);
+        try std.testing.expectEqualStrings("debug = false\n", source);
+    }
+    try std.testing.expect(ed.currentTab().?.buf.is_dirty);
+
+    try setBufferText(a, &ed.currentTab().?.buf,
+        \\[keybindings.normal]
+        \\"x" = "not.a_command"
+    );
+    try std.testing.expectError(error.InvalidConfig, ed.saveCurrentBuffer());
+
+    {
+        const source = try std.Io.Dir.cwd().readFileAlloc(io, config_path, a, std.Io.Limit.limited(1024));
+        defer a.free(source);
+        try std.testing.expectEqualStrings("debug = false\n", source);
+    }
+    try std.testing.expect(ed.currentTab().?.buf.is_dirty);
 }
 
 test "Command: unknown command shows error, stays Normal" {

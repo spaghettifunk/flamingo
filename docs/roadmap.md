@@ -26,7 +26,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement "Open Folder" by selecting a specific folder (and not just `.`) using a popup to show the filesystem (and navigate it)
 - [x] implement "Open File" by selecting a specific file using a popup to show the filesystem (and navigate it)
 - [x] when starting the editor for the first time, put the configuration file in a specific path like `~/.flamingo/config.toml`
-- [ ] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file.
+- [x] implement the "Settings" page enabling the editing of the `~/.flamingo/config.toml` file.
 - [x] implement opening the current folder with `.` button when the Filesystem pane is open
 - [x] UI rehaul for the Filesystem pane
 - [x] implement `create project`(or workspace) feature

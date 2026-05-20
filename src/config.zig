@@ -456,6 +456,101 @@ pub fn configPathFromArgs(
     return null;
 }
 
+pub fn validateConfigBytes(
+    allocator: std.mem.Allocator,
+    source_name: []const u8,
+    bytes: []const u8,
+) !void {
+    if (try validateConfigBytesForSave(allocator, source_name, bytes)) |message| {
+        allocator.free(message);
+        return error.InvalidConfig;
+    }
+}
+
+/// Validates a complete candidate config document using the same parser and
+/// derived keybinding registry construction as startup. Returns an allocator-
+/// owned diagnostic message when validation fails.
+pub fn validateConfigBytesForSave(
+    allocator: std.mem.Allocator,
+    source_name: []const u8,
+    bytes: []const u8,
+) !?[]u8 {
+    if (try duplicateKeybindingMessage(allocator, bytes)) |message| return message;
+
+    var parser = toml.Parser(Config).init(allocator);
+    defer parser.deinit();
+
+    var parsed = parser.parseString(bytes) catch |err| {
+        return try std.fmt.allocPrint(allocator, "invalid TOML in {s}: {s}", .{ source_name, @errorName(err) });
+    };
+    defer parsed.deinit();
+
+    validate(&parsed.value) catch |err| {
+        return try std.fmt.allocPrint(allocator, "invalid config in {s}: {s}", .{ source_name, @errorName(err) });
+    };
+
+    var keybinding_diagnostics = command_keybindings.BuildDiagnostics{};
+    defer keybinding_diagnostics.deinit(allocator);
+    var registry = buildKeybindingRegistry(allocator, &parsed.value, &keybinding_diagnostics) catch |err| {
+        if (keybinding_diagnostics.items.items.len > 0) {
+            return try allocator.dupe(u8, keybinding_diagnostics.items.items[0].message);
+        }
+        return try std.fmt.allocPrint(allocator, "invalid keybindings in {s}: {s}", .{ source_name, @errorName(err) });
+    };
+    defer registry.deinit(allocator);
+
+    if (keybinding_diagnostics.items.items.len > 0) {
+        return try allocator.dupe(u8, keybinding_diagnostics.items.items[0].message);
+    }
+
+    return null;
+}
+
+const SeenConfigKeybinding = struct {
+    context: []const u8,
+    key: []const u8,
+};
+
+fn duplicateKeybindingMessage(allocator: std.mem.Allocator, bytes: []const u8) !?[]u8 {
+    var seen = std.ArrayListUnmanaged(SeenConfigKeybinding).empty;
+    defer seen.deinit(allocator);
+
+    var current_context: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+
+        if (line[0] == '[') {
+            current_context = null;
+            if (std.mem.indexOfScalar(u8, line, ']')) |end| {
+                const table = std.mem.trim(u8, line[1..end], " \t");
+                if (std.mem.startsWith(u8, table, "keybindings.") and
+                    std.mem.indexOf(u8, table, ".unbind") == null)
+                {
+                    current_context = table["keybindings.".len..];
+                }
+            }
+            continue;
+        }
+
+        const context = current_context orelse continue;
+        const equals = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = std.mem.trim(u8, line[0..equals], " \t");
+        if (key.len == 0) continue;
+
+        for (seen.items) |item| {
+            if (std.mem.eql(u8, item.context, context) and std.mem.eql(u8, item.key, key)) {
+                return try std.fmt.allocPrint(allocator, "duplicate keybinding `{s}` in {s} mode", .{ key, context });
+            }
+        }
+
+        try seen.append(allocator, .{ .context = context, .key = key });
+    }
+
+    return null;
+}
+
 // ── Loading ──────────────────────────────────────────────────────────────────
 
 pub fn loadFile(

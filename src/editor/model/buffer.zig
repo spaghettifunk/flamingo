@@ -197,10 +197,16 @@ pub const TextEditDelta = struct {
 
 const max_edit_delta_history = 64;
 
+pub const BufferKind = enum {
+    normal,
+    settings_config,
+};
+
 pub const Buffer = struct {
     lines: std.ArrayList(Line),
     allocator: std.mem.Allocator,
     filename: ?[]const u8 = null,
+    kind: BufferKind = .normal,
     is_dirty: bool = false,
     revision: u64 = 0,
     saved_revision: u64 = 0,
@@ -757,17 +763,16 @@ pub const Buffer = struct {
     }
 
     pub fn saveToFile(self: *Buffer, io: std.Io, filename: []const u8) !void {
+        const text = try self.toOwnedTextSnapshot(self.allocator);
+        defer self.allocator.free(text);
+        try self.saveTextToFile(io, filename, text);
+    }
+
+    pub fn saveTextToFile(self: *Buffer, io: std.Io, filename: []const u8, text: []const u8) !void {
         const file = try std.Io.Dir.cwd().createFile(io, filename, .{});
         defer file.close(io);
 
-        for (self.lines.items) |*line| {
-            const data = try line.slice(self.allocator);
-            defer self.allocator.free(data);
-
-            try file.writeStreamingAll(io, data);
-            try file.writeStreamingAll(io, "\n");
-        }
-
+        try file.writeStreamingAll(io, text);
         self.markSaved();
     }
 

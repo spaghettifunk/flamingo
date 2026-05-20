@@ -179,8 +179,8 @@ pub fn execute(ed: *editor.Editor) !void {
                 if (filename) |f| {
                     try tab.buf.setFilename(f);
                 }
-                if (tab.buf.filename) |f| {
-                    tab.buf.saveToFile(ed.io, f) catch {
+                if (tab.buf.filename != null) {
+                    ed.saveTab(tab) catch {
                         ed.state.error_message = "Failed to save file";
                     };
                 } else {
@@ -199,8 +199,8 @@ pub fn execute(ed: *editor.Editor) !void {
                 if (filename) |f| {
                     try tab.buf.setFilename(f);
                 }
-                if (tab.buf.filename) |f| {
-                    tab.buf.saveToFile(ed.io, f) catch {
+                if (tab.buf.filename != null) {
+                    ed.saveTab(tab) catch {
                         ed.state.error_message = "Failed to save file";
                         ed.state.mode = .Normal;
                         return;

@@ -663,11 +663,7 @@ fn clampAfterFoldChange(ed: *editor.Editor) void {
 }
 
 fn saveCurrentFile(ed: *editor.Editor) !void {
-    if (ed.currentTab()) |tab| {
-        if (tab.buf.filename) |f| {
-            try tab.buf.saveToFile(ed.io, f);
-        }
-    }
+    try ed.saveCurrentBuffer();
 }
 
 fn executeSharedActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
@@ -677,7 +673,9 @@ fn executeSharedActionCommand(ed: *editor.Editor, command: commands.CommandId) !
         .editing_copy => try actions.copy(ed),
         .editing_cut => try actions.cut(ed),
         .editing_paste => try actions.paste(ed),
-        .file_write => try saveCurrentFile(ed),
+        .file_write => saveCurrentFile(ed) catch |err| {
+            if (err != error.InvalidConfig) ed.state.error_message = "Failed to save file";
+        },
         .editing_undo => try actions.undo(ed),
         .editing_redo => try actions.redo(ed),
         .editing_delete_word_back => try actions.deleteWordBack(ed),
@@ -1294,6 +1292,7 @@ fn executeDashboardSelectedAction(ed: *editor.Editor) !void {
         .OpenFile => try openDashboardPicker(ed, .open_file),
         .OpenFolder => try openDashboardPicker(ed, .open_folder),
         .CreateWorkspace => try openDashboardPickerWithFolderPurpose(ed, .open_folder, .create_workspace),
+        .Settings => try fs_ops.openSettingsConfig(ed),
         .Quit => ed.should_quit = true,
         else => {},
     }
@@ -1311,7 +1310,7 @@ fn executeDashboardActionCommand(ed: *editor.Editor, command: commands.CommandId
         .dashboard_open_file => try openDashboardPicker(ed, .open_file),
         .dashboard_open_folder => try openDashboardPicker(ed, .open_folder),
         .dashboard_create_workspace => try openDashboardPickerWithFolderPurpose(ed, .open_folder, .create_workspace),
-        .dashboard_settings => {},
+        .dashboard_settings => try fs_ops.openSettingsConfig(ed),
         .app_quit_flamingo => ed.should_quit = true,
         .dashboard_move_up => ed.state.dash.moveUp(),
         .dashboard_move_down => ed.state.dash.moveDown(),
@@ -1529,8 +1528,8 @@ fn executeSaveConfirmationActionCommand(ed: *editor.Editor, command: commands.Co
     switch (command) {
         .save_confirmation_save => {
             if (ed.currentTab()) |tab| {
-                if (tab.buf.filename) |f| {
-                    tab.buf.saveToFile(ed.io, f) catch {
+                if (tab.buf.filename != null) {
+                    ed.saveTab(tab) catch {
                         ed.state.error_message = "Failed to save file";
                         ed.state.save_confirmation.close();
                         ed.state.mode = .Normal;

@@ -95,27 +95,27 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 
 Execute these by pressing `:` and typing the command followed by `Enter`.
 
-| Command                   | Alias | Description                                                |
-| :------------------------ | :---- | :--------------------------------------------------------- |
-| `:q`                      |       | Quit current tab / Dashboard                               |
-| `:qall`                   | `:qa` | Quit all open tabs                                         |
-| `:q!`                     |       | Force quit (discard unsaved changes)                       |
-| `:w [path]`               |       | Write (Save) current buffer to [path] or its original file |
-| `:wall`                   | `:wa` | Write (Save) all modified buffers                          |
-| `:wq [path]`              |       | Save and Quit                                              |
-| `:newFile <path>`         | `:nf` | Create a new file at `<path>` and open it                  |
-| `:renameFile <old> <new>` | `:rf` | Rename file from `<old>` to `<new>`                        |
-| `:deleteFile <path>`      | `:df` | Delete file at `<path>`                                    |
-| `:search`                 |       | Open project-wide Global Search                            |
-| `:help`                   |       | Open the Help popup                                        |
-| `:git-graph`              | `:ggraph` | Open the read-only Git commit graph panel              |
-| `:todos`                  |       | Open/focus the workspace TODO panel                        |
-| `:comment`                |       | Create a comment from the active text selection            |
-| `:comments`               |       | Open/focus the workspace comments panel                    |
-| `:comments refresh`       |       | Reload `.flamingo/comments.json`                           |
-| `:<number>`               |       | Jump to line `<number>`                                    |
-| `:goto <number>`          |       | Jump to line `<number>`                                    |
-| `:line <number>`          |       | Jump to line `<number>`                                    |
+| Command                   | Alias     | Description                                                |
+| :------------------------ | :-------- | :--------------------------------------------------------- |
+| `:q`                      |           | Quit current tab / Dashboard                               |
+| `:qall`                   | `:qa`     | Quit all open tabs                                         |
+| `:q!`                     |           | Force quit (discard unsaved changes)                       |
+| `:w [path]`               |           | Write (Save) current buffer to [path] or its original file |
+| `:wall`                   | `:wa`     | Write (Save) all modified buffers                          |
+| `:wq [path]`              |           | Save and Quit                                              |
+| `:newFile <path>`         | `:nf`     | Create a new file at `<path>` and open it                  |
+| `:renameFile <old> <new>` | `:rf`     | Rename file from `<old>` to `<new>`                        |
+| `:deleteFile <path>`      | `:df`     | Delete file at `<path>`                                    |
+| `:search`                 |           | Open project-wide Global Search                            |
+| `:help`                   |           | Open the Help popup                                        |
+| `:git-graph`              | `:ggraph` | Open the read-only Git commit graph panel                  |
+| `:todos`                  |           | Open/focus the workspace TODO panel                        |
+| `:comment`                |           | Create a comment from the active text selection            |
+| `:comments`               |           | Open/focus the workspace comments panel                    |
+| `:comments refresh`       |           | Reload `.flamingo/comments.json`                           |
+| `:<number>`               |           | Jump to line `<number>`                                    |
+| `:goto <number>`          |           | Jump to line `<number>`                                    |
+| `:line <number>`          |           | Jump to line `<number>`                                    |
 
 ---
 
@@ -123,16 +123,16 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 
 ### File Explorer
 
-| Action                     | Keybinding                                          |
-| :------------------------- | :-------------------------------------------------- |
-| **Toggle Explorer**        | `CTRL + B`                                          |
+| Action                     | Keybinding                                                       |
+| :------------------------- | :--------------------------------------------------------------- |
+| **Toggle Explorer**        | `CTRL + B`                                                       |
 | **Switch Focus**           | `CTRL + E` (between Editor, Explorer, right panel, and Terminal) |
-| **Move Selection**         | `Up / Down`                                         |
-| **Open File / Toggle Dir** | `Enter`                                             |
-| **New File in Dir**        | `Option + N`                                        |
-| **Rename Node**            | `Option + R`                                        |
-| **Delete Node**            | `Option + Delete`                                   |
-| **Search (Fuzzy)**         | `/`                                                 |
+| **Move Selection**         | `Up / Down`                                                      |
+| **Open File / Toggle Dir** | `Enter`                                                          |
+| **New File in Dir**        | `Option + N`                                                     |
+| **Rename Node**            | `Option + R`                                                     |
+| **Delete Node**            | `Option + Delete`                                                |
+| **Search (Fuzzy)**         | `/`                                                              |
 
 ### Integrated Terminal
 
@@ -161,33 +161,33 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 
 Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.org` files in a Flamingo workspace. Creating the first comment lazily creates `.flamingo/comments.json`.
 
-| Action                    | Keybinding     |
-| :------------------------ | :------------- |
-| **Create Comment**        | `:comment`     |
-| **Open Comments Panel**   | `:comments`    |
-| **Move Selection**        | `Up / Down`    |
-| **Jump to Anchor**        | `Enter`        |
-| **Reply to Thread**       | `r`            |
-| **Edit Comment/Reply**    | `e`            |
-| **Delete Comment/Reply**  | `d`            |
-| **New From Selection**    | `n`            |
-| **Reload From Disk**      | `R`            |
-| **Close Comments Panel**  | `q` or `Esc`   |
-| **Next Comment Anchor**   | `]c`           |
+| Action                      | Keybinding   |
+| :-------------------------- | :----------- |
+| **Create Comment**          | `:comment`   |
+| **Open Comments Panel**     | `:comments`  |
+| **Move Selection**          | `Up / Down`  |
+| **Jump to Anchor**          | `Enter`      |
+| **Reply to Thread**         | `r`          |
+| **Edit Comment/Reply**      | `e`          |
+| **Delete Comment/Reply**    | `d`          |
+| **New From Selection**      | `n`          |
+| **Reload From Disk**        | `R`          |
+| **Close Comments Panel**    | `q` or `Esc` |
+| **Next Comment Anchor**     | `]c`         |
 | **Previous Comment Anchor** | `[c`         |
 
 ### Git Graph Panel
 
-| Action                  | Keybinding              |
-| :---------------------- | :---------------------- |
-| **Open Git Graph**      | `:git-graph` or `:ggraph` |
-| **Move Selection**      | `Up / Down` or `j/k`    |
-| **Page Selection**      | `PageUp / PageDown`     |
-| **First Commit**        | `gg`                    |
-| **Last Commit**         | `G`                     |
-| **Toggle Details**      | `Enter`                 |
-| **Refresh Graph**       | `r`                     |
-| **Close Git Graph**     | `q` or `Esc`            |
+| Action              | Keybinding                |
+| :------------------ | :------------------------ |
+| **Open Git Graph**  | `:git-graph` or `:ggraph` |
+| **Move Selection**  | `Up / Down` or `j/k`      |
+| **Page Selection**  | `PageUp / PageDown`       |
+| **First Commit**    | `gg`                      |
+| **Last Commit**     | `G`                       |
+| **Toggle Details**  | `Enter`                   |
+| **Refresh Graph**   | `r`                       |
+| **Close Git Graph** | `q` or `Esc`              |
 
 ### LSP Completion
 

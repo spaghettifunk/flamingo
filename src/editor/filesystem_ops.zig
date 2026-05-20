@@ -1,4 +1,5 @@
 const std = @import("std");
+const config = @import("../config.zig");
 const editor = @import("editor.zig");
 const buffer = @import("model/buffer.zig");
 const explorer = @import("explorer.zig");
@@ -209,6 +210,62 @@ pub fn openFileInEditor(ed: *editor.Editor, path: []const u8) !void {
     try ed.addTab(b);
     ed.state.mode = .Normal;
     ed.state.explorer_focused = false;
+}
+
+pub fn openSettingsConfig(ed: *editor.Editor) !void {
+    if (ed.active_config_source == .default_user) {
+        try ensureDefaultConfigFileAtPath(ed.io, ed.active_config_path);
+    }
+
+    if (focusOpenPath(ed, ed.active_config_path)) |tab| {
+        tab.buf.kind = .settings_config;
+        ed.state.mode = .Normal;
+        ed.state.explorer_focused = false;
+        ed.markDirty(.full);
+        return;
+    }
+
+    var b = try buffer.Buffer.loadFromFile(ed.allocator, ed.io, ed.active_config_path);
+    errdefer b.deinit();
+    b.kind = .settings_config;
+    try ed.addTab(b);
+    ed.state.mode = .Normal;
+    ed.state.explorer_focused = false;
+}
+
+fn ensureDefaultConfigFileAtPath(io: std.Io, path: []const u8) !void {
+    if (std.Io.Dir.cwd().statFile(io, path, .{})) |_| return else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
+    if (std.fs.path.dirname(path)) |parent| {
+        try std.Io.Dir.cwd().createDirPath(io, parent);
+    }
+
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true });
+    defer file.close(io);
+    try file.writeStreamingAll(io, config.default_config_toml);
+}
+
+fn focusOpenPath(ed: *editor.Editor, path: []const u8) ?*editor.Tab {
+    for (ed.state.tabs.items, 0..) |*tab, index| {
+        if (tab.buf.filename) |filename| {
+            const matches = blk: {
+                if (std.mem.eql(u8, filename, path)) break :blk true;
+                const real_filename = realPathOrNull(ed.allocator, ed.io, filename) orelse break :blk false;
+                defer ed.allocator.free(real_filename);
+                const real_path = realPathOrNull(ed.allocator, ed.io, path) orelse break :blk false;
+                defer ed.allocator.free(real_path);
+                break :blk std.mem.eql(u8, real_filename, real_path);
+            };
+            if (matches) {
+                ed.state.active_tab_index = index;
+                return tab;
+            }
+        }
+    }
+    return null;
 }
 
 pub fn createFileAndOpen(ed: *editor.Editor, path: []const u8, create_parents: bool) !void {
