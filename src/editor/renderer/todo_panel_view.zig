@@ -10,21 +10,18 @@ pub fn renderVirtualTodoPanel(editor: anytype) void {
     if (width == 0 or width >= editor.width) return;
 
     const status_row = viewport_mod.statusRowIndex(editor);
-    if (status_row < 5) return;
+    if (status_row < 7) return;
     const col = editor.width - width;
-    const divider_col = col -| 1;
-    for (0..status_row) |row| {
-        editor.renderer.screen.writeText(row, divider_col, "│", .dim);
-    }
-
     const screen = &editor.renderer.screen;
-    const right = col + width;
-    for (0..status_row) |row| {
-        for (col..right) |x| screen.set(row, x, ' ', .explorer_bg);
-    }
+    const geom = popup.FilesystemPickerGeometry{ .row = 0, .col = col, .width = width, .height = status_row };
+    const bottom_row = geom.row + geom.height - 1;
+    const inner_end = col + width - 1;
+    popup.drawPickerTop(screen, geom, " TODOs ", .command_popup_border);
+    fillPanelRows(screen, geom);
 
-    var write_col = col + 1;
-    popup.writeVirtualTruncatedCells(screen, 0, &write_col, right, "TODOs", .explorer_header, false);
+    var row: usize = 1;
+    var write_col = col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, inner_end, "TODOs", .command_popup_prompt, false);
     var count_buf: [48]u8 = undefined;
     const count_text = std.fmt.bufPrint(&count_buf, "{d} code  {d} user", .{
         editor.state.todo_panel.code_items.items.len,
@@ -32,16 +29,18 @@ pub fn renderVirtualTodoPanel(editor: anytype) void {
     }) catch "";
     writeRight(screen, 0, col, width, count_text, .explorer_dim);
 
-    drawSeparator(screen, 1, col, width);
+    row += 1;
+    drawSeparator(screen, row, col, width);
+    row += 1;
 
-    var row: usize = 2;
     writeSection(screen, row, col, width, "Code TODOs", editor.state.todo_panel.code_items.items.len);
     row += 1;
 
     const footer_rows = footerLineCount(width);
-    if (status_row <= row + footer_rows + 2) return;
-    const footer_start = status_row - footer_rows;
-    const manual_row = footer_start - 1;
+    if (status_row <= row + footer_rows + 4) return;
+    const footer_start = bottom_row - footer_rows;
+    const footer_separator_row = footer_start - 1;
+    const manual_row = footer_separator_row - 1;
     const manual_separator_row = manual_row - 1;
     const body_rows = manual_separator_row -| row;
     editor.state.todo_panel.adjustScroll(body_rows);
@@ -76,12 +75,22 @@ pub fn renderVirtualTodoPanel(editor: anytype) void {
         writeRight(screen, manual_row, col, width, "workspace required", .popup_error);
     }
 
+    drawSeparator(screen, footer_separator_row, col, width);
     writeFooter(screen, footer_start, col, width, footer_rows);
+    popup.drawPickerBottom(screen, bottom_row, col, width, .command_popup_border);
 }
 
 fn drawSeparator(screen: *render_mod.VirtualScreen, row: usize, col: usize, width: usize) void {
     if (width == 0) return;
-    for (0..width) |offset| screen.setGlyph(row, col + offset, "─", .command_popup_border);
+    popup.drawPickerSeparator(screen, row, col, width, .command_popup_border);
+}
+
+fn fillPanelRows(screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerGeometry) void {
+    const bottom_row = geom.row + geom.height - 1;
+    var row = geom.row + 1;
+    while (row < bottom_row) : (row += 1) {
+        popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
+    }
 }
 
 fn writeSection(screen: *render_mod.VirtualScreen, row: usize, col: usize, width: usize, title: []const u8, count: usize) void {
@@ -92,10 +101,10 @@ fn writeSection(screen: *render_mod.VirtualScreen, row: usize, col: usize, width
 }
 
 fn writeLine(screen: *render_mod.VirtualScreen, row: usize, col: usize, width: usize, text: []const u8, style: render_mod.RenderStyle, selected: bool) void {
-    const fill_style: render_mod.RenderStyle = if (selected) .explorer_selected_focus else .explorer_bg;
-    for (0..width) |offset| screen.set(row, col + offset, ' ', fill_style);
-    var write_col = col + 1;
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, text, style, false);
+    const fill_style: render_mod.RenderStyle = if (selected) .explorer_selected_focus else .command_popup;
+    popup.drawPickerRow(screen, row, col, width, .command_popup_border, fill_style);
+    var write_col = col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, text, style, false);
 }
 
 fn writeRight(screen: *render_mod.VirtualScreen, row: usize, col: usize, width: usize, text: []const u8, style: render_mod.RenderStyle) void {
@@ -136,19 +145,19 @@ fn footerLineCount(width: usize) usize {
 fn writeFooter(screen: *render_mod.VirtualScreen, start_row: usize, col: usize, width: usize, max_rows: usize) void {
     const inner_end = col + width -| 1;
     var row = start_row;
-    var write_col = col + 1;
+    var write_col = col + 2;
 
     for (0..max_rows) |offset| {
-        for (0..width) |x| screen.set(start_row + offset, col + x, ' ', .popup_footer);
+        popup.drawPickerRow(screen, start_row + offset, col, width, .command_popup_border, .popup_footer);
     }
 
     for (footer_commands) |command| {
         const command_cells = render_mod.displayCellCount(command);
-        const separator: []const u8 = if (write_col == col + 1) "" else "  ";
+        const separator: []const u8 = if (write_col == col + 2) "" else "  ";
         const separator_cells = render_mod.displayCellCount(separator);
         if (write_col + separator_cells + command_cells > inner_end and row + 1 < start_row + max_rows) {
             row += 1;
-            write_col = col + 1;
+            write_col = col + 2;
         }
         if (separator.len > 0 and write_col + separator_cells <= inner_end) {
             screen.writeText(row, write_col, separator, .popup_footer);
@@ -170,17 +179,17 @@ fn renderCodeItem(
     selected: bool,
     focused: bool,
 ) void {
-    const row_style: render_mod.RenderStyle = if (selected) if (focused) .explorer_selected_focus else .explorer_selected else .explorer_bg;
-    for (0..width) |offset| screen.set(row, col + offset, ' ', row_style);
-    var write_col = col + 1;
+    const row_style: render_mod.RenderStyle = if (selected) if (focused) .explorer_selected_focus else .explorer_selected else .command_popup;
+    popup.drawPickerRow(screen, row, col, width, .command_popup_border, row_style);
+    var write_col = col + 2;
     var loc_buf: [160]u8 = undefined;
     const loc = std.fmt.bufPrint(&loc_buf, "{s}:{d}", .{ item.display_path, item.line }) catch item.display_path;
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, "[code] ", row_style, false);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, item.tag.label(), .command_popup_prompt, false);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, " ", row_style, false);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, loc, .explorer_dim, true);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, " ", row_style, false);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, item.text, row_style, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, "[code] ", row_style, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, item.tag.label(), .command_popup_prompt, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, " ", row_style, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, loc, .explorer_dim, true);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, " ", row_style, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, item.text, row_style, false);
 }
 
 fn renderManualItem(
@@ -192,11 +201,11 @@ fn renderManualItem(
     selected: bool,
     focused: bool,
 ) void {
-    const row_style: render_mod.RenderStyle = if (selected) if (focused) .explorer_selected_focus else .explorer_selected else .explorer_bg;
+    const row_style: render_mod.RenderStyle = if (selected) if (focused) .explorer_selected_focus else .explorer_selected else .command_popup;
     const mark = if (item.status == .done) "[x] " else "[ ] ";
-    for (0..width) |offset| screen.set(row, col + offset, ' ', row_style);
-    var write_col = col + 1;
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, "[user] ", row_style, false);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, mark, .command_popup_prompt, false);
-    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width, item.title, row_style, false);
+    popup.drawPickerRow(screen, row, col, width, .command_popup_border, row_style);
+    var write_col = col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, "[user] ", row_style, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, mark, .command_popup_prompt, false);
+    popup.writeVirtualTruncatedCells(screen, row, &write_col, col + width - 1, item.title, row_style, false);
 }
