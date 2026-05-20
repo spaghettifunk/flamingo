@@ -1159,7 +1159,7 @@ fn gitGraphPageRows(ed: *const editor.Editor) usize {
 
 fn closeGitGraph(ed: *editor.Editor) void {
     ed.state.git_graph_panel.close();
-    ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+    ed.state.mode = .Normal;
     ed.markDirty(.full);
 }
 

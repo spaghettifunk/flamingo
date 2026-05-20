@@ -34,7 +34,7 @@ pub fn renderVirtualGitGraphPanelWithIconMode(editor: anytype, _: IconMode) void
     const bottom_row = geom.row + geom.height - 1;
     const footer_row = bottom_row - 1;
     const footer_sep_row = footer_row - 1;
-    const detail_rows: usize = if (editor.state.git_graph_panel.show_details and editor.state.git_graph_panel.selectedCommit() != null) 5 else 0;
+    const detail_rows: usize = if (editor.state.git_graph_panel.show_details and editor.state.git_graph_panel.selectedCommit() != null) 7 else 0;
     const available_body_rows = footer_sep_row -| body_start;
     const body_rows = available_body_rows -| detail_rows;
 
@@ -284,29 +284,48 @@ fn laneStyle(lane: usize, selected: bool) render_mod.RenderStyle {
 fn renderDetails(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: usize, detail_rows: usize) void {
     const screen = &editor.renderer.screen;
     const commit = editor.state.git_graph_panel.selectedCommit() orelse return;
+    if (detail_rows < 7) return;
+
+    const left = geom.col + 2;
+    const right = geom.col + geom.width -| 3;
+    if (right <= left + 4) return;
+
     for (0..detail_rows) |offset| {
-        popup.drawPickerRow(screen, start_row + offset, geom.col, geom.width, .command_popup_border, .popup_footer);
+        const row = start_row + offset;
+        popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .popup_footer);
+        screen.setGlyph(row, left, "│", .git_graph_lane_magenta);
+        screen.setGlyph(row, right, "│", .git_graph_lane_magenta);
     }
 
-    var row = start_row;
-    writeDetailLine(screen, geom, row, "commit", commit.full_hash);
+    screen.setGlyph(start_row, left, "╭", .git_graph_lane_magenta);
+    screen.setGlyph(start_row, right, "╮", .git_graph_lane_magenta);
+    screen.setGlyph(start_row + detail_rows - 1, left, "╰", .git_graph_lane_magenta);
+    screen.setGlyph(start_row + detail_rows - 1, right, "╯", .git_graph_lane_magenta);
+    var col = left + 1;
+    while (col < right) : (col += 1) {
+        screen.setGlyph(start_row, col, "─", .git_graph_lane_magenta);
+        screen.setGlyph(start_row + detail_rows - 1, col, "─", .git_graph_lane_magenta);
+    }
+
+    var row = start_row + 1;
+    writeDetailLine(screen, left + 2, right - 1, row, "commit", commit.full_hash);
     row += 1;
-    writeDetailLine(screen, geom, row, "refs", if (commit.refs_raw.len > 0) commit.refs_raw else "-");
+    writeDetailLine(screen, left + 2, right - 1, row, "refs", if (commit.refs_raw.len > 0) commit.refs_raw else "-");
     row += 1;
-    writeDetailLine(screen, geom, row, "author", commit.author);
+    writeDetailLine(screen, left + 2, right - 1, row, "author", commit.author);
     row += 1;
-    writeDetailLine(screen, geom, row, "date", commit.date);
+    writeDetailLine(screen, left + 2, right - 1, row, "date", commit.date);
     row += 1;
-    writeDetailLine(screen, geom, row, "subject", commit.subject);
+    writeDetailLine(screen, left + 2, right - 1, row, "subject", commit.subject);
 }
 
-fn writeDetailLine(screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerGeometry, row: usize, label: []const u8, value: []const u8) void {
-    const inner_end = geom.col + geom.width - 1;
-    var col = geom.col + 2;
+fn writeDetailLine(screen: *render_mod.VirtualScreen, start_col: usize, end_col: usize, row: usize, label: []const u8, value: []const u8) void {
+    if (start_col >= end_col) return;
+    var col = start_col;
     var label_buf: [24]u8 = undefined;
     const label_text = std.fmt.bufPrint(&label_buf, "{s}: ", .{label}) catch "";
-    popup.writeVirtualTruncatedCells(screen, row, &col, inner_end, label_text, .command_popup_prompt, false);
-    popup.writeVirtualTruncatedCells(screen, row, &col, inner_end, value, .popup_footer, false);
+    popup.writeVirtualTruncatedCells(screen, row, &col, end_col, label_text, .command_popup_prompt, false);
+    popup.writeVirtualTruncatedCells(screen, row, &col, end_col, value, .popup_footer, false);
 }
 
 test "git graph renderer graph area leaves room for inline hashes" {

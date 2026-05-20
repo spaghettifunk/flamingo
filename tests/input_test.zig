@@ -1447,6 +1447,19 @@ test "Git Graph: panel-local keys move toggle details and close" {
     try std.testing.expect(!ed.state.git_graph_panel.visible);
 }
 
+test "Git Graph: close returns to normal even without open files" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    ed.state.mode = .GitGraph;
+    ed.state.git_graph_panel.visible = true;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.state.git_graph_panel.visible);
+}
+
 test "GlobalSearch: Esc closes and typing/backspace refreshes query" {
     const a = std.testing.allocator;
     const io = std.testing.io;
