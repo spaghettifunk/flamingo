@@ -147,14 +147,7 @@ For the current keybinding and command reference, see [docs/keybindings.md](docs
 
 ## Documentation
 
-The docs set is currently small:
-
-| Area                     | Link                                       |
-| ------------------------ | ------------------------------------------ |
-| Keybindings and commands | [docs/keybindings.md](docs/keybindings.md) |
-| Roadmap                  | [docs/roadmap.md](docs/roadmap.md)         |
-
-There is not yet a `docs/index.md` or separate user-guide/reference tree.
+Project documentation lives in [`docs/`](docs/index.md).
 
 ## Architecture
 

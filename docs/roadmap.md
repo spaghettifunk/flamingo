@@ -5,7 +5,7 @@ A set of todos without order or priority. Simply grouped by category
 ## General TODO
 
 - [x] write a proper README.md with contributions, running the project, etc
-- [ ] CI pipeline for running tests and binary creation (GitHub actions as a start)
+- [x] CI pipeline for running tests and binary creation (GitHub actions as a start)
 - [ ] `homebrew` formula for installation
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
 - [x] UI overhaul using nerdfonts
