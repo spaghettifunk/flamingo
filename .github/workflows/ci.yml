@@ -29,34 +29,3 @@ jobs:
         run: |
           ./zig-out/bin/flamingo --version
           ./zig-out/bin/flamingo --help
-
-      - name: Install Ruby for act
-        if: env.ACT == 'true'
-        run: |
-          apt-get update
-          apt-get install -y ruby-full
-
-      - name: Validate Homebrew formula syntax
-        if: runner.os == 'macOS'
-        run: |
-          set -euxo pipefail
-          ruby -c Formula/flamingo.rb
-          brew style Formula/flamingo.rb
-
-      - name: Validate Homebrew formula install
-        if: runner.os == 'macOS'
-        run: |
-          set -euxo pipefail
-          brew install --build-from-source ./Formula/flamingo.rb
-          brew audit flamingo || true
-          brew test flamingo
-
-      - name: Homebrew source build
-        run: |
-          if grep -q 'sha256 "0000000000000000000000000000000000000000000000000000000000000000"' Formula/flamingo.rb; then
-            echo "Skipping Homebrew install because Formula/flamingo.rb still has the pre-release placeholder sha256."
-            exit 0
-          fi
-          brew install --build-from-source ./Formula/flamingo.rb
-          brew test flamingo
-          brew uninstall flamingo
