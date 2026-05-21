@@ -166,6 +166,7 @@ fn macOptionUtf8Char(bytes: []const u8) ?u8 {
         if (bytes[2] == 0x9c or bytes[2] == 0x9d) return '['; // “ or ”
         if (bytes[2] == 0x98 or bytes[2] == 0x99) return ']'; // ‘ or ’
     }
+    if (bytes.len == 3 and bytes[0] == 0xe2 and bytes[1] == 0x88 and bytes[2] == 0x82) return 'd'; // ∂, Option+D
 
     return null;
 }

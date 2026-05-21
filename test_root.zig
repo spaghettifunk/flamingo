@@ -25,6 +25,7 @@ test {
     _ = @import("src/editor/workspace.zig");
     _ = @import("src/editor/todos.zig");
     _ = @import("src/editor/comments.zig");
+    _ = @import("src/editor/multi_cursor.zig");
     _ = @import("src/editor/model/buffer.zig");
     _ = @import("src/editor/input_router/normal_sequence.zig");
     _ = @import("src/editor/actions.zig");

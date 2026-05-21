@@ -93,6 +93,24 @@ pub fn buildSelectionRanges(tab: *const Tab, row: usize, storage: *[64]Selection
         storage[count] = range;
         count += 1;
     }
+    if (tab.multi_cursor.active) {
+        for (tab.multi_cursor.selections.items) |range| {
+            if (count == storage.len) break;
+            if (row > range.start_line and row < range.end_line) {
+                storage[count] = .{ .start_col = 0, .end_col = std.math.maxInt(usize) };
+                count += 1;
+            } else if (row == range.start_line and row == range.end_line) {
+                storage[count] = .{ .start_col = range.start_col, .end_col = range.end_col };
+                count += 1;
+            } else if (row == range.start_line) {
+                storage[count] = .{ .start_col = range.start_col, .end_col = std.math.maxInt(usize) };
+                count += 1;
+            } else if (row == range.end_line) {
+                storage[count] = .{ .start_col = 0, .end_col = range.end_col };
+                count += 1;
+            }
+        }
+    }
     return storage[0..count];
 }
 
@@ -188,6 +206,17 @@ pub fn renderVirtualLine(editor: anytype, tab: *Tab, buffer_line_idx: usize, row
         }
 
         editor.renderer.screen.set(row, content_col + (char_idx - tab.scroll_col), ch, style);
+    }
+
+    if (tab.multi_cursor.active and tab.multi_cursor.cursors.items.len > 0) {
+        for (tab.multi_cursor.cursors.items) |cursor| {
+            if (cursor.row != buffer_line_idx) continue;
+            if (cursor.row == mc.row and cursor.col == mc.col) continue;
+            if (cursor.col < tab.scroll_col or cursor.col >= tab.scroll_col +| content_width) continue;
+            const screen_col = content_col + (cursor.col - tab.scroll_col);
+            const ch = if (cursor.col < line_len) line.byteAt(cursor.col) orelse ' ' else ' ';
+            editor.renderer.screen.set(row, screen_col, ch, .multi_cursor);
+        }
     }
 
     if (tab.buf.foldStartingAt(buffer_line_idx)) |fold| {

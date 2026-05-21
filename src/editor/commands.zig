@@ -108,6 +108,7 @@ pub const CommandId = enum {
     editing_delete_line,
     editing_add_cursor_above,
     editing_add_cursor_below,
+    editing_select_next_occurrence,
     search_next_match,
     search_previous_match,
     search_cancel,
@@ -1021,6 +1022,13 @@ const command_metadata = [_]CommandMeta{
         .short_description = "Add cursor below",
         .category = .editing,
         .contexts = &.{ .normal, .insert },
+    },
+    .{
+        .id = .editing_select_next_occurrence,
+        .canonical_name = "editing.select_next_occurrence",
+        .short_description = "Add next occurrence of selected word",
+        .category = .editing,
+        .contexts = &.{.normal},
     },
     .{
         .id = .search_next_match,

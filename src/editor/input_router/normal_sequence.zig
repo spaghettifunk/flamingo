@@ -121,6 +121,7 @@ pub fn isActionCommandId(id: commands.CommandId) bool {
         .editing_delete_line,
         .editing_add_cursor_above,
         .editing_add_cursor_below,
+        .editing_select_next_occurrence,
         .completion_auto_trigger,
         .completion_trigger,
         => true,

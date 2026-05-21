@@ -720,6 +720,7 @@ const default_bindings = [_]Binding{
     .{ .context = .normal, .sequence = ctrlChar('k'), .command = .editing_delete_line },
     .{ .context = .normal, .sequence = ctrlAltKey(.Up), .command = .editing_add_cursor_above },
     .{ .context = .normal, .sequence = ctrlAltKey(.Down), .command = .editing_add_cursor_below },
+    .{ .context = .normal, .sequence = altChar('d'), .command = .editing_select_next_occurrence },
     .{ .context = .normal, .sequence = keyChar('.'), .command = .completion_auto_trigger },
     .{ .context = .normal, .sequence = ctrlChar(' '), .command = .completion_trigger },
 

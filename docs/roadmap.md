@@ -37,6 +37,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>` -- also `:df <path/to/file>`)
 - [x] implement file creation in explorer (and status bar with `:newFile <path/to/file>` -- also `:nf <path/to/file>`)
 - [ ] replace occurrences (all in one go or one by one)
+- [ ] implement multi-cursor selection in Normal and Insert Mode
 - [x] jump to line
 - [x] jump to top/bottom of file
 - [x] implement jump between matching `() { } [ ]`

@@ -935,6 +935,171 @@ test "Insert: typing ASCII chars updates buffer" {
     try expectLine(a, &ed, 0, "Hi");
 }
 
+test "Normal: Alt+d selects occurrences then Insert typing replaces all" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"foo = foo + foo"});
+    defer ed.deinit();
+    ed.state.mode = .Normal;
+
+    const cursor = ed.currentTab().?.mainCursor();
+    cursor.selection_start = .{ .row = 0, .col = 0 };
+    cursor.row = 0;
+    cursor.col = 3;
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyOptionChar('d'),
+        th.keyOptionChar('d'),
+    });
+    try std.testing.expectEqual(@as(usize, 3), ed.currentTab().?.multi_cursor.selections.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('i')});
+    try std.testing.expectEqual(editor_mod.EditorMode.Insert, ed.state.mode);
+    try std.testing.expectEqual(@as(usize, 3), ed.currentTab().?.multi_cursor.selections.items.len);
+    try std.testing.expectEqual(@as(usize, 3), ed.currentTab().?.multi_cursor.cursors.items.len);
+    try feedText(&ed, "bar");
+
+    try expectLine(a, &ed, 0, "bar = bar + bar");
+    const tab = ed.currentTab().?;
+    try std.testing.expect(tab.multi_cursor.active);
+    try std.testing.expectEqual(@as(usize, 0), tab.multi_cursor.selections.items.len);
+    try std.testing.expectEqual(@as(usize, 3), tab.multi_cursor.cursors.items.len);
+}
+
+test "Normal: Alt+d uses word under cursor when no selection exists" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"foo = foo + foo"});
+    defer ed.deinit();
+    ed.state.mode = .Normal;
+
+    const cursor = ed.currentTab().?.mainCursor();
+    cursor.row = 0;
+    cursor.col = 1;
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyOptionChar('d'),
+        th.keyOptionChar('d'),
+    });
+    try std.testing.expectEqual(@as(usize, 3), ed.currentTab().?.multi_cursor.selections.items.len);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('i')});
+    try feedText(&ed, "bar");
+
+    try expectLine(a, &ed, 0, "bar = bar + bar");
+}
+
+test "Insert: multi-cursor arrow movement collapses selections and moves cursors" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"foo = foo + foo"});
+    defer ed.deinit();
+    ed.state.mode = .Normal;
+
+    const cursor = ed.currentTab().?.mainCursor();
+    cursor.row = 0;
+    cursor.col = 1;
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyOptionChar('d'),
+        th.keyOptionChar('d'),
+        th.keyChar('i'),
+    });
+
+    var tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 3), tab.multi_cursor.selections.items.len);
+    try std.testing.expectEqual(@as(usize, 3), tab.multi_cursor.cursors.items.len);
+    try std.testing.expectEqual(@as(usize, 3), tab.multi_cursor.cursors.items[0].col);
+    try std.testing.expectEqual(@as(usize, 9), tab.multi_cursor.cursors.items[1].col);
+    try std.testing.expectEqual(@as(usize, 15), tab.multi_cursor.cursors.items[2].col);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Left)});
+    tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 0), tab.multi_cursor.selections.items.len);
+    try std.testing.expectEqual(@as(usize, 0), tab.multi_cursor.cursors.items[0].col);
+    try std.testing.expectEqual(@as(usize, 6), tab.multi_cursor.cursors.items[1].col);
+    try std.testing.expectEqual(@as(usize, 12), tab.multi_cursor.cursors.items[2].col);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Right)});
+    tab = ed.currentTab().?;
+    try std.testing.expectEqual(@as(usize, 1), tab.multi_cursor.cursors.items[0].col);
+    try std.testing.expectEqual(@as(usize, 7), tab.multi_cursor.cursors.items[1].col);
+    try std.testing.expectEqual(@as(usize, 13), tab.multi_cursor.cursors.items[2].col);
+}
+
+test "Insert: arrow movement after replacement moves all active cursors" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"foo = foo + foo"});
+    defer ed.deinit();
+    ed.state.mode = .Normal;
+
+    const cursor = ed.currentTab().?.mainCursor();
+    cursor.row = 0;
+    cursor.col = 1;
+
+    try feed(&ed, &[_]terminal.KeyEvent{
+        th.keyOptionChar('d'),
+        th.keyOptionChar('d'),
+        th.keyChar('i'),
+    });
+    try feedText(&ed, "bar");
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Left)});
+
+    const tab = ed.currentTab().?;
+    try std.testing.expect(tab.multi_cursor.active);
+    try std.testing.expectEqual(@as(usize, 2), tab.multi_cursor.cursors.items[0].col);
+    try std.testing.expectEqual(@as(usize, 8), tab.multi_cursor.cursors.items[1].col);
+    try std.testing.expectEqual(@as(usize, 14), tab.multi_cursor.cursors.items[2].col);
+}
+
+test "Normal: Alt+d empty selection no-ops and Esc clears state" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"foo foo"});
+    defer ed.deinit();
+    ed.state.mode = .Normal;
+
+    var cursor = ed.currentTab().?.mainCursor();
+    cursor.selection_start = .{ .row = 0, .col = 0 };
+    cursor.row = 0;
+    cursor.col = 0;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('d')});
+    try std.testing.expect(!ed.currentTab().?.multi_cursor.active);
+
+    cursor = ed.currentTab().?.mainCursor();
+    cursor.selection_start = .{ .row = 0, .col = 0 };
+    cursor.row = 0;
+    cursor.col = 3;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('d')});
+    try std.testing.expect(ed.currentTab().?.multi_cursor.active);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+    try std.testing.expect(!ed.currentTab().?.multi_cursor.active);
+}
+
+test "Insert: active tab changes clear multi-cursor state" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEditor(a, &[_][]const u8{"foo foo"});
+    defer ed.deinit();
+
+    var second = try Buffer.init(a);
+    var consumed = false;
+    errdefer if (!consumed) second.deinit();
+    try ed.addTab(second);
+    consumed = true;
+    second = undefined;
+    ed.prevTab();
+    ed.state.mode = .Normal;
+
+    const cursor = ed.currentTab().?.mainCursor();
+    cursor.selection_start = .{ .row = 0, .col = 0 };
+    cursor.row = 0;
+    cursor.col = 3;
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('d')});
+    try std.testing.expect(ed.currentTab().?.multi_cursor.active);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar(']')});
+    try std.testing.expect(!ed.state.tabs.items[0].multi_cursor.active);
+    try std.testing.expect(!ed.currentTab().?.multi_cursor.active);
+}
+
 test "Insert: Tab expands to 4 spaces" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{""});

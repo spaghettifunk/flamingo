@@ -292,6 +292,20 @@ test "readKey: macOS Option+P unicode maps to Alt+P" {
     try std.testing.expect(ev.alt);
 }
 
+test "readKey: macOS Option+D unicode maps to Alt+D" {
+    const ev = try readKeyFrom(&[_]u8{ 0xe2, 0x88, 0x82 });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'd'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
+test "readKey: ESC-prefixed macOS Option+D unicode maps to Alt+D" {
+    const ev = try readKeyFrom(&[_]u8{ 0x1b, 0xe2, 0x88, 0x82 });
+    try std.testing.expectEqual(Key.Char, ev.key);
+    try std.testing.expectEqual(@as(u8, 'd'), ev.char);
+    try std.testing.expect(ev.alt);
+}
+
 test "readKey: macOS Option+I unicode maps to Alt+I" {
     const ev = try readKeyFrom(&[_]u8{ 0xcb, 0x86 });
     try std.testing.expectEqual(Key.Char, ev.key);

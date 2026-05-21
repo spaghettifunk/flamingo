@@ -58,6 +58,7 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 | :------------------- | :------------------------------------------- |
 | **Add Cursor Above** | `CTRL + Option + Up`                         |
 | **Add Cursor Below** | `CTRL + Option + Down`                       |
+| **Add Next Occurrence** | `Option + D` in Normal mode (uses selection or word under cursor, then `i` to edit) |
 | **Extend Selection** | `Shift + Arrows` (works with word jumps too) |
 | **Clear Selections** | `Esc`                                        |
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const buffer = @import("buffer.zig");
 const syntax = @import("../syntax.zig");
+const multi_cursor = @import("../multi_cursor.zig");
 
 pub const Pos = struct {
     row: usize,
@@ -25,8 +26,10 @@ pub const Tab = struct {
     scroll_col: usize = 0,
     lsp_notified_revision: ?u64 = null,
     lsp_pending_since_ns: ?u64 = null,
+    multi_cursor: multi_cursor.MultiCursorState = .{},
 
     pub fn deinit(self: *Tab, allocator: std.mem.Allocator) void {
+        self.multi_cursor.deinit(allocator);
         self.syntax_highlighter.deinit();
         self.buf.deinit();
         self.cursors.deinit(allocator);

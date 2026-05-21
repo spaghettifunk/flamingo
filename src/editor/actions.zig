@@ -201,6 +201,7 @@ pub fn addCursorBelow(ed: *editor.Editor) !void {
 
 pub fn clearSelections(ed: *editor.Editor) void {
     const tab = ed.currentTab() orelse return;
+    tab.multi_cursor.clear(ed.allocator);
     for (tab.cursors.items) |*c| {
         c.selection_start = null;
     }

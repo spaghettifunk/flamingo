@@ -16,6 +16,7 @@ const prompt_popup = @import("../prompt_popup.zig");
 const terminal_panel = @import("../terminal_panel.zig");
 const todos = @import("../todos.zig");
 const comments = @import("../comments.zig");
+const multi_cursor = @import("../multi_cursor.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -307,6 +308,7 @@ fn normalSharedActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEven
         .editing_delete_line,
         .editing_add_cursor_above,
         .editing_add_cursor_below,
+        .editing_select_next_occurrence,
         .mode_normal,
         => command,
         else => null,
@@ -428,10 +430,7 @@ fn openFilePromptActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEv
 fn insertActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     const command = resolveDefaultContextCommand(ed, .insert, event) orelse return null;
     return switch (command) {
-        .editing_insert_newline,
-        .editing_delete_back,
-        .editing_indent,
-        => command,
+        .editing_insert_newline, .editing_delete_back, .editing_indent => command,
         else => null,
     };
 }
@@ -469,6 +468,122 @@ fn saveConfirmationActionCommandForEvent(ed: *editor.Editor, event: terminal.Key
 
 fn clearPendingNormalSequence(ed: *editor.Editor) void {
     ed.state.pending_normal_sequence.clear();
+}
+
+fn clearCurrentMultiCursor(ed: *editor.Editor) void {
+    if (ed.currentTab()) |tab| {
+        tab.multi_cursor.clear(ed.allocator);
+    }
+}
+
+fn applyPrimaryCursorPosition(tab: *editor.Tab, pos: multi_cursor.CursorPosition) void {
+    const mc = tab.mainCursor();
+    mc.row = @min(pos.row, tab.buf.lines.items.len - 1);
+    mc.col = @min(pos.col, tab.buf.lines.items[mc.row].len());
+    mc.selection_start = null;
+    mc.preferred_col = null;
+}
+
+fn clampMultiCursor(tab: *editor.Tab, cursor: *multi_cursor.CursorPosition) void {
+    if (tab.buf.lines.items.len == 0) {
+        cursor.row = 0;
+        cursor.col = 0;
+        return;
+    }
+    cursor.row = @min(cursor.row, tab.buf.lines.items.len - 1);
+    cursor.row = tab.buf.clampToVisibleLine(cursor.row);
+    cursor.col = @min(cursor.col, tab.buf.lines.items[cursor.row].len());
+}
+
+fn moveMultiCursor(tab: *editor.Tab, cursor: *multi_cursor.CursorPosition, movement_command: commands.CommandId, page_rows: usize) !void {
+    clampMultiCursor(tab, cursor);
+    if (movement_command == .navigation_line_end) {
+        cursor.col = tab.buf.lines.items[cursor.row].len();
+    } else if (movement_command == .navigation_line_start) {
+        cursor.col = 0;
+    } else if (movement_command == .navigation_word_left) {
+        try tab.buf.jumpWordLeft(&cursor.row, &cursor.col);
+    } else if (movement_command == .navigation_word_right) {
+        try tab.buf.jumpWordRight(&cursor.row, &cursor.col);
+    } else if (movement_command == .navigation_move_up) {
+        const preferred_col = cursor.col;
+        cursor.row = tab.buf.prevVisibleLine(cursor.row);
+        cursor.col = @min(preferred_col, tab.buf.lines.items[cursor.row].len());
+    } else if (movement_command == .navigation_move_down) {
+        const preferred_col = cursor.col;
+        cursor.row = tab.buf.nextVisibleLine(cursor.row);
+        cursor.col = @min(preferred_col, tab.buf.lines.items[cursor.row].len());
+    } else if (movement_command == .navigation_page_up) {
+        const preferred_col = cursor.col;
+        for (0..page_rows) |_| {
+            const next = tab.buf.prevVisibleLine(cursor.row);
+            if (next == cursor.row) break;
+            cursor.row = next;
+        }
+        cursor.col = @min(preferred_col, tab.buf.lines.items[cursor.row].len());
+    } else if (movement_command == .navigation_page_down) {
+        const preferred_col = cursor.col;
+        for (0..page_rows) |_| {
+            const next = tab.buf.nextVisibleLine(cursor.row);
+            if (next == cursor.row) break;
+            cursor.row = next;
+        }
+        cursor.col = @min(preferred_col, tab.buf.lines.items[cursor.row].len());
+    } else if (movement_command == .navigation_move_left) {
+        if (cursor.col > 0) cursor.col -= 1;
+    } else if (movement_command == .navigation_move_right) {
+        if (cursor.col < tab.buf.lines.items[cursor.row].len()) cursor.col += 1;
+    }
+    clampMultiCursor(tab, cursor);
+}
+
+fn handleActiveMultiCursorMovement(ed: *editor.Editor, tab: *editor.Tab, movement_command: commands.CommandId, page_rows: usize) !bool {
+    if (!tab.multi_cursor.active) return false;
+
+    if (tab.multi_cursor.hasSelections()) {
+        const edge: multi_cursor.SelectionEdge = switch (movement_command) {
+            .navigation_move_left => .start,
+            else => .end,
+        };
+        const pos = try multi_cursor.syncCursorsToSelections(ed.allocator, &tab.multi_cursor, edge, true);
+        if (movement_command == .navigation_move_left or movement_command == .navigation_move_right) {
+            if (pos) |cursor_pos| applyPrimaryCursorPosition(tab, cursor_pos);
+            ed.noteKeypressMovementHandled(true);
+            ed.clampScroll();
+            return true;
+        }
+    }
+
+    if (!tab.multi_cursor.hasCursors()) return false;
+    for (tab.multi_cursor.cursors.items) |*cursor| {
+        try moveMultiCursor(tab, cursor, movement_command, page_rows);
+    }
+    multi_cursor.dedupeSortedCursors(&tab.multi_cursor);
+    if (tab.multi_cursor.cursors.items.len > 0) {
+        applyPrimaryCursorPosition(tab, tab.multi_cursor.cursors.items[tab.multi_cursor.cursors.items.len - 1]);
+    }
+    ed.noteKeypressMovementHandled(true);
+    ed.clampScroll();
+    return true;
+}
+
+fn selectNextOccurrence(ed: *editor.Editor) !void {
+    if (ed.currentTab()) |tab| {
+        const mc = tab.mainCursor();
+        const range = if (mc.selection_start) |ss|
+            multi_cursor.normalizedSelection(ss.row, ss.col, mc.row, mc.col)
+        else
+            multi_cursor.wordSelectionAtCursor(&tab.buf, mc.row, mc.col) orelse return;
+        if (try multi_cursor.beginSelectNextOccurrence(ed.allocator, &tab.multi_cursor, &tab.buf, tab.syntax_buffer_id, range)) {
+            if (tab.multi_cursor.selections.items.len > 0) {
+                const last = tab.multi_cursor.selections.items[tab.multi_cursor.selections.items.len - 1];
+                mc.row = last.end_line;
+                mc.col = last.end_col;
+                mc.selection_start = .{ .row = last.start_line, .col = last.start_col };
+                mc.preferred_col = null;
+            }
+        }
+    }
 }
 
 fn handleNormalSequence(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
@@ -669,21 +784,53 @@ fn saveCurrentFile(ed: *editor.Editor) !void {
 fn executeSharedActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
     clearPendingNormalSequence(ed);
     switch (command) {
-        .editing_select_all => actions.selectAll(ed),
+        .editing_select_all => {
+            clearCurrentMultiCursor(ed);
+            actions.selectAll(ed);
+        },
         .editing_copy => try actions.copy(ed),
-        .editing_cut => try actions.cut(ed),
-        .editing_paste => try actions.paste(ed),
+        .editing_cut => {
+            clearCurrentMultiCursor(ed);
+            try actions.cut(ed);
+        },
+        .editing_paste => {
+            clearCurrentMultiCursor(ed);
+            try actions.paste(ed);
+        },
         .file_write => saveCurrentFile(ed) catch |err| {
             if (err != error.InvalidConfig) ed.state.error_message = "Failed to save file";
         },
-        .editing_undo => try actions.undo(ed),
-        .editing_redo => try actions.redo(ed),
-        .editing_delete_word_back => try actions.deleteWordBack(ed),
-        .editing_duplicate_line => try actions.duplicateLine(ed),
-        .editing_delete_line => try actions.deleteLine(ed),
-        .editing_add_cursor_above => try actions.addCursorAbove(ed),
-        .editing_add_cursor_below => try actions.addCursorBelow(ed),
+        .editing_undo => {
+            clearCurrentMultiCursor(ed);
+            try actions.undo(ed);
+        },
+        .editing_redo => {
+            clearCurrentMultiCursor(ed);
+            try actions.redo(ed);
+        },
+        .editing_delete_word_back => {
+            clearCurrentMultiCursor(ed);
+            try actions.deleteWordBack(ed);
+        },
+        .editing_duplicate_line => {
+            clearCurrentMultiCursor(ed);
+            try actions.duplicateLine(ed);
+        },
+        .editing_delete_line => {
+            clearCurrentMultiCursor(ed);
+            try actions.deleteLine(ed);
+        },
+        .editing_add_cursor_above => {
+            clearCurrentMultiCursor(ed);
+            try actions.addCursorAbove(ed);
+        },
+        .editing_add_cursor_below => {
+            clearCurrentMultiCursor(ed);
+            try actions.addCursorBelow(ed);
+        },
+        .editing_select_next_occurrence => try selectNextOccurrence(ed),
         .mode_normal => {
+            clearCurrentMultiCursor(ed);
             actions.clearSelections(ed);
             if (ed.state.mode == .Insert) ed.state.mode = .Normal;
         },
@@ -694,13 +841,24 @@ fn executeSharedActionCommand(ed: *editor.Editor, command: commands.CommandId) !
 fn executeNormalModeActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
     clearPendingNormalSequence(ed);
     switch (command) {
-        .mode_insert => ed.state.mode = .Insert,
+        .mode_insert => {
+            if (ed.currentTab()) |tab| {
+                if (tab.multi_cursor.hasSelections()) {
+                    if (try multi_cursor.syncCursorsToSelections(ed.allocator, &tab.multi_cursor, .end, false)) |pos| {
+                        applyPrimaryCursorPosition(tab, pos);
+                    }
+                }
+            }
+            ed.state.mode = .Insert;
+        },
         .mode_command => {
+            clearCurrentMultiCursor(ed);
             ed.state.mode = .Command;
             ed.state.command_buffer.clearRetainingCapacity();
             try ed.state.command_popup.open(ed.allocator);
         },
         .mode_search => {
+            clearCurrentMultiCursor(ed);
             ed.state.mode = .Search;
             ed.state.search_buffer.clearRetainingCapacity();
             if (ed.state.search_system) |*s| s.clear();
@@ -1301,6 +1459,7 @@ fn executeDashboardSelectedAction(ed: *editor.Editor) !void {
 fn executeDashboardActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
     switch (command) {
         .mode_command => {
+            clearCurrentMultiCursor(ed);
             clearPendingNormalSequence(ed);
             ed.state.mode = .Command;
             ed.state.command_buffer.clearRetainingCapacity();
@@ -1402,6 +1561,10 @@ fn executeInsertActionCommand(ed: *editor.Editor, command: commands.CommandId) !
     switch (command) {
         .editing_insert_newline => {
             if (ed.currentTab()) |tab| {
+                if (tab.multi_cursor.active) {
+                    ed.state.status_message = "Multi-cursor newline is not implemented yet";
+                    return;
+                }
                 const mc = tab.mainCursor();
                 try tab.buf.insertNewline(mc.row, mc.col);
                 mc.row += 1;
@@ -1411,6 +1574,12 @@ fn executeInsertActionCommand(ed: *editor.Editor, command: commands.CommandId) !
         },
         .editing_delete_back => {
             if (ed.currentTab()) |tab| {
+                if (tab.multi_cursor.active) {
+                    if (try multi_cursor.backspaceAtCursors(&tab.multi_cursor, &tab.buf)) |pos| {
+                        applyPrimaryCursorPosition(tab, pos);
+                    }
+                    return;
+                }
                 const mc = tab.mainCursor();
                 const row = mc.row;
                 var prev_len: usize = 0;
@@ -1429,6 +1598,17 @@ fn executeInsertActionCommand(ed: *editor.Editor, command: commands.CommandId) !
         },
         .editing_indent => {
             if (ed.currentTab()) |tab| {
+                if (tab.multi_cursor.active) {
+                    if (tab.multi_cursor.hasSelections()) {
+                        _ = try multi_cursor.replaceSelectionsWithText(ed.allocator, &tab.multi_cursor, &tab.buf, "    ");
+                    } else {
+                        _ = try multi_cursor.insertTextAtCursors(&tab.multi_cursor, &tab.buf, "    ");
+                    }
+                    if (tab.multi_cursor.cursors.items.len > 0) {
+                        applyPrimaryCursorPosition(tab, tab.multi_cursor.cursors.items[tab.multi_cursor.cursors.items.len - 1]);
+                    }
+                    return;
+                }
                 const mc = tab.mainCursor();
                 clampCursorToBuffer(tab, mc);
                 tab.buf.beginUndoGroup();
@@ -1922,6 +2102,7 @@ fn enterNormalFromTerminal(ed: *editor.Editor) void {
 }
 
 fn showAndFocusTerminal(ed: *editor.Editor) !void {
+    clearCurrentMultiCursor(ed);
     try ed.terminal_panel.show();
     const panel_rows = ed.terminalPanelHeight() -| 1;
     try ed.terminal_panel.ensureStarted(ed.runtime.event_queue, ed.width, panel_rows);
@@ -2047,6 +2228,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (registryCommandMatches(ed, .global, event, .explorer_toggle)) {
         clearPendingNormalSequence(ed);
+        clearCurrentMultiCursor(ed);
         if (ed.state.tree == null) {
             ed.state.tree = explorer.Explorer.init(ed.allocator, ed.io, ".") catch null;
         }
@@ -2066,6 +2248,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (registryCommandMatches(ed, .global, event, .app_cycle_panel_focus)) {
         clearPendingNormalSequence(ed);
+        clearCurrentMultiCursor(ed);
         if (try cyclePanelFocus(ed)) return;
     }
 
@@ -2081,6 +2264,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             // instead of silently discarding them.
             if (ed.currentTab()) |tab| {
                 if (tab.buf.is_dirty) {
+                    clearCurrentMultiCursor(ed);
                     openSaveConfirmation(ed);
                     return;
                 }
@@ -2196,6 +2380,17 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
                 try executeInsertActionCommand(ed, command);
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 if (ed.currentTab()) |tab| {
+                    if (tab.multi_cursor.active) {
+                        const text = [_]u8{event.char};
+                        const pos = if (tab.multi_cursor.hasSelections())
+                            try multi_cursor.replaceSelectionsWithText(ed.allocator, &tab.multi_cursor, &tab.buf, &text)
+                        else
+                            try multi_cursor.insertTextAtCursors(&tab.multi_cursor, &tab.buf, &text);
+                        if (pos) |cursor_pos| {
+                            applyPrimaryCursorPosition(tab, cursor_pos);
+                        }
+                        return;
+                    }
                     const mc = tab.mainCursor();
                     clampCursorToBuffer(tab, mc);
                     try tab.buf.insertChar(mc.row, mc.col, event.char);
@@ -2288,6 +2483,10 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     const page_rows = @max(ed.editorVisibleRows(), 1);
     if (tab.buf.lines.items.len == 0) return false;
 
+    if (ed.state.mode == .Insert and tab.multi_cursor.active) {
+        return try handleActiveMultiCursorMovement(ed, tab, movement_command, page_rows);
+    }
+
     // Multi-cursor support: apply movement to all cursors
     var handled = false;
     for (tab.cursors.items) |*cursor| {
@@ -2369,7 +2568,10 @@ pub fn handleMovement(ed: *editor.Editor, event: terminal.KeyEvent) !bool {
     }
 
     ed.noteKeypressMovementHandled(handled);
-    if (handled) ed.clampScroll();
+    if (handled) {
+        if (!event.shift) tab.multi_cursor.clear(ed.allocator);
+        ed.clampScroll();
+    }
     return handled;
 }
 

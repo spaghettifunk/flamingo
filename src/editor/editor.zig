@@ -167,6 +167,7 @@ pub const Editor = struct {
     }
 
     pub fn addTab(self: *Editor, buf: buffer.Buffer) !void {
+        self.clearAllMultiCursors();
         const added = try self.state.addTab(self.allocator, buf);
         self.markDirty(.full);
         if (!added) return;
@@ -192,23 +193,35 @@ pub const Editor = struct {
     }
 
     pub fn closeTab(self: *Editor) void {
+        self.clearAllMultiCursors();
         self.state.closeTab(self.allocator);
         self.markDirty(.full);
     }
 
     pub fn nextTab(self: *Editor) void {
+        self.clearAllMultiCursors();
         self.state.nextTab();
+        self.clearAllMultiCursors();
         self.markDirty(.full);
     }
 
     pub fn prevTab(self: *Editor) void {
+        self.clearAllMultiCursors();
         self.state.prevTab();
+        self.clearAllMultiCursors();
         self.markDirty(.full);
     }
 
     pub fn closeAllTabs(self: *Editor) void {
+        self.clearAllMultiCursors();
         self.state.closeAllTabs(self.allocator);
         self.markDirty(.full);
+    }
+
+    pub fn clearAllMultiCursors(self: *Editor) void {
+        for (self.state.tabs.items) |*tab| {
+            tab.multi_cursor.clear(self.allocator);
+        }
     }
 
     pub fn processQuitAll(self: *Editor) void {
