@@ -118,35 +118,13 @@ zig fmt <files>
 
 The build defines the main editor executable, a test step rooted at `test_root.zig`, and a rendering performance benchmark executable.
 
-### Homebrew Formula Validation
-
-Before the first v1 release, [Formula/flamingo.rb](Formula/flamingo.rb) contains a placeholder source tarball checksum. After a release is cut and the checksum is updated, validate the formula locally with:
-
-```bash
-brew install --build-from-source ./Formula/flamingo.rb
-brew test flamingo
-brew audit --strict --online ./Formula/flamingo.rb
-brew uninstall flamingo
-```
-
-To compute the source tarball checksum for a tag:
-
-```bash
-make homebrew-sha VERSION=1.0.0
-```
-
-This downloads `https://github.com/spaghettifunk/flamingo/archive/refs/tags/v1.0.0.tar.gz` and prints the SHA256 to copy into the formula.
-
 ### Release Process
 
 Flamingo uses a manual, tag-driven GitHub Actions release workflow for v1. This avoids publishing a release on every merge to `main`.
 
 1. Merge release-ready changes to `main`.
-2. Run the `release` workflow manually with the desired version, such as `1.0.0`.
+2. Run the `release` workflow manually with the desired version, such as `0.1.0`.
 3. The workflow validates the version, builds and tests Flamingo, creates tag `v<version>` from `main`, generates a changelog from commits since the previous `v*` tag, packages the macOS binary, uploads `SHA256SUMS.txt`, and creates the GitHub Release.
-4. Copy the source tarball SHA256 from the workflow summary or release body into [Formula/flamingo.rb](Formula/flamingo.rb).
-5. Commit the formula URL/checksum update to `main`.
-6. Run the Homebrew validation commands above.
 
 ## Configuration
 
