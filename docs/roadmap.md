@@ -4,7 +4,7 @@ A set of todos without order or priority. Simply grouped by category
 
 ## General TODO
 
-- [ ] write a proper README.md with contributions, running the project, etc
+- [x] write a proper README.md with contributions, running the project, etc
 - [ ] CI pipeline for running tests and binary creation (GitHub actions as a start)
 - [ ] `homebrew` formula for installation
 - [ ] write ton of documentation and create a website for it using mkdocs or similar
@@ -37,7 +37,7 @@ A set of todos without order or priority. Simply grouped by category
 - [x] implement file deletion in explorer (and status bar with `:deleteFile <path/to/file>` -- also `:df <path/to/file>`)
 - [x] implement file creation in explorer (and status bar with `:newFile <path/to/file>` -- also `:nf <path/to/file>`)
 - [ ] replace occurrences (all in one go or one by one)
-- [ ] implement multi-cursor selection in Normal and Insert Mode
+- [x] implement multi-cursor selection in Normal and Insert Mode
 - [x] jump to line
 - [x] jump to top/bottom of file
 - [x] implement jump between matching `() { } [ ]`

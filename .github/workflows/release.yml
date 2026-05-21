@@ -1,0 +1,120 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the leading v, for example 1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Validate version
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like 1.2.3 or 1.2.3-rc.1" >&2
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists" >&2
+            exit 1
+          fi
+          {
+            echo "VERSION=$VERSION"
+            echo "TAG=$TAG"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build and test
+        run: |
+          set -euo pipefail
+          zig build test
+          zig build -Doptimize=ReleaseSafe
+          ./zig-out/bin/flamingo --version
+          ./zig-out/bin/flamingo --help
+
+      - name: Create release tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Flamingo $TAG"
+          git push origin "$TAG"
+
+      - name: Generate changelog
+        run: |
+          set -euo pipefail
+          PREVIOUS_TAG="$(git describe --tags --match 'v*' --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="$PREVIOUS_TAG..$TAG"
+          else
+            RANGE="$TAG"
+          fi
+
+          {
+            echo "## Flamingo $TAG"
+            echo
+            echo "## Changes"
+            echo
+            git log --pretty='- %s (`%h`)' "$RANGE"
+            echo
+            echo "## Homebrew source tarball"
+            echo
+            echo '```text'
+            echo "url: https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+            echo "sha256: pending"
+            echo '```'
+          } > CHANGELOG_RELEASE.md
+
+      - name: Package macOS artifact
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          ARTIFACT="flamingo-v${VERSION}-macos-${ARCH}"
+          mkdir -p "$ARTIFACT"
+          cp zig-out/bin/flamingo "$ARTIFACT/"
+          cp README.md LICENSE "$ARTIFACT/"
+          tar -czf "${ARTIFACT}.tar.gz" "$ARTIFACT"
+          shasum -a 256 "${ARTIFACT}.tar.gz" > SHA256SUMS.txt
+
+      - name: Compute Homebrew source checksum
+        run: |
+          set -euo pipefail
+          SOURCE_TARBALL="flamingo-${TAG}-source.tar.gz"
+          curl -L -o "$SOURCE_TARBALL" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          SOURCE_SHA="$(shasum -a 256 "$SOURCE_TARBALL" | awk '{print $1}')"
+          echo "${SOURCE_SHA}  ${SOURCE_TARBALL}" >> SHA256SUMS.txt
+          perl -0pi -e "s/sha256: pending/sha256: ${SOURCE_SHA}/" CHANGELOG_RELEASE.md
+          {
+            echo "Homebrew formula source tarball:"
+            echo "  url: https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+            echo "  sha256: ${SOURCE_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Flamingo ${{ env.TAG }}
+          body_path: CHANGELOG_RELEASE.md
+          files: |
+            flamingo-v${{ env.VERSION }}-macos-*.tar.gz
+            SHA256SUMS.txt

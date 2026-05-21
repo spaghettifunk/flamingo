@@ -4,6 +4,7 @@ const logger = @import("logger.zig");
 const editor = @import("editor/editor.zig");
 const keybindings = @import("editor/keybindings.zig");
 const terminal = @import("terminal.zig");
+const version = @import("version.zig");
 
 const c = @cImport({
     @cInclude("signal.h");
@@ -24,6 +25,8 @@ pub fn main(init: std.process.Init) !void {
     while (arg_iter.next()) |arg| {
         try argv.append(allocator, arg);
     }
+
+    if (try handleCliCommand(io, argv.items)) return;
 
     const selected_config = try selectedConfigPath(allocator, io, argv.items, init.environ_map);
     defer selected_config.deinit(allocator);
@@ -58,6 +61,40 @@ pub fn main(init: std.process.Init) !void {
     defer terminal.restoreTerminal(io, stdout);
 
     try editor.start_editor(io, allocator, cfg, selected_config.path, selected_config.source);
+}
+
+const CliCommand = enum {
+    help,
+    version,
+};
+
+fn cliCommand(args: []const []const u8) ?CliCommand {
+    if (args.len != 1) return null;
+    if (std.mem.eql(u8, args[0], "--version") or std.mem.eql(u8, args[0], "version")) return .version;
+    if (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h") or std.mem.eql(u8, args[0], "help")) return .help;
+    return null;
+}
+
+fn handleCliCommand(io: std.Io, args: []const []const u8) !bool {
+    const command = cliCommand(args) orelse return false;
+
+    const stdout = std.Io.File.stdout();
+    var stdout_buf: [0]u8 = .{};
+    var writer = stdout.writerStreaming(io, &stdout_buf);
+
+    switch (command) {
+        .version => try writer.interface.print("flamingo {s}\n", .{version.version}),
+        .help => try writer.interface.writeAll(
+            \\Usage: flamingo [--config <path>]
+            \\
+            \\Options:
+            \\  --config <path>  Use a specific config file
+            \\  --help, -h       Show this help text
+            \\  --version        Show the Flamingo version
+            \\
+        ),
+    }
+    return true;
 }
 
 fn selectedConfigPath(
@@ -109,4 +146,15 @@ pub fn handleSignal(sig: c_int) callconv(.c) void {
 
 test {
     std.testing.refAllDecls(@This());
+}
+
+test "CLI command detection recognizes non-interactive checks" {
+    try std.testing.expectEqual(CliCommand.version, cliCommand(&.{"--version"}).?);
+    try std.testing.expectEqual(CliCommand.version, cliCommand(&.{"version"}).?);
+    try std.testing.expectEqual(CliCommand.help, cliCommand(&.{"--help"}).?);
+    try std.testing.expectEqual(CliCommand.help, cliCommand(&.{"-h"}).?);
+    try std.testing.expectEqual(CliCommand.help, cliCommand(&.{"help"}).?);
+    try std.testing.expect(cliCommand(&.{}) == null);
+    try std.testing.expect(cliCommand(&.{ "--config", "config.toml" }) == null);
+    try std.testing.expect(cliCommand(&.{"--bogus"}) == null);
 }

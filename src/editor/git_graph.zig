@@ -650,15 +650,10 @@ test "git graph repo detection reports no repo" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
-    var tmp_parent = try std.Io.Dir.openDirAbsolute(io, "/private/tmp", .{});
-    defer tmp_parent.close(io);
-    const leaf = try std.fmt.allocPrint(allocator, "flamingo-git-graph-no-repo-{d}", .{std.testing.random_seed});
-    defer allocator.free(leaf);
-    tmp_parent.deleteTree(io, leaf) catch {};
-    try tmp_parent.createDirPath(io, leaf);
-    defer tmp_parent.deleteTree(io, leaf) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-    const root = try std.fs.path.join(allocator, &.{ "/private/tmp", leaf });
+    const root = try std.fs.path.join(allocator, &.{ std.fs.path.sep_str, "flamingo-git-graph-no-repo", &tmp.sub_path });
     defer allocator.free(root);
 
     try std.testing.expectError(error.NotGitRepository, findRepositoryRootFromStart(allocator, io, root));
