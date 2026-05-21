@@ -40,3 +40,4 @@ Do not invent extra build, test, or formatting commands unless the repository ad
 - Summarize what changed in the final response.
 - Mention any commands or tests that could not be run.
 - If a new command or keybinding is added, update `docs/keybindings.md`.
+- Update the documentation `docs` if necessary

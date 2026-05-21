@@ -1,0 +1,86 @@
+# Config Reference
+
+Config parsing lives in `src/config.zig`. The embedded default config is [../../src/config/default_config.toml](../../src/config/default_config.toml).
+
+## Root Keys
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `debug` | bool | `false` | Enables debug logging through `src/logger.zig`. When enabled, logs are written to `flamingo.log`. | Implemented |
+
+## `[explorer]`
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `width_percentage` | `u8` | `20` | Explorer width as a percentage of terminal width. Used by viewport and render layout code. | Implemented |
+
+## `[author]`
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `name` | optional string | `null` | Fallback comment author name when Git identity is unavailable. | Implemented |
+| `email` | optional string | `null` | Fallback comment author email when Git identity is unavailable. | Implemented |
+
+## `[keybindings]`
+
+Keybindings use context-specific subtables. The flat legacy `[keybindings]` model is rejected.
+
+Supported contexts:
+
+| Context | Description | Status |
+| --- | --- | --- |
+| `global` | Global commands such as quit, explorer, terminal, tabs, and focus cycling. | Implemented |
+| `normal` | Normal-mode navigation, actions, sequences, search, command mode, completion. | Implemented |
+| `insert` | Insert-mode editing, movement, save, completion, and return to Normal. | Implemented |
+| `command_line` | Command prompt controls. | Implemented |
+| `dashboard` | Dashboard actions. | Implemented |
+| `explorer` | Explorer navigation and file actions. | Implemented |
+| `explorer_search` | Explorer search prompt controls. | Implemented |
+| `search` | Current-buffer search controls. | Implemented |
+| `global_search` | Project search controls. | Implemented |
+| `git_graph` | Git Graph panel controls. | Implemented |
+| `todo_panel` | TODO panel controls. | Implemented |
+| `comments_panel` | Comments panel controls. | Implemented |
+| `help` | Help popup controls. | Implemented |
+| `terminal` | Terminal focus and scroll controls. | Implemented |
+| `picker` | Filesystem picker common controls. | Implemented |
+| `picker_new_file` | New-file picker extra controls. | Implemented |
+| `picker_open_folder` | Open-folder picker extra controls. | Implemented |
+| `prompt` | Generic prompt controls. | Implemented |
+| `open_file_prompt` | Legacy open-file prompt controls. | Implemented in state/dispatch; TODO: verify user entry path. |
+| `completion` | LSP completion popup controls. | Implemented |
+| `save_confirmation` | Dirty-buffer close confirmation controls. | Implemented |
+
+## Keybinding Tables
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `[keybindings.<context>]` entries | string to string | none | Maps key sequence text to a canonical command name from `src/editor/commands.zig`. | Implemented |
+| `[keybindings.<context>.unbind].keys` | array of strings | none | Removes matching default bindings from the resolved registry. | Implemented |
+
+Example:
+
+```toml
+[keybindings.normal]
+"ctrl+s" = "file.write"
+"gg" = "navigation.goto_file_start"
+
+[keybindings.normal.unbind]
+keys = ["ctrl+w"]
+```
+
+## Validation Behavior
+
+| Condition | Result |
+| --- | --- |
+| Invalid TOML | Rejected by TOML parser. |
+| Unknown keybinding context | Error. |
+| Legacy flat keybinding field | Error. |
+| Invalid key spelling | Error. |
+| Unknown canonical command name | Error. |
+| Command used in a context where it is not allowed | Error. |
+| Duplicate user binding in one context | Error. |
+| Prefix conflict in resolved bindings | Error. |
+| Unbind that matches no default binding | Warning. |
+| Inline command args in config | Error; not supported yet. |
+
