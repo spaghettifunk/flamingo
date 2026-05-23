@@ -6,6 +6,7 @@ const std = @import("std");
 const config = @import("../src/config.zig");
 const keybindings = @import("../src/editor/keybindings.zig");
 const commands = @import("../src/editor/commands.zig");
+const icons = @import("../src/editor/icons.zig");
 const toml = @import("toml");
 
 fn testingTmpRoot(allocator: std.mem.Allocator, tmp: anytype) ![]u8 {
@@ -19,6 +20,7 @@ test "Config: zero-value has correct defaults" {
     try std.testing.expect(cfg.keybindings.normal == null);
     try std.testing.expectEqual(@as(usize, 0), cfg.keybindings.unknown_contexts.len);
     try std.testing.expectEqual(@as(u8, 20), cfg.explorer.width_percentage);
+    try std.testing.expectEqual(icons.IconMode.auto, try config.configuredIconMode(&cfg));
 }
 
 test "Config: parse empty TOML gives defaults" {
@@ -33,6 +35,40 @@ test "Config: parse empty TOML gives defaults" {
     try std.testing.expect(!cfg.debug);
     try std.testing.expect(cfg.keybindings.normal == null);
     try std.testing.expectEqual(@as(u8, 20), cfg.explorer.width_percentage);
+    try std.testing.expectEqual(icons.IconMode.auto, try config.configuredIconMode(&cfg));
+}
+
+test "Config: parses ui icon modes" {
+    const allocator = std.testing.allocator;
+
+    inline for (.{ "auto", "nerd_font", "unicode", "ascii" }) |mode| {
+        var parser = toml.Parser(config.Config).init(allocator);
+        defer parser.deinit();
+
+        var source_buf: [64]u8 = undefined;
+        const src = try std.fmt.bufPrint(&source_buf,
+            \\[ui]
+            \\icon_mode = "{s}"
+        , .{mode});
+
+        var result = try parser.parseString(src);
+        defer result.deinit();
+
+        try std.testing.expectEqual(icons.parseIconMode(mode).?, try config.configuredIconMode(&result.value));
+    }
+}
+
+test "Config: invalid ui icon mode fails clearly" {
+    const allocator = std.testing.allocator;
+    const message = try config.validateConfigBytesForSave(allocator, "test-config.toml",
+        \\[ui]
+        \\icon_mode = "emoji"
+    );
+    defer if (message) |m| allocator.free(m);
+
+    try std.testing.expect(message != null);
+    try std.testing.expect(std.mem.indexOf(u8, message.?, "[ui].icon_mode") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message.?, "auto, nerd_font, unicode, ascii") != null);
 }
 
 test "Config: parse debug flag" {

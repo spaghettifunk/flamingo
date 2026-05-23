@@ -8,6 +8,14 @@ Config parsing lives in `src/config.zig`. The embedded default config is [../../
 | --- | --- | --- | --- | --- |
 | `debug` | bool | `false` | Enables debug logging through `src/logger.zig`. When enabled, logs are written to `flamingo.log`. | Implemented |
 
+## `[ui]`
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `icon_mode` | `auto`, `nerd_font`, `unicode`, or `ascii` | `auto` | Selects the icon set. `auto` honors `FLAMINGO_ICON_MODE` when valid, then uses Unicode in UTF-8 locales and ASCII otherwise. | Implemented |
+
+Terminal applications cannot switch the terminal emulator font automatically. Configure your terminal to use a Nerd Font, then set `icon_mode = "nerd_font"` or `FLAMINGO_ICON_MODE=nerd_font`.
+
 ## `[explorer]`
 
 | Key | Type | Default | Description | Status |
@@ -74,6 +82,7 @@ keys = ["ctrl+w"]
 | Condition | Result |
 | --- | --- |
 | Invalid TOML | Rejected by TOML parser. |
+| Invalid `[ui].icon_mode` | Error. |
 | Unknown keybinding context | Error. |
 | Legacy flat keybinding field | Error. |
 | Invalid key spelling | Error. |
@@ -83,4 +92,3 @@ keys = ["ctrl+w"]
 | Prefix conflict in resolved bindings | Error. |
 | Unbind that matches no default binding | Warning. |
 | Inline command args in config | Error; not supported yet. |
-

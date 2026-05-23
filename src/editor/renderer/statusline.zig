@@ -71,7 +71,7 @@ pub fn buildStatusText(editor: anytype, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
     if (tab) |t| {
         const diag_count = if (t.buf.filename) |fname| editor.state.lsp_ui.diagnosticCountForFile(fname) else 0;
         if (diag_count > 0) {
-            return try std.fmt.bufPrint(buf, " {s}   {d}  {d}:{d} ", .{ mode_str, diag_count, t.mainCursor().row + 1, t.mainCursor().col + 1 });
+            return try std.fmt.bufPrint(buf, " {s}  {s} {d}  {d}:{d} ", .{ mode_str, editor.icons.error_icon, diag_count, t.mainCursor().row + 1, t.mainCursor().col + 1 });
         }
         return try std.fmt.bufPrint(buf, " {s}  {d}:{d} ", .{ mode_str, t.mainCursor().row + 1, t.mainCursor().col + 1 });
     }
@@ -111,8 +111,8 @@ pub fn statusModeSepStyle(editor: anytype) render_mod.RenderStyle {
     };
 }
 
-pub fn fileIconForName(name: []const u8) []const u8 {
-    return file_icons.iconForFileName(name);
+pub fn fileIconForName(editor: anytype, name: []const u8) []const u8 {
+    return file_icons.iconForFileName(editor.icons, name);
 }
 
 pub fn statusFilePath(editor: anytype, tab: ?*Tab) []const u8 {
@@ -150,7 +150,7 @@ pub fn clockText(editor: anytype, buf: *[16]u8) []const u8 {
     const ns = std.Io.Timestamp.now(editor.io, .real).nanoseconds;
     const secs: u64 = @intCast(@max(@divTrunc(ns, std.time.ns_per_s), 0));
     const day = (std.time.epoch.EpochSeconds{ .secs = secs }).getDaySeconds();
-    return std.fmt.bufPrint(buf, " {d:0>2}:{d:0>2}", .{ day.getHoursIntoDay(), day.getMinutesIntoHour() }) catch " --:--";
+    return std.fmt.bufPrint(buf, "{s} {d:0>2}:{d:0>2}", .{ editor.icons.clock, day.getHoursIntoDay(), day.getMinutesIntoHour() }) catch "@ --:--";
 }
 
 pub fn cacheRightStatusLayout(editor: anytype, right: RightStatusLayout, text_start_terminal_col: usize, text_available: usize) void {
@@ -198,9 +198,9 @@ pub fn buildRightStatusLayout(editor: anytype, tab: ?*Tab, buf: *[192]u8) !Right
         const pct = statusScrollPercent(mc.row, total_lines);
         const diag_count = if (t.buf.filename) |fname| editor.state.lsp_ui.diagnosticCountForFile(fname) else 0;
         if (diag_count > 0) {
-            try appendStatusFmt(buf, &idx, &cells, "  {d}  ", .{diag_count});
+            try appendStatusFmt(buf, &idx, &cells, " {s} {d}  ", .{ editor.icons.error_icon, diag_count });
         }
-        try appendStatusFmt(buf, &idx, &cells, "◇ {d}  ", .{total_lines});
+        try appendStatusFmt(buf, &idx, &cells, "{s} {d}  ", .{ editor.icons.line_count, total_lines });
 
         layout.percent_offset = cells;
         layout.percent_width = percent_field_width;
@@ -269,7 +269,7 @@ pub fn renderVirtualStatus(editor: anytype, ctx: anytype, row: usize) void {
     const right_cells = render_mod.displayCellCount(right.text) + 1;
     if (right_cells < editor.width) {
         const start = editor.width - right_cells;
-        editor.renderer.screen.writeText(row, start, "", .status_sep_right);
+        editor.renderer.screen.writeText(row, start, editor.icons.status_separator_left, .status_sep_right);
         editor.renderer.screen.writeText(row, start + 1, right.text, .status_right);
         cacheRightStatusLayout(editor, right, start + 2, right_cells - 1);
     } else {
@@ -286,21 +286,21 @@ pub fn writeVirtualStatusText(editor: anytype, row: usize, col: *usize, text: []
 pub fn writeVirtualStatusLeft(editor: anytype, row: usize, col: *usize, tab: ?*Tab) void {
     if (editor.state.error_message) |err| {
         writeVirtualStatusText(editor, row, col, " ERROR ", .status_error);
-        writeVirtualStatusText(editor, row, col, "", .status_sep_error);
+        writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_error);
         writeVirtualStatusText(editor, row, col, " ", .status_file);
         writeVirtualStatusText(editor, row, col, err, .status_file);
         return;
     }
     if (editor.state.status_message) |msg| {
         writeVirtualStatusText(editor, row, col, " STATUS ", .status_mode_normal);
-        writeVirtualStatusText(editor, row, col, "", .status_sep_normal);
+        writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_normal);
         writeVirtualStatusText(editor, row, col, " ", .status_file);
         writeVirtualStatusText(editor, row, col, msg, .status_file);
         return;
     }
     if (editor.state.mode == .OpenFilePrompt) {
         writeVirtualStatusText(editor, row, col, " FILES ", .status_mode_command);
-        writeVirtualStatusText(editor, row, col, "", .status_sep_command);
+        writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_command);
         writeVirtualStatusText(editor, row, col, " Open file: ", .status_file);
         writeVirtualStatusText(editor, row, col, editor.state.command_buffer.items, .status_file);
         return;
@@ -309,27 +309,27 @@ pub fn writeVirtualStatusLeft(editor: anytype, row: usize, col: *usize, tab: ?*T
     var mode_buf: [32]u8 = undefined;
     const mode = std.fmt.bufPrint(&mode_buf, " {s} ", .{statusModeLabel(editor)}) catch " NORMAL ";
     writeVirtualStatusText(editor, row, col, mode, statusModeStyle(editor));
-    writeVirtualStatusText(editor, row, col, "", statusModeSepStyle(editor));
+    writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, statusModeSepStyle(editor));
 
     if (editor.state.git_snapshot) |snapshot| {
         if (snapshot.branch) |branch| {
             var branch_buf: [96]u8 = undefined;
-            const branch_text = std.fmt.bufPrint(&branch_buf, "  {s} ", .{branch}) catch "";
+            const branch_text = std.fmt.bufPrint(&branch_buf, " {s} {s} ", .{ editor.icons.git_branch, branch }) catch "";
             writeVirtualStatusText(editor, row, col, branch_text, .status_branch);
-            writeVirtualStatusText(editor, row, col, "", .status_sep_branch);
+            writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_branch);
         }
     }
 
     var file_buf: [192]u8 = undefined;
     const file_path = statusFilePath(editor, tab);
-    const file_text = std.fmt.bufPrint(&file_buf, " {s} {s} ", .{ fileIconForName(file_path), file_path }) catch "";
+    const file_text = std.fmt.bufPrint(&file_buf, " {s} {s} ", .{ fileIconForName(editor, file_path), file_path }) catch "";
     writeVirtualStatusText(editor, row, col, file_text, .status_file);
 
     if (statusContext(editor)) |context| {
-        writeVirtualStatusText(editor, row, col, "", .status_sep_file);
+        writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_file);
         var context_buf: [96]u8 = undefined;
-        const context_text = std.fmt.bufPrint(&context_buf, " ◆ {s} ", .{context}) catch "";
+        const context_text = std.fmt.bufPrint(&context_buf, " {s} {s} ", .{ editor.icons.context, context }) catch "";
         writeVirtualStatusText(editor, row, col, context_text, .status_context);
     }
-    writeVirtualStatusText(editor, row, col, "", .status_sep_context);
+    writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_context);
 }

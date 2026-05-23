@@ -17,6 +17,7 @@ When the default user config is selected and missing, Flamingo creates `~/.flami
 | Section | Keys | Status |
 | --- | --- | --- |
 | root | `debug` | Implemented. |
+| `[ui]` | `icon_mode` | Implemented. |
 | `[explorer]` | `width_percentage` | Implemented. |
 | `[author]` | `name`, `email` | Implemented as comments author fallback. |
 | `[keybindings.<context>]` | key sequence to canonical command name | Implemented. |
@@ -28,6 +29,9 @@ The repository default config is embedded from [../../src/config/default_config.
 
 ```toml
 debug = false
+
+[ui]
+icon_mode = "auto" # auto | nerd_font | unicode | ascii
 
 [explorer]
 width_percentage = 20
@@ -74,6 +78,8 @@ Unknown contexts are rejected. Legacy flat `[keybindings]` fields are rejected.
 
 Config parsing and keybinding registry construction happen before entering raw terminal mode. Invalid TOML, unknown keybinding contexts, unknown command names, invalid key spellings, invalid command/context combinations, duplicate user bindings, and prefix conflicts reject startup or settings-config save.
 
+`[ui].icon_mode` controls symbols used in panels and status UI. `FLAMINGO_ICON_MODE=nerd_font|unicode|ascii|auto` overrides config when valid. `auto` is conservative: it uses Unicode when a UTF-8 locale is detected and ASCII otherwise. Flamingo cannot apply a bundled or embedded font from a terminal UI; configure your terminal emulator to use a Nerd Font before forcing `nerd_font`.
+
 Settings-config saves use `config.validateConfigBytesForSave` and keep the editor open if validation fails.
 
 ## Project `.flamingo`
@@ -84,4 +90,3 @@ Project-local `.flamingo/` is not the user config directory. It is workspace met
 - `.flamingo/comments.json`
 
 See [../features/todos.md](../features/todos.md) and [../features/comments.md](../features/comments.md).
-

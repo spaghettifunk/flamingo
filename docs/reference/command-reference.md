@@ -16,6 +16,7 @@ Command metadata lives in `src/editor/commands.zig`. Colon command execution liv
 | `:wq` | optional path | Write current buffer, then close tab. | `src/editor/command.zig` |
 | `:search` | none | Open project-wide Global Search. | `src/editor/command.zig` |
 | `:help` | none | Open generated help popup. | `src/editor/command.zig` |
+| `:font-info` | none | Show active icon mode, UTF-8 detection, and Nerd Font setup guidance in the status line. | `src/editor/command.zig` |
 | `:todos` | none | Open workspace TODO panel. | `src/editor/command.zig` |
 | `:comment` | none | Create comment from active text selection. | `src/editor/command.zig` |
 | `:comments` | optional `refresh` | Open comments panel or reload `.flamingo/comments.json`. | `src/editor/command.zig` |
@@ -59,4 +60,3 @@ For all canonical names, inspect the `command_metadata` table in `src/editor/com
 - `:newFile`, `:renameFile`, and `:deleteFile` split arguments on spaces.
 - File operation paths reject whitespace and quotes.
 - Project-relative paths are resolved inside the active project root when one exists.
-

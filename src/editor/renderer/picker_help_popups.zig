@@ -147,11 +147,11 @@ pub fn helpPopupBodyRows(editor: anytype) usize {
     return @max(@as(usize, 1), geom.height -| 4);
 }
 
-pub fn pickerEntryIcon(entry: filesystem_picker.PickerEntry) []const u8 {
+pub fn pickerEntryIcon(editor: anytype, entry: filesystem_picker.PickerEntry) []const u8 {
     return switch (entry.kind) {
-        .directory => file_icons.folderIcon(),
-        .file => file_icons.iconForFileName(entry.name),
-        .other => "",
+        .directory => file_icons.folderIcon(editor.icons),
+        .file => file_icons.iconForFileName(editor.icons, entry.name),
+        .other => editor.icons.file,
     };
 }
 
@@ -175,15 +175,16 @@ pub fn renderVirtualFilesystemPickerPopup(editor: anytype) void {
     var row = geom.row + 1;
     popup.drawPickerRow(&editor.renderer.screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
     var col = geom.col + 2;
-    popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, " ", .explorer_folder, false);
+    popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, editor.icons.folder, .explorer_folder, false);
+    popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, " ", .command_popup, false);
     popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, picker.cwd, .command_popup, true);
     row += 1;
 
     popup.drawPickerRow(&editor.renderer.screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
     col = geom.col + 2;
     const prompt_icon = switch (picker.mode) {
-        .open_folder => file_icons.folderIcon(),
-        else => "",
+        .open_folder => file_icons.folderIcon(editor.icons),
+        else => editor.icons.file,
     };
     popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, prompt_icon, .command_popup_prompt, false);
     popup.writeVirtualTruncatedCells(&editor.renderer.screen, row, &col, inner_end, " ", .command_popup, false);
@@ -203,7 +204,8 @@ pub fn renderVirtualFilesystemPickerPopup(editor: anytype) void {
             popup.drawPickerRow(&editor.renderer.screen, item_row, geom.col, geom.width, .command_popup_border, .explorer_bg);
             if (offset == 0) {
                 col = geom.col + 2;
-                popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, " ", .explorer_file, false);
+                popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, editor.icons.file, .explorer_file, false);
+                popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, " ", .explorer_file, false);
                 popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, "filename: ", .explorer_dim, false);
                 popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, picker.input.items, .normal, false);
             }
@@ -237,7 +239,7 @@ pub fn renderVirtualFilesystemPickerPopup(editor: anytype) void {
                 const text_style = pickerEntryStyle(entry, selected);
                 popup.drawPickerRow(&editor.renderer.screen, item_row, geom.col, geom.width, .command_popup_border, row_style);
                 col = geom.col + 2;
-                popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, pickerEntryIcon(entry), text_style, false);
+                popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, pickerEntryIcon(editor, entry), text_style, false);
                 popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, " ", row_style, false);
                 popup.writeVirtualTruncatedCells(&editor.renderer.screen, item_row, &col, inner_end, entry.name, text_style, false);
                 if (entry.kind == .directory) {

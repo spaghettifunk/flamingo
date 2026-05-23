@@ -19,6 +19,7 @@ pub const CommandId = enum {
     command_suggestion_next,
     command_suggestion_previous,
     help_open,
+    font_info_open,
     help_close,
     help_scroll_up,
     help_scroll_down,
@@ -229,8 +230,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 15;
-const command_line_visible_count = 16;
+const command_popup_visible_count = 16;
+const command_line_visible_count = 17;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -305,6 +306,16 @@ const command_metadata = [_]CommandMeta{
         .canonical_name = "help.open",
         .command_names = &.{"help"},
         .short_description = "Open help",
+        .category = .help,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .font_info_open,
+        .canonical_name = "font_info.open",
+        .command_names = &.{"font-info"},
+        .short_description = "Show icon and font configuration",
+        .long_description = "Shows the active icon mode and how to configure Nerd Font support.",
         .category = .help,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
@@ -1615,6 +1626,7 @@ test "command line visible commands preserve current popup order" {
         .file_write_quit,
         .command_search_open,
         .help_open,
+        .font_info_open,
         .todos_open,
         .file_rename,
         .file_delete,

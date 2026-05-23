@@ -38,7 +38,13 @@ pub fn main(init: std.process.Init) !void {
     defer result.deinit();
 
     const cfg = result.value;
-    try config.validate(&cfg);
+    config.validate(&cfg) catch |err| {
+        switch (err) {
+            error.InvalidIconMode => std.debug.print("Invalid config: [ui].icon_mode must be one of auto, nerd_font, unicode, ascii\n", .{}),
+            else => std.debug.print("Invalid config: {s}\n", .{@errorName(err)}),
+        }
+        return err;
+    };
     var keybinding_diagnostics = keybindings.BuildDiagnostics{};
     defer keybinding_diagnostics.deinit(allocator);
     var resolved_keybindings = config.buildKeybindingRegistry(allocator, &cfg, &keybinding_diagnostics) catch |err| {
@@ -60,7 +66,7 @@ pub fn main(init: std.process.Init) !void {
     const stdout: std.Io.File = .stdout();
     defer terminal.restoreTerminal(io, stdout);
 
-    try editor.start_editor(io, allocator, cfg, selected_config.path, selected_config.source);
+    try editor.start_editor(io, allocator, cfg, selected_config.path, selected_config.source, init.environ_map);
 }
 
 const CliCommand = enum {

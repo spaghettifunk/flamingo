@@ -121,7 +121,7 @@ pub fn renderVirtualExplorer(editor: anytype) void {
     if (!editor.state.explorer_visible or editor.state.tree == null or editor.width == 0 or editor.height < 2) return;
     const exp_width = (editor.width * @as(usize, editor.config.explorer.width_percentage)) / 100;
     if (exp_width == 0) return;
-    editor.state.tree.?.renderAt(&editor.renderer.screen, exp_width, editor.height - 1, 1, 0, editor.state.explorer_focused, if (editor.state.git_snapshot) |*s| s else null);
+    editor.state.tree.?.renderAt(&editor.renderer.screen, exp_width, editor.height - 1, 1, 0, editor.state.explorer_focused, if (editor.state.git_snapshot) |*s| s else null, editor.icons);
     const divider_col = exp_width;
     if (divider_col < editor.width) {
         for (1..editor.height) |row| {

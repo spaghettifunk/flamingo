@@ -33,6 +33,7 @@ const runtime_loop = @import("runtime/loop.zig");
 const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
+const icons_mod = @import("icons.zig");
 
 pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
@@ -59,6 +60,10 @@ const GlobalSearchRenderRow = search_popups.GlobalSearchRenderRow;
 pub const Editor = struct {
     config: config.Config,
     keybinding_registry: command_keybindings.Registry,
+    configured_icon_mode: icons_mod.IconMode,
+    icon_mode: icons_mod.IconMode,
+    icons: icons_mod.IconSet,
+    utf8_locale_detected: bool,
     allocator: std.mem.Allocator,
     io: std.Io,
     state: state_mod.EditorState,
@@ -108,6 +113,18 @@ pub const Editor = struct {
         active_config_source: config.ConfigPathSource,
         runtime_options: runtime_mod.EditorRuntime.Options,
     ) !Editor {
+        return initWithConfigPathRuntimeOptionsAndEnv(allocator, io, cfg, active_config_path, active_config_source, runtime_options, icons_mod.EmptyEnv{});
+    }
+
+    pub fn initWithConfigPathRuntimeOptionsAndEnv(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        cfg: config.Config,
+        active_config_path: []const u8,
+        active_config_source: config.ConfigPathSource,
+        runtime_options: runtime_mod.EditorRuntime.Options,
+        env: anytype,
+    ) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
         var keybinding_diagnostics = command_keybindings.BuildDiagnostics{};
@@ -116,12 +133,18 @@ pub const Editor = struct {
         errdefer keybinding_registry.deinit(allocator);
         const owned_config_path = try allocator.dupe(u8, active_config_path);
         errdefer allocator.free(owned_config_path);
+        const configured_icon_mode = try config.configuredIconMode(&cfg);
+        const active_icon_mode = icons_mod.detectIconMode(env, configured_icon_mode);
 
         return Editor{
             .allocator = allocator,
             .io = io,
             .config = cfg,
             .keybinding_registry = keybinding_registry,
+            .configured_icon_mode = configured_icon_mode,
+            .icon_mode = active_icon_mode,
+            .icons = icons_mod.iconSetForMode(active_icon_mode),
+            .utf8_locale_detected = icons_mod.hasUtf8Locale(env),
             .active_config_path = owned_config_path,
             .active_config_source = active_config_source,
             .state = state_mod.EditorState.init(allocator),
@@ -155,6 +178,15 @@ pub const Editor = struct {
         const rebuilt = config.buildKeybindingRegistry(self.allocator, &self.config, &diagnostics) catch return;
         self.keybinding_registry.deinit(self.allocator);
         self.keybinding_registry = rebuilt;
+    }
+
+    pub fn fontInfoStatusMessage(self: *Editor) []const u8 {
+        const utf8_text = if (self.utf8_locale_detected) "yes" else "no";
+        return std.fmt.bufPrint(
+            &self.message_buf,
+            "Icons: active={s}, config={s}, UTF-8={s}. Terminal apps cannot switch fonts; set [ui].icon_mode or FLAMINGO_ICON_MODE.",
+            .{ icons_mod.iconModeName(self.icon_mode), icons_mod.iconModeName(self.configured_icon_mode), utf8_text },
+        ) catch "Icons: use [ui].icon_mode or FLAMINGO_ICON_MODE; terminal apps cannot switch fonts automatically.";
     }
 
     pub fn keyEventForCommand(self: *const Editor, context: commands.CommandContext, id: commands.CommandId) ?terminal.KeyEvent {
@@ -716,8 +748,9 @@ pub fn start_editor(
     cfg: config.Config,
     active_config_path: []const u8,
     active_config_source: config.ConfigPathSource,
+    env: anytype,
 ) !void {
-    var editor = try Editor.initWithConfigPath(allocator, io, cfg, active_config_path, active_config_source);
+    var editor = try Editor.initWithConfigPathRuntimeOptionsAndEnv(allocator, io, cfg, active_config_path, active_config_source, .{}, env);
     defer editor.deinit();
     try editor.run();
 }
@@ -806,7 +839,7 @@ test "Editor command mode status uses command segment label" {
 }
 
 test "Editor status includes branch file context and diagnostics" {
-    const cfg = config.Config{};
+    const cfg = config.Config{ .ui = .{ .icon_mode = "nerd_font" } };
     var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
     defer ed.deinit();
     ed.width = 120;
@@ -833,14 +866,18 @@ test "Editor status includes branch file context and diagnostics" {
     try ed.renderBenchmarkFrame(&out.writer);
 
     const rendered = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, " main") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, " src/config.zig") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "◆ explorer_rename") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, " 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.git_branch) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " main") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.file_zig) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " src/config.zig") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.context) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " explorer_rename") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.error_icon) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, " 1") != null);
 }
 
 test "Editor status omits git branch outside repository and keeps error" {
-    const cfg = config.Config{};
+    const cfg = config.Config{ .ui = .{ .icon_mode = "nerd_font" } };
     var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
     defer ed.deinit();
 
@@ -855,7 +892,23 @@ test "Editor status omits git branch outside repository and keeps error" {
     const rendered = out.written();
     try std.testing.expect(std.mem.indexOf(u8, rendered, "ERROR") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "boom") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.git_branch) == null);
+}
+
+test "Editor status renders each explicit icon mode" {
+    inline for (.{ "nerd_font", "unicode", "ascii" }) |mode| {
+        const cfg = config.Config{ .ui = .{ .icon_mode = mode } };
+        var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+        defer ed.deinit();
+        ed.width = 80;
+        ed.height = 12;
+        ed.state.mode = .Normal;
+
+        var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+        defer out.deinit();
+        try ed.renderBenchmarkFrame(&out.writer);
+        try std.testing.expect(out.written().len > 0);
+    }
 }
 
 test "help popup geometry anchors bottom-right" {

@@ -17,6 +17,7 @@ pub const Command = enum {
     write_quit,
     search,
     help,
+    font_info,
     todos,
     comment,
     comments,
@@ -35,6 +36,7 @@ pub const Command = enum {
             .write_quit => .file_write_quit,
             .search => .command_search_open,
             .help => .help_open,
+            .font_info => .font_info_open,
             .todos => .todos_open,
             .comment => .comment_create,
             .comments => .comments_open,
@@ -71,6 +73,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .file_write_quit => .write_quit,
         .command_search_open => .search,
         .help_open => .help,
+        .font_info_open => .font_info,
         .todos_open => .todos,
         .comment_create => .comment,
         .comments_open => .comments,
@@ -224,6 +227,12 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.state.help_popup.open();
             ed.state.mode = .Help;
             ed.markDirty(.full);
+        },
+        .font_info => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            ed.state.status_message = ed.fontInfoStatusMessage();
+            ed.state.mode = .Normal;
+            ed.markDirty(.partial);
         },
         .todos => {
             if (!requireNoMoreArgs(ed, &it)) return;

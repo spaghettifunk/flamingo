@@ -109,6 +109,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:deleteFile <path>`      | `:df`     | Delete file at `<path>`                                    |
 | `:search`                 |           | Open project-wide Global Search                            |
 | `:help`                   |           | Open the Help popup                                        |
+| `:font-info`              |           | Show icon mode and terminal font guidance                  |
 | `:git-graph`              | `:ggraph` | Open the read-only Git commit graph panel                  |
 | `:todos`                  |           | Open/focus the workspace TODO panel                        |
 | `:comment`                |           | Create a comment from the active text selection            |

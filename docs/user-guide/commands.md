@@ -34,6 +34,7 @@ Command arguments are split on spaces. File operation command paths reject empty
 | `:wq` | optional path | Write the current buffer, then close the tab. |
 | `:search` | none | Open project-wide Global Search. |
 | `:help` | none | Open the generated help popup. |
+| `:font-info` | none | Show the active icon mode, UTF-8 detection, and terminal font guidance. |
 | `:todos` | none | Open and focus the workspace TODO panel. |
 | `:comment` | none | Create a comment from the active selection in a supported prose file. |
 | `:comments` | optional `refresh` | Open the comments panel, or reload comments from disk. |
@@ -56,4 +57,3 @@ The command popup shows a bounded set of command suggestions. `tab` and `down` s
 - Inline command arguments in keybinding config are rejected.
 - Only commands represented by `src/editor/command.zig` are executable as colon commands.
 - Canonical command names such as `mode.insert` are keybinding targets, not colon commands.
-

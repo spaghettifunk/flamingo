@@ -2,6 +2,7 @@ const std = @import("std");
 const toml = @import("toml");
 const commands = @import("editor/commands.zig");
 const command_keybindings = @import("editor/keybindings.zig");
+const icons = @import("editor/icons.zig");
 
 pub const default_config_toml = @embedFile("config/default_config.toml");
 
@@ -67,6 +68,10 @@ pub const AuthorConfig = struct {
     email: ?[]const u8 = null,
 };
 
+pub const UiConfig = struct {
+    icon_mode: []const u8 = "auto",
+};
+
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
@@ -74,15 +79,21 @@ pub const Config = struct {
     keybindings: KeybindingsConfig = .{},
     explorer: ExplorerConfig = .{},
     author: AuthorConfig = .{},
+    ui: UiConfig = .{},
 };
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
-pub const ConfigError = error{InvalidKeybinding};
+pub const ConfigError = error{ InvalidKeybinding, InvalidIconMode };
 
-pub fn validate(_: *const Config) ConfigError!void {
+pub fn validate(cfg: *const Config) ConfigError!void {
+    _ = configuredIconMode(cfg) catch return error.InvalidIconMode;
     // Keybinding schema validation needs config diagnostics and is performed by
     // buildKeybindingRegistry before the editor enters raw terminal mode.
+}
+
+pub fn configuredIconMode(cfg: *const Config) !icons.IconMode {
+    return icons.parseIconMode(cfg.ui.icon_mode) orelse error.InvalidIconMode;
 }
 
 fn contextTable(cfg: *const KeybindingsConfig, context: command_keybindings.BindingContext) ?toml.Table {
@@ -484,6 +495,14 @@ pub fn validateConfigBytesForSave(
         return try std.fmt.allocPrint(allocator, "invalid TOML in {s}: {s}", .{ source_name, @errorName(err) });
     };
     defer parsed.deinit();
+
+    if (icons.parseIconMode(parsed.value.ui.icon_mode) == null) {
+        return try std.fmt.allocPrint(
+            allocator,
+            "invalid config in {s}: [ui].icon_mode must be one of auto, nerd_font, unicode, ascii",
+            .{source_name},
+        );
+    }
 
     validate(&parsed.value) catch |err| {
         return try std.fmt.allocPrint(allocator, "invalid config in {s}: {s}", .{ source_name, @errorName(err) });

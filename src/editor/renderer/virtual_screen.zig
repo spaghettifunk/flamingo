@@ -553,10 +553,10 @@ test "virtual screen stores and emits utf8 glyph cells" {
     var current = VirtualScreen.init(allocator);
     defer current.deinit();
     _ = try current.resize(4, 1);
-    current.writeText(0, 0, "a", .explorer_zig);
+    current.writeText(0, 0, "λa", .explorer_zig);
 
-    try std.testing.expectEqual(@as(usize, 2), displayCellCount("a"));
-    try std.testing.expectEqualStrings("", current.cells.items[current.index(0, 0)].glyphBytes());
+    try std.testing.expectEqual(@as(usize, 2), displayCellCount("λa"));
+    try std.testing.expectEqualStrings("λ", current.cells.items[current.index(0, 0)].glyphBytes());
     try std.testing.expectEqualStrings("a", current.cells.items[current.index(0, 1)].glyphBytes());
 
     var renderer = VirtualScreenRenderer.init(allocator);
@@ -568,7 +568,7 @@ test "virtual screen stores and emits utf8 glyph cells" {
     defer aw.deinit();
 
     _ = try renderer.emit(&aw.writer, &current);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "λa") != null);
 }
 
 test "virtual screen diff emits changed utf8 glyph without corrupting bytes" {
@@ -576,7 +576,7 @@ test "virtual screen diff emits changed utf8 glyph without corrupting bytes" {
     var current = VirtualScreen.init(allocator);
     defer current.deinit();
     _ = try current.resize(3, 1);
-    current.writeText(0, 0, "", .explorer_zig);
+    current.writeText(0, 0, "λ", .explorer_zig);
 
     var renderer = VirtualScreenRenderer.init(allocator);
     defer renderer.deinit();
@@ -587,12 +587,12 @@ test "virtual screen diff emits changed utf8 glyph without corrupting bytes" {
     defer aw.deinit();
 
     _ = try renderer.emit(&aw.writer, &current);
-    current.writeText(0, 0, "", .explorer_md);
+    current.writeText(0, 0, "β", .explorer_md);
 
     aw.clearRetainingCapacity();
     _ = try renderer.emit(&aw.writer, &current);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "") != null);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "") == null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "β") != null);
+    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "λ") == null);
 }
 
 test "virtual screen resets style attributes between styled runs" {

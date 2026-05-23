@@ -1,6 +1,11 @@
 # flamingo configuration
 debug = false
 
+[ui]
+# auto uses a conservative fallback: unicode when UTF-8 locale is detected,
+# ascii otherwise. Use nerd_font only after configuring your terminal font.
+icon_mode = "auto"
+
 # Keybindings use context-specific tables that map key sequences to canonical
 # command names from src/editor/commands.zig.
 #

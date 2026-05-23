@@ -4,6 +4,7 @@ const logz = @import("logz");
 const render_mod = @import("renderer/virtual_screen.zig");
 const git_status = @import("git_status.zig");
 const file_icons = @import("file_icons.zig");
+const icons_mod = @import("icons.zig");
 
 pub const FileNode = struct {
     name: []const u8,
@@ -376,11 +377,11 @@ pub const Explorer = struct {
         return null;
     }
 
-    pub fn render(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) void {
-        self.renderAt(screen, width, height, 0, 0, is_focused, snapshot);
+    pub fn render(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot, icons: icons_mod.IconSet) void {
+        self.renderAt(screen, width, height, 0, 0, is_focused, snapshot, icons);
     }
 
-    pub fn renderAt(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, height: usize, start_row: usize, start_col: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) void {
+    pub fn renderAt(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, height: usize, start_row: usize, start_col: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot, icons: icons_mod.IconSet) void {
         if (width == 0 or height == 0) return;
 
         for (start_row..start_row + height) |row| {
@@ -390,7 +391,8 @@ pub const Explorer = struct {
         fillCells(screen, start_row, start_col, width, ' ', .explorer_header);
         const root_label = compactRootLabel(self.root_path);
         var title_col = start_col;
-        title_col += writeClippedToScreen(screen, start_row, title_col, start_col + width, " ", .explorer_header);
+        title_col += writeClippedToScreen(screen, start_row, title_col, start_col + width, icons.folder, .explorer_header);
+        title_col += writeClippedToScreen(screen, start_row, title_col, start_col + width, " ", .explorer_header);
         _ = writeClippedToScreen(screen, start_row, title_col, start_col + width, root_label, .explorer_header);
 
         var content_start_row = start_row + 1;
@@ -414,7 +416,7 @@ pub const Explorer = struct {
 
         if (self.search_active) {
             self.adjustSearchScroll(view_height);
-            self.renderSearchResults(screen, width, content_start_row, start_col, view_height, is_focused, snapshot);
+            self.renderSearchResults(screen, width, content_start_row, start_col, view_height, is_focused, snapshot, icons);
             return;
         }
 
@@ -429,7 +431,7 @@ pub const Explorer = struct {
 
             var col = start_col + @min(node.depth * 2, width);
 
-            const icon = iconForNode(node.is_dir, node.is_expanded, node.name);
+            const icon = iconForNode(icons, node.is_dir, node.is_expanded, node.name);
             const node_status = snapshotStatus(snapshot, node.absolute_path);
             const style = styleForNode(node.is_dir, node.name, selected, node_status);
             col += writeClippedToScreen(screen, row, col, start_col + width, icon, style);
@@ -441,7 +443,7 @@ pub const Explorer = struct {
 
             const current_len = indent_len + @min(render_mod.displayCellCount(node.name), max_name_len);
             if (current_len + 2 < width) {
-                const marker = gitMarker(node_status);
+                const marker = gitMarker(icons, node_status);
                 if (marker.len > 0) {
                     const pad = width - current_len - 2;
                     _ = writeClippedToScreen(screen, row, start_col + current_len + pad, start_col + width, marker, markerStyle(node_status));
@@ -460,7 +462,7 @@ pub const Explorer = struct {
         }
     }
 
-    fn renderSearchResults(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, start_row: usize, start_col: usize, view_height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot) void {
+    fn renderSearchResults(self: *Explorer, screen: *render_mod.VirtualScreen, width: usize, start_row: usize, start_col: usize, view_height: usize, is_focused: bool, snapshot: ?*const git_status.Snapshot, icons: icons_mod.IconSet) void {
         var row: usize = start_row;
         var i = self.search_scroll_offset;
         while (i < self.search_results.items.len and row < start_row + view_height) : (i += 1) {
@@ -471,7 +473,7 @@ pub const Explorer = struct {
 
             var col = start_col + @min(result.depth * 2, width);
 
-            const icon = iconForNode(result.is_dir, false, result.name);
+            const icon = iconForNode(icons, result.is_dir, false, result.name);
             const style = styleForNode(result.is_dir, result.name, selected, snapshotStatus(snapshot, result.absolute_path));
             col += writeClippedToScreen(screen, row, col, start_col + width, icon, style);
             col += writeClippedToScreen(screen, row, col, start_col + width, " ", rowBgStyle(selected));
@@ -570,9 +572,9 @@ fn matchesQuery(haystack: []const u8, query: []const u8) bool {
     return false;
 }
 
-fn iconForNode(is_dir: bool, is_expanded: bool, name: []const u8) []const u8 {
-    if (is_dir) return file_icons.iconForDirectory(is_expanded);
-    return file_icons.iconForFileName(name);
+fn iconForNode(icon_set: icons_mod.IconSet, is_dir: bool, is_expanded: bool, name: []const u8) []const u8 {
+    if (is_dir) return file_icons.iconForDirectory(icon_set, is_expanded);
+    return file_icons.iconForFileName(icon_set, name);
 }
 
 fn styleForNode(is_dir: bool, name: []const u8, selected: bool, state: ?git_status.FileState) render_mod.RenderStyle {
@@ -593,11 +595,11 @@ fn markerStyle(state: ?git_status.FileState) render_mod.RenderStyle {
     };
 }
 
-fn gitMarker(state: ?git_status.FileState) []const u8 {
+fn gitMarker(icon_set: icons_mod.IconSet, state: ?git_status.FileState) []const u8 {
     return switch (state orelse return "") {
-        .modified => "●",
-        .untracked => "▣",
-        .ignored => "⊘",
+        .modified => icon_set.git_modified,
+        .untracked => icon_set.git_added,
+        .ignored => icon_set.git_ignored,
     };
 }
 
@@ -690,7 +692,7 @@ test "explorer render uses nerd icons hidden count and git markers" {
     var screen = render_mod.VirtualScreen.init(allocator);
     defer screen.deinit();
     _ = try screen.resize(40, 12);
-    exp.renderAt(&screen, 40, 12, 0, 0, true, &snapshot);
+    exp.renderAt(&screen, 40, 12, 0, 0, true, &snapshot, icons_mod.nerdFontIcons);
 
     var renderer = render_mod.VirtualScreenRenderer.init(allocator);
     defer renderer.deinit();
@@ -700,9 +702,9 @@ test "explorer render uses nerd icons hidden count and git markers" {
     defer aw.deinit();
     _ = try renderer.emit(&aw.writer, &screen);
     const rendered = aw.written();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, " ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "") != null);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "●") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.folder_open) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.file_zig) != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, icons_mod.nerdFontIcons.git_modified) != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "hidden items") != null);
 }
 

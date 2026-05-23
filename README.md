@@ -188,4 +188,4 @@ This is a personal editor project, but the repository is structured for local ha
 
 ## License
 
-Flamingo is licensed under the [MIT License](LICENSE).
+Flamingo is licensed under the [MIT License](LICENSE)
