@@ -127,6 +127,18 @@ pub const Editor = struct {
     ) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
+        if (runtime.lsp_mgr) |*mgr| {
+            if (cfg.languages.protobuf) |protobuf| {
+                if (protobuf.extensions.len > 0) {
+                    try mgr.plugin_mgr.overrideExtensions("protobuf", protobuf.extensions);
+                }
+                if (protobuf.lsp) |lsp| {
+                    if (lsp.command) |command| {
+                        try mgr.plugin_mgr.overrideLsp("protobuf", command, lsp.args, lsp.language_id);
+                    }
+                }
+            }
+        }
         var keybinding_diagnostics = command_keybindings.BuildDiagnostics{};
         defer keybinding_diagnostics.deinit(allocator);
         var keybinding_registry = try config.buildKeybindingRegistry(allocator, &cfg, &keybinding_diagnostics);
@@ -206,9 +218,18 @@ pub const Editor = struct {
 
         if (self.runtime.lsp_mgr) |*mgr| {
             if (self.currentTab()) |tab| if (tab.buf.filename) |fname| {
-                mgr.startLspForFile(fname) catch |err| {
+                if (mgr.startLspForFile(fname)) |lsp_start| {
+                    switch (lsp_start) {
+                        .command_unavailable, .start_failed => |plugin_name| {
+                            if (std.mem.eql(u8, plugin_name, "protobuf")) {
+                                self.setStatus("Protobuf LSP unavailable: install Buf or configure a protobuf language server.");
+                            }
+                        },
+                        else => {},
+                    }
+                } else |err| {
                     logz.err().fmt("msg", "Failed to start LSP: {any}", .{err}).log();
-                };
+                }
 
                 const content = try tab.buf.toOwnedTextSnapshot(self.allocator);
                 defer self.allocator.free(content);
@@ -226,6 +247,15 @@ pub const Editor = struct {
 
     pub fn closeTab(self: *Editor) void {
         self.clearAllMultiCursors();
+        if (self.currentTab()) |tab| {
+            if (tab.buf.filename) |filename| {
+                if (self.runtime.lsp_mgr) |*mgr| {
+                    mgr.notifyClose(filename) catch |err| {
+                        logz.err().fmt("msg", "Failed to notify close: {any}", .{err}).log();
+                    };
+                }
+            }
+        }
         self.state.closeTab(self.allocator);
         self.markDirty(.full);
     }
@@ -307,12 +337,22 @@ pub const Editor = struct {
             }
 
             try tab.buf.saveTextToFile(self.io, filename, snapshot);
+            if (self.runtime.lsp_mgr) |*mgr| {
+                mgr.notifySave(filename) catch |err| {
+                    logz.err().fmt("msg", "Failed to notify save: {any}", .{err}).log();
+                };
+            }
             self.setStatus("Config saved. Restart Flamingo for all settings to take effect.");
             self.markDirty(.full);
             return;
         }
 
         try tab.buf.saveToFile(self.io, filename);
+        if (self.runtime.lsp_mgr) |*mgr| {
+            mgr.notifySave(filename) catch |err| {
+                logz.err().fmt("msg", "Failed to notify save: {any}", .{err}).log();
+            };
+        }
     }
 
     pub fn setStatus(self: *Editor, message: []const u8) void {

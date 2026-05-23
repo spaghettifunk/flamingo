@@ -40,6 +40,7 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, exe_module, "tree-sitter-json");
     addTreeSitterGrammar(b, exe_module, "tree-sitter-markdown");
     addTreeSitterGrammar(b, exe_module, "tree-sitter-markdown-inline");
+    addTreeSitterGrammar(b, exe_module, "tree-sitter-proto");
 
     const exe = b.addExecutable(.{
         .name = "flamingo",
@@ -82,6 +83,7 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-json");
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-markdown");
     addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-markdown-inline");
+    addTreeSitterGrammar(b, lib_tests.root_module, "tree-sitter-proto");
 
     test_step.dependOn(&b.addRunArtifact(lib_tests).step);
 
@@ -106,6 +108,7 @@ pub fn build(b: *std.Build) void {
     addTreeSitterGrammar(b, perf_module, "tree-sitter-json");
     addTreeSitterGrammar(b, perf_module, "tree-sitter-markdown");
     addTreeSitterGrammar(b, perf_module, "tree-sitter-markdown-inline");
+    addTreeSitterGrammar(b, perf_module, "tree-sitter-proto");
 
     const perf_exe = b.addExecutable(.{
         .name = "flamingo-perf",

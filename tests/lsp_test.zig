@@ -3,6 +3,7 @@ const lsp_manager = @import("../src/lsp/manager.zig");
 const event_queue = @import("../src/editor/runtime/event_queue.zig");
 const editor_mod = @import("../src/editor/editor.zig");
 const buffer_mod = @import("../src/editor/model/buffer.zig");
+const config = @import("../src/config.zig");
 const th = @import("test_helpers.zig");
 
 test "LspManager: pathToUri constructs correct absolute URIs" {
@@ -109,6 +110,7 @@ test "Editor: opening file with missing LSP command does not quit" {
             .name = "missing-test-lsp",
             .extensions = &[_][]const u8{".missing-lsp-test"},
             .lsp_command = &[_][]const u8{"__flamingo_missing_lsp_command__"},
+            .language_id = "missing-test-lsp",
         });
     }
 
@@ -124,4 +126,109 @@ test "Editor: opening file with missing LSP command does not quit" {
     if (ed.runtime.lsp_mgr) |*mgr| {
         try std.testing.expect(!mgr.clients.contains("missing-test-lsp"));
     }
+}
+
+test "LspManager: default protobuf plugin uses Buf LSP command" {
+    const a = std.testing.allocator;
+    const queue = try a.create(event_queue.EventQueue);
+    queue.* = event_queue.EventQueue.init(a, std.testing.io);
+    defer {
+        queue.deinit();
+        a.destroy(queue);
+    }
+
+    var mgr = try lsp_manager.LspManager.init(a, std.testing.io, queue);
+    defer mgr.deinit();
+
+    const p = mgr.plugin_mgr.getPluginForExtension(".proto") orelse return error.ExpectedPlugin;
+    try std.testing.expectEqualStrings("protobuf", p.name);
+    try std.testing.expectEqualStrings("proto", p.language_id);
+    try std.testing.expectEqual(@as(usize, 3), p.lsp_command.len);
+    try std.testing.expectEqualStrings("buf", p.lsp_command[0]);
+    try std.testing.expectEqualStrings("lsp", p.lsp_command[1]);
+    try std.testing.expectEqualStrings("serve", p.lsp_command[2]);
+}
+
+test "LspManager: protobuf workspace root prefers buf config over git root" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "repo/.git");
+    try tmp.dir.createDirPath(io, "repo/proto/sub");
+    try tmp.dir.writeFile(io, .{ .sub_path = "repo/proto/buf.yaml", .data = "version: v2\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "repo/proto/sub/service.proto", .data = "syntax = \"proto3\";\n" });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_root = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    const proto_path = try std.fmt.allocPrint(a, "{s}/repo/proto/sub/service.proto", .{tmp_root});
+    defer a.free(proto_path);
+    const expected_root = try std.fmt.allocPrint(a, "{s}/repo/proto", .{tmp_root});
+    defer a.free(expected_root);
+
+    const queue = try a.create(event_queue.EventQueue);
+    queue.* = event_queue.EventQueue.init(a, io);
+    defer {
+        queue.deinit();
+        a.destroy(queue);
+    }
+    var mgr = try lsp_manager.LspManager.init(a, io, queue);
+    defer mgr.deinit();
+
+    const root = try mgr.workspaceRootForFile(proto_path);
+    defer a.free(root);
+    try std.testing.expectEqualStrings(expected_root, root);
+}
+
+test "Editor: missing protobuf Buf command shows non-fatal status" {
+    const a = std.testing.allocator;
+    const logger = try th.setupLogger(a);
+    defer logger.deinit();
+
+    var ed = try editor_mod.Editor.init(a, std.testing.io, .{});
+    defer ed.deinit();
+
+    if (ed.runtime.lsp_mgr) |*mgr| {
+        try mgr.plugin_mgr.overrideLsp("protobuf", "__flamingo_missing_buf_command__", &.{ "lsp", "serve" }, "proto");
+    }
+
+    var buf = try buffer_mod.Buffer.init(a);
+    errdefer buf.deinit();
+    try buf.setFilename("example.proto");
+
+    try ed.addTab(buf);
+    try std.testing.expect(!ed.should_quit);
+    try std.testing.expectEqualStrings(
+        "Protobuf LSP unavailable: install Buf or configure a protobuf language server.",
+        ed.state.status_message.?,
+    );
+    if (ed.runtime.lsp_mgr) |*mgr| {
+        try std.testing.expect(!mgr.clients.contains("protobuf"));
+    }
+}
+
+test "Editor: protobuf LSP command can be overridden from config" {
+    const a = std.testing.allocator;
+    const logger = try th.setupLogger(a);
+    defer logger.deinit();
+
+    const cfg = config.Config{
+        .languages = .{
+            .protobuf = .{
+                .lsp = .{
+                    .command = "protols",
+                    .args = &.{},
+                    .language_id = "protobuf",
+                },
+            },
+        },
+    };
+    var ed = try editor_mod.Editor.init(a, std.testing.io, cfg);
+    defer ed.deinit();
+
+    const p = ed.runtime.lsp_mgr.?.plugin_mgr.getPluginForExtension(".proto") orelse return error.ExpectedPlugin;
+    try std.testing.expectEqual(@as(usize, 1), p.lsp_command.len);
+    try std.testing.expectEqualStrings("protols", p.lsp_command[0]);
+    try std.testing.expectEqualStrings("protobuf", p.language_id);
 }

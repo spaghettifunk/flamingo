@@ -132,6 +132,32 @@ test "Config: parse author table" {
     try std.testing.expectEqualStrings("davide@example.com", result.value.author.email.?);
 }
 
+test "Config: parse protobuf LSP override" {
+    const allocator = std.testing.allocator;
+    var parser = toml.Parser(config.Config).init(allocator);
+    defer parser.deinit();
+
+    const src =
+        \\[languages.protobuf]
+        \\extensions = ["proto"]
+        \\
+        \\[languages.protobuf.lsp]
+        \\command = "protols"
+        \\args = []
+        \\language_id = "protobuf"
+    ;
+
+    var result = try parser.parseString(src);
+    defer result.deinit();
+
+    const protobuf = result.value.languages.protobuf.?;
+    try std.testing.expectEqual(@as(usize, 1), protobuf.extensions.len);
+    try std.testing.expectEqualStrings("proto", protobuf.extensions[0]);
+    try std.testing.expectEqualStrings("protols", protobuf.lsp.?.command.?);
+    try std.testing.expectEqual(@as(usize, 0), protobuf.lsp.?.args.len);
+    try std.testing.expectEqualStrings("protobuf", protobuf.lsp.?.language_id.?);
+}
+
 test "Config: validate passes on default config" {
     const cfg = config.Config{};
     // Should not return an error

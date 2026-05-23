@@ -9,6 +9,7 @@ extern fn tree_sitter_yaml() callconv(.c) *const anyopaque;
 extern fn tree_sitter_json() callconv(.c) *const anyopaque;
 extern fn tree_sitter_markdown() callconv(.c) *const anyopaque;
 extern fn tree_sitter_markdown_inline() callconv(.c) *const anyopaque;
+extern fn tree_sitter_proto() callconv(.c) *const anyopaque;
 
 const zig_query = @embedFile("queries/zig.scm");
 const go_query = @embedFile("queries/go.scm");
@@ -17,6 +18,7 @@ const yaml_query = @embedFile("queries/yaml.scm");
 const json_query = @embedFile("queries/json.scm");
 const markdown_query = @embedFile("queries/markdown.scm");
 const markdown_inline_query = @embedFile("queries/markdown_inline.scm");
+const proto_query = @embedFile("queries/proto.scm");
 
 pub const LanguageId = enum {
     zig,
@@ -25,6 +27,7 @@ pub const LanguageId = enum {
     yaml,
     json,
     markdown,
+    proto,
 };
 
 pub const Style = enum {
@@ -121,6 +124,7 @@ pub fn languageFromFilename(filename: []const u8) ?LanguageId {
     if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return .yaml;
     if (std.mem.eql(u8, ext, ".json")) return .json;
     if (std.mem.eql(u8, ext, ".md") or std.mem.eql(u8, ext, ".markdown")) return .markdown;
+    if (std.mem.eql(u8, ext, ".proto")) return .proto;
     return null;
 }
 
@@ -636,6 +640,7 @@ pub fn languagePtr(language: LanguageId) *const ts.Language {
         .yaml => tree_sitter_yaml(),
         .json => tree_sitter_json(),
         .markdown => tree_sitter_markdown(),
+        .proto => tree_sitter_proto(),
     };
     return @ptrCast(@alignCast(ptr));
 }
@@ -657,6 +662,7 @@ fn querySource(language: LanguageId) []const u8 {
         .yaml => yaml_query,
         .json => json_query,
         .markdown => markdown_query,
+        .proto => proto_query,
     };
 }
 
@@ -798,6 +804,7 @@ test "languageFromFilename maps supported extensions" {
     try std.testing.expectEqual(LanguageId.json, languageFromFilename("package.json").?);
     try std.testing.expectEqual(LanguageId.markdown, languageFromFilename("README.md").?);
     try std.testing.expectEqual(LanguageId.markdown, languageFromFilename("README.markdown").?);
+    try std.testing.expectEqual(LanguageId.proto, languageFromFilename("foo/bar/service.proto").?);
     try std.testing.expect(languageFromFilename("component.mdx") == null);
 }
 
@@ -814,6 +821,15 @@ test "highlighter captures supported language styles" {
         .{ .filename = "config.toml", .source = "name = \"flamingo\"\n", .style = .string },
         .{ .filename = "config.yaml", .source = "name: flamingo\n", .style = .property },
         .{ .filename = "package.json", .source = "{\"name\":\"flamingo\"}\n", .style = .string },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\npackage foo.bar;\nmessage User { string name = 1; }\nservice UserService { rpc GetUser (GetUserRequest) returns (User); }\n// hi\n", .style = .keyword },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\npackage foo.bar;\nmessage User { string name = 1; }\nservice UserService { rpc GetUser (GetUserRequest) returns (User); }\n// hi\n", .style = .type },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\npackage foo.bar;\nmessage User { string name = 1; }\nservice UserService { rpc GetUser (GetUserRequest) returns (User); }\n// hi\n", .style = .function },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\npackage foo.bar;\nmessage User { string name = 1; }\nservice UserService { rpc GetUser (GetUserRequest) returns (User); }\n// hi\n", .style = .string },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\npackage foo.bar;\nmessage User { string name = 1; }\nservice UserService { rpc GetUser (GetUserRequest) returns (User); }\n// hi\n", .style = .number },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\npackage foo.bar;\nmessage User { string name = 1; }\nservice UserService { rpc GetUser (GetUserRequest) returns (User); }\n// hi\n", .style = .comment },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\nmessage User { optional string name = 1 [(google.api.http) = { get: \"/v1/users/{name}\" }]; }\n", .style = .property },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\nmessage User { optional string name = 1 [(google.api.http) = { get: \"/v1/users/{name}\" }]; }\n", .style = .operator },
+        .{ .filename = "service.proto", .source = "syntax = \"proto3\";\nmessage User { optional string name = 1 [(google.api.http) = { get: \"/v1/users/{name}\" }]; }\n", .style = .punctuation },
         .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .keyword },
         .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .string },
         .{ .filename = "README.md", .source = "# Heading\n\n> Quote\n\n- Item\n\n[Example](https://example.com)\n\n```zig\nconst x = 42;\n```\n", .style = .function },
@@ -1011,4 +1027,3 @@ test "highlighter keeps highlights aligned after edit before token" {
     try std.testing.expect(highlighter.styleAtLine(0, 0) == null);
     try std.testing.expectEqual(Style.keyword, highlighter.styleAtLine(1, 0).?);
 }
-

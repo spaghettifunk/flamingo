@@ -21,6 +21,30 @@ Supported default language plugins:
 | JSON | `.json` | `vscode-json-languageserver --stdio` |
 | YAML | `.yaml`, `.yml` | `yaml-language-server --stdio` |
 | TOML | `.toml` | `taplo lsp stdio` |
+| Protocol Buffers | `.proto` | `buf lsp serve` |
+
+Protocol Buffers use Buf's LSP by default. Install Buf with:
+
+```bash
+brew install bufbuild/buf/buf
+```
+
+If Buf is missing or exits during startup, Flamingo keeps the file open and continues with tree-sitter syntax highlighting. The status line reports:
+
+```text
+Protobuf LSP unavailable: install Buf or configure a protobuf language server.
+```
+
+Users can override the protobuf server command in config:
+
+```toml
+[languages.protobuf.lsp]
+command = "protols"
+args = []
+language_id = "protobuf"
+```
+
+Other protobuf LSP implementations such as `protols` or `protobuf-language-server` can be configured this way. Flamingo does not probe fallback servers automatically.
 
 Default completion controls:
 
@@ -41,7 +65,7 @@ Default go-to-definition key:
 
 ## Data And Configuration
 
-No user-facing LSP config table is implemented. Built-in plugin metadata is registered in source.
+Built-in plugin metadata is registered in source. Protobuf LSP command overrides are supported under `[languages.protobuf.lsp]`.
 
 ## Implementation Notes
 
@@ -59,5 +83,4 @@ Open files notify LSP once the client is ready. Buffer changes are batched and f
 - No automatic language server installation.
 - LSP position handling currently uses Flamingo cursor columns as byte offsets; UTF-16 conversion is noted as a TODO in source.
 - Completion insertion is simple text insertion; snippet and overwrite handling are TODO.
-- LSP setup has built-in language plugins, not user-configurable plugin loading.
-
+- LSP setup has built-in language plugins; protobuf exposes command override config, but arbitrary plugin loading is not implemented.

@@ -19,8 +19,9 @@ Optional runtime tools:
 | `vscode-json-languageserver --stdio` | JSON LSP support. |
 | `yaml-language-server --stdio` | YAML LSP support. |
 | `taplo lsp stdio` | TOML LSP support. |
+| `buf lsp serve` | Protocol Buffers LSP support. Install with `brew install bufbuild/buf/buf`. |
 
-Tree-sitter grammars for Zig, Go, TOML, YAML, JSON, Markdown, and Markdown inline syntax are vendored under `vendor/`.
+Tree-sitter grammars for Zig, Go, TOML, YAML, JSON, Markdown, Markdown inline syntax, and Protocol Buffers are vendored under `vendor/`.
 
 ## Clone And Build
 
@@ -54,4 +55,3 @@ Non-interactive checks are implemented:
 - Zig dependencies are declared in `build.zig.zon`.
 - The integrated terminal backend is implemented for Linux and macOS in `src/editor/terminal_panel.zig`.
 - Homebrew instructions exist in the README, but this documentation focuses on repository-local build and development workflows.
-

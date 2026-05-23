@@ -46,3 +46,14 @@ icon_mode = "auto"
 
 [explorer]
 width_percentage = 20
+
+# Built-in language server defaults can be overridden per language.
+# Protobuf defaults to Buf's LSP:
+#
+# [languages.protobuf]
+# extensions = ["proto"]
+#
+# [languages.protobuf.lsp]
+# command = "buf"
+# args = ["lsp", "serve"]
+# language_id = "proto"

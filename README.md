@@ -21,7 +21,7 @@ Implemented:
 - File explorer, filesystem picker, new-file, rename-file, delete-file, open-file, open-folder, and workspace creation flows.
 - Normal-mode navigation, jump history, line jumps, matching-bracket jumps, horizontal scrolling, folding, selections, clipboard operations, and multi-cursor editing support.
 - Project search/global search with a preview-oriented UI.
-- Tree-sitter syntax highlighting for Zig, Go, TOML, YAML, JSON, and Markdown.
+- Tree-sitter syntax highlighting for Zig, Go, TOML, YAML, JSON, Markdown, and Protocol Buffers.
 - Virtual-screen renderer with diffed terminal output.
 - Integrated terminal panel on supported platforms.
 - TODO panel for code TODO/FIXME-style items and manual workspace TODOs.
@@ -53,6 +53,7 @@ Screenshots and recordings have not been added yet.
   - `vscode-json-languageserver` for JSON
   - `yaml-language-server` for YAML
   - `taplo lsp stdio` for TOML
+  - `buf lsp serve` for Protocol Buffers (`brew install bufbuild/buf/buf`)
 
 Zig dependencies are declared in `build.zig.zon`; vendored tree-sitter grammars live under `vendor/`.
 

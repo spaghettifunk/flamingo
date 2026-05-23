@@ -18,8 +18,10 @@ Supported language detection by filename:
 | YAML | `.yaml`, `.yml` |
 | JSON | `.json` |
 | Markdown | `.md`, `.markdown` |
+| Protocol Buffers | `.proto` |
 
 Markdown also parses inline ranges with the vendored markdown-inline grammar.
+Protocol Buffers highlighting uses the vendored `tree-sitter-proto` grammar.
 
 ## How To Use It
 
@@ -56,4 +58,3 @@ The highlighter tracks buffer revisions, stores committed parse results, prepare
 - Language support is fixed in source.
 - Highlight styles are mapped from capture names to a compact internal style enum.
 - TODO: document user theme customization once implemented.
-

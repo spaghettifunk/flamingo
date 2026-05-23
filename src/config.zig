@@ -72,6 +72,21 @@ pub const UiConfig = struct {
     icon_mode: []const u8 = "auto",
 };
 
+pub const LanguageLspConfig = struct {
+    command: ?[]const u8 = null,
+    args: []const []const u8 = &.{},
+    language_id: ?[]const u8 = null,
+};
+
+pub const LanguageConfig = struct {
+    extensions: []const []const u8 = &.{},
+    lsp: ?LanguageLspConfig = null,
+};
+
+pub const LanguagesConfig = struct {
+    protobuf: ?LanguageConfig = null,
+};
+
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
@@ -80,6 +95,7 @@ pub const Config = struct {
     explorer: ExplorerConfig = .{},
     author: AuthorConfig = .{},
     ui: UiConfig = .{},
+    languages: LanguagesConfig = .{},
 };
 
 // ── Validation ───────────────────────────────────────────────────────────────

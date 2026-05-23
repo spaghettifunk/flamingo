@@ -29,6 +29,28 @@ Terminal applications cannot switch the terminal emulator font automatically. Co
 | `name` | optional string | `null` | Fallback comment author name when Git identity is unavailable. | Implemented |
 | `email` | optional string | `null` | Fallback comment author email when Git identity is unavailable. | Implemented |
 
+## `[languages.protobuf.lsp]`
+
+Overrides the default protobuf LSP command. By default Flamingo uses `buf lsp serve` with LSP language ID `proto`.
+
+`[languages.protobuf].extensions` may also override protobuf LSP file extensions. Values can be written with or without a leading dot.
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `[languages.protobuf].extensions` | array of strings | `["proto"]` | Extensions mapped to the protobuf LSP plugin. | Implemented |
+| `command` | optional string | `buf` | Executable to start for protobuf LSP. | Implemented |
+| `args` | array of strings | `["lsp", "serve"]` | Arguments passed after `command`. | Implemented |
+| `language_id` | optional string | `proto` | LSP language ID sent in `textDocument/didOpen`. | Implemented |
+
+Example:
+
+```toml
+[languages.protobuf.lsp]
+command = "protols"
+args = []
+language_id = "protobuf"
+```
+
 ## `[keybindings]`
 
 Keybindings use context-specific subtables. The flat legacy `[keybindings]` model is rejected.

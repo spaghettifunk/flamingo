@@ -60,6 +60,30 @@ pub const DidChangeNotification = struct {
     params: DidChangeTextDocumentParams,
 };
 
+pub const TextDocumentIdentifier = struct {
+    uri: []const u8,
+};
+
+pub const DidSaveTextDocumentParams = struct {
+    textDocument: TextDocumentIdentifier,
+};
+
+pub const DidSaveNotification = struct {
+    jsonrpc: []const u8 = "2.0",
+    method: []const u8 = "textDocument/didSave",
+    params: DidSaveTextDocumentParams,
+};
+
+pub const DidCloseTextDocumentParams = struct {
+    textDocument: TextDocumentIdentifier,
+};
+
+pub const DidCloseNotification = struct {
+    jsonrpc: []const u8 = "2.0",
+    method: []const u8 = "textDocument/didClose",
+    params: DidCloseTextDocumentParams,
+};
+
 pub const CompletionParams = struct {
     textDocument: struct {
         uri: []const u8,

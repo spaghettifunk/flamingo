@@ -28,6 +28,14 @@ pub const LspManager = struct {
     clients: std.StringHashMap(*lsp_client.LspClient),
     queue: *event_queue.EventQueue,
 
+    pub const StartLspResult = union(enum) {
+        no_plugin,
+        already_running: []const u8,
+        started: []const u8,
+        command_unavailable: []const u8,
+        start_failed: []const u8,
+    };
+
     pub fn init(allocator: std.mem.Allocator, io: std.Io, queue: *event_queue.EventQueue) !LspManager {
         var mgr = plugin.PluginManager.init(allocator);
         errdefer mgr.deinit();
@@ -52,22 +60,37 @@ pub const LspManager = struct {
         self.plugin_mgr.deinit();
     }
 
-    pub fn startLspForFile(self: *LspManager, filename: []const u8) !void {
+    pub fn startLspForFile(self: *LspManager, filename: []const u8) !StartLspResult {
         const ext = std.fs.path.extension(filename);
-        if (self.plugin_mgr.getPluginForExtension(ext)) |p| {
-            if (!self.clients.contains(p.name)) {
-                if (!try self.commandAvailable(p.lsp_command[0])) {
-                    logz.warn().fmt("msg", "LSP command not found for plugin {s}: {s}", .{ p.name, p.lsp_command[0] }).log();
-                    return;
-                }
+        const p = self.plugin_mgr.getPluginForExtension(ext) orelse return .no_plugin;
+        if (self.clients.contains(p.name)) return .{ .already_running = p.name };
 
-                logz.info().fmt("msg", "Starting LSP for plugin {s}", .{p.name}).log();
-                const client = try lsp_client.LspClient.start(self.allocator, self.io, p.name, p.lsp_command, self.queue);
-                try self.clients.put(p.name, client);
-
-                try self.sendInitialize(client);
-            }
+        if (!try self.commandAvailable(p.lsp_command[0])) {
+            logz.warn().fmt("msg", "LSP command not found for plugin {s}: {s}", .{ p.name, p.lsp_command[0] }).log();
+            return .{ .command_unavailable = p.name };
         }
+
+        const root_path = self.workspaceRootForFile(filename) catch |err| blk: {
+            logz.warn().fmt("msg", "Failed to detect LSP workspace root for {s}: {any}", .{ filename, err }).log();
+            break :blk try self.fallbackWorkspaceRoot(filename);
+        };
+        defer self.allocator.free(root_path);
+
+        logz.info().fmt("msg", "Starting LSP for plugin {s}", .{p.name}).log();
+        const client = lsp_client.LspClient.start(self.allocator, self.io, p.name, p.lsp_command, self.queue) catch |err| {
+            logz.warn().fmt("msg", "Failed to start LSP for plugin {s}: {any}", .{ p.name, err }).log();
+            return .{ .start_failed = p.name };
+        };
+        errdefer client.stop();
+        try self.clients.put(p.name, client);
+
+        self.sendInitialize(client, root_path) catch |err| {
+            logz.warn().fmt("msg", "Failed to initialize LSP for plugin {s}: {any}", .{ p.name, err }).log();
+            _ = self.clients.remove(p.name);
+            client.stop();
+            return .{ .start_failed = p.name };
+        };
+        return .{ .started = p.name };
     }
 
     fn commandAvailable(self: *LspManager, command: []const u8) !bool {
@@ -94,13 +117,8 @@ pub const LspManager = struct {
         return false;
     }
 
-    fn sendInitialize(self: *LspManager, client: *lsp_client.LspClient) !void {
-        const cwd = std.Io.Dir.cwd().realPathFileAlloc(self.io, ".", self.allocator) catch |err| {
-            logz.err().fmt("msg", "Failed to get CWD for LSP rootUri: {any}", .{err}).log();
-            return err;
-        };
-        defer self.allocator.free(cwd);
-        const root_uri = try std.fmt.allocPrint(self.allocator, "file://{s}", .{cwd});
+    fn sendInitialize(self: *LspManager, client: *lsp_client.LspClient, root_path: []const u8) !void {
+        const root_uri = try self.pathToUri(self.allocator, root_path);
         defer self.allocator.free(root_uri);
 
         client.state = .initializing;
@@ -279,7 +297,7 @@ pub const LspManager = struct {
                 .params = .{
                     .textDocument = .{
                         .uri = uri,
-                        .languageId = p.name,
+                        .languageId = p.language_id,
                         .version = 1,
                         .text = content,
                     },
@@ -312,6 +330,45 @@ pub const LspManager = struct {
                 .contentChanges = &[_]protocol.TextDocumentContentChangeEvent{
                     .{ .text = content },
                 },
+            },
+        };
+        try client.send(notif);
+    }
+
+    pub fn notifySave(self: *LspManager, filename: []const u8) !void {
+        const ext = std.fs.path.extension(filename);
+        const p = self.plugin_mgr.getPluginForExtension(ext) orelse return;
+        const client = self.clients.get(p.name) orelse return;
+
+        if (client.state != .ready) return;
+
+        const uri = try self.pathToUri(self.allocator, filename);
+        defer self.allocator.free(uri);
+
+        const notif = protocol.DidSaveNotification{
+            .params = .{
+                .textDocument = .{ .uri = uri },
+            },
+        };
+        try client.send(notif);
+    }
+
+    pub fn notifyClose(self: *LspManager, filename: []const u8) !void {
+        const ext = std.fs.path.extension(filename);
+        const p = self.plugin_mgr.getPluginForExtension(ext) orelse return;
+        const client = self.clients.get(p.name) orelse return;
+
+        _ = client.opened_files.remove(filename);
+        _ = client.document_versions.remove(filename);
+
+        if (client.state != .ready) return;
+
+        const uri = try self.pathToUri(self.allocator, filename);
+        defer self.allocator.free(uri);
+
+        const notif = protocol.DidCloseNotification{
+            .params = .{
+                .textDocument = .{ .uri = uri },
             },
         };
         try client.send(notif);
@@ -392,6 +449,57 @@ pub const LspManager = struct {
         }
 
         return try std.fmt.allocPrint(allocator, "file://{s}", .{abs_path});
+    }
+
+    pub fn workspaceRootForFile(self: *LspManager, filename: []const u8) ![]u8 {
+        const parent = try self.absoluteParentDir(filename);
+        defer self.allocator.free(parent);
+
+        if (try self.findAncestorWithAny(parent, &.{ "buf.yaml", "buf.work.yaml", "buf.gen.yaml" })) |root| {
+            return root;
+        }
+        if (try self.findAncestorWithAny(parent, &.{".git"})) |root| {
+            return root;
+        }
+        return try self.allocator.dupe(u8, parent);
+    }
+
+    fn fallbackWorkspaceRoot(self: *LspManager, filename: []const u8) ![]u8 {
+        return self.absoluteParentDir(filename) catch std.Io.Dir.cwd().realPathFileAlloc(self.io, ".", self.allocator);
+    }
+
+    fn absoluteParentDir(self: *LspManager, filename: []const u8) ![]u8 {
+        const abs_file = if (std.fs.path.isAbsolute(filename))
+            try self.allocator.dupe(u8, filename)
+        else
+            std.Io.Dir.cwd().realPathFileAlloc(self.io, filename, self.allocator) catch |err| blk: {
+                if (std.fs.path.dirname(filename)) |dir| {
+                    const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.io, ".", self.allocator);
+                    defer self.allocator.free(cwd);
+                    break :blk try std.fs.path.join(self.allocator, &.{ cwd, dir });
+                }
+                return err;
+            };
+        defer self.allocator.free(abs_file);
+
+        const parent = std.fs.path.dirname(abs_file) orelse abs_file;
+        return try self.allocator.dupe(u8, parent);
+    }
+
+    fn findAncestorWithAny(self: *LspManager, start_dir: []const u8, markers: []const []const u8) !?[]u8 {
+        var current = start_dir;
+        while (true) {
+            for (markers) |marker| {
+                const candidate = try std.fs.path.join(self.allocator, &.{ current, marker });
+                defer self.allocator.free(candidate);
+                std.Io.Dir.accessAbsolute(self.io, candidate, .{}) catch continue;
+                return try self.allocator.dupe(u8, current);
+            }
+
+            const parent = std.fs.path.dirname(current) orelse return null;
+            if (parent.len == current.len) return null;
+            current = parent;
+        }
     }
 };
 
