@@ -17,6 +17,8 @@ const terminal_panel = @import("../terminal_panel.zig");
 const todos = @import("../todos.zig");
 const comments = @import("../comments.zig");
 const multi_cursor = @import("../multi_cursor.zig");
+const command_parser = @import("../tasks/command_parser.zig");
+const task_mod = @import("../tasks/task.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -94,6 +96,19 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .git_diff_page_down,
             .git_diff_refresh_panel,
             .git_diff_open_selected,
+            => true,
+            else => false,
+        },
+        .task_panel => switch (id) {
+            .task_panel_close,
+            .task_panel_scroll_up,
+            .task_panel_scroll_down,
+            .task_panel_page_up,
+            .task_panel_page_down,
+            .task_panel_previous_task,
+            .task_panel_next_task,
+            .task_panel_rerun,
+            .task_panel_cancel,
             => true,
             else => false,
         },
@@ -245,6 +260,7 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .comments_panel,
         .git_graph,
         .git_diff,
+        .task_panel,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -394,6 +410,10 @@ fn gitGraphActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) G
 
 fn gitDiffActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     return resolveDefaultContextCommand(ed, .git_diff, event);
+}
+
+fn taskPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .task_panel, event);
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1581,6 +1601,104 @@ fn executeDashboardSelectedAction(ed: *editor.Editor) !void {
     }
 }
 
+fn taskPanelOutputRows(ed: *const editor.Editor) usize {
+    return @max(ed.height / 2, 1);
+}
+
+fn taskRoot(ed: *editor.Editor) ?[]const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    if (ed.state.workspace.root_path) |root| return root;
+    return null;
+}
+
+fn rerunSelectedTask(ed: *editor.Editor) !void {
+    const selected = ed.state.task_manager.selectedTaskConst() orelse {
+        ed.state.status_message = "No task selected";
+        return;
+    };
+    if (selected.status == .running or selected.status == .queued) {
+        ed.state.status_message = "Task is still running";
+        return;
+    }
+    const root = taskRoot(ed) orelse {
+        ed.state.error_message = "No workspace root available for task execution.";
+        return;
+    };
+    var parsed = command_parser.parse(ed.allocator, selected.command_display) catch |err| {
+        ed.state.error_message = switch (err) {
+            error.EmptyCommand => "Usage: :run <command>",
+            error.UnterminatedQuote => "Task command has an unterminated quote",
+            error.TrailingEscape => "Task command ends with an incomplete escape",
+            else => "Could not parse task command",
+        };
+        return;
+    };
+    var parsed_owned = true;
+    errdefer if (parsed_owned) parsed.deinit(ed.allocator);
+    const id = try ed.state.task_manager.addQueuedTask(parsed, root, task_mod.nowMs(ed.io));
+    parsed_owned = false;
+    const task = ed.state.task_manager.findTask(id) orelse return;
+    ed.runtime.task_worker.startTask(id, task.argvConst(), task.cwd) catch |err| {
+        const message = switch (err) {
+            error.TaskAlreadyRunning => "Another task is already running.",
+            else => "Unable to start task.",
+        };
+        try ed.state.task_manager.failToStart(id, message, task_mod.nowMs(ed.io));
+        ed.state.error_message = message;
+        return;
+    };
+}
+
+fn executeTaskPanelActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const rows = taskPanelOutputRows(ed);
+    switch (command) {
+        .task_panel_close => {
+            ed.state.task_manager.close();
+            ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+            ed.markDirty(.full);
+        },
+        .task_panel_scroll_up => {
+            ed.state.task_manager.scrollUp(1);
+            ed.markDirty(.partial);
+        },
+        .task_panel_scroll_down => {
+            ed.state.task_manager.scrollDown(1, rows);
+            ed.markDirty(.partial);
+        },
+        .task_panel_page_up => {
+            ed.state.task_manager.scrollUp(rows);
+            ed.markDirty(.partial);
+        },
+        .task_panel_page_down => {
+            ed.state.task_manager.scrollDown(rows, rows);
+            ed.markDirty(.partial);
+        },
+        .task_panel_previous_task => {
+            ed.state.task_manager.selectPrevious();
+            ed.markDirty(.partial);
+        },
+        .task_panel_next_task => {
+            ed.state.task_manager.selectNext();
+            ed.markDirty(.partial);
+        },
+        .task_panel_rerun => {
+            try rerunSelectedTask(ed);
+            ed.markDirty(.full);
+        },
+        .task_panel_cancel => {
+            if (ed.runtime.task_worker.hasRunningTask()) {
+                ed.runtime.task_worker.cancelRunning();
+                ed.state.status_message = "Cancelling task";
+            } else {
+                ed.state.status_message = "No task is running";
+            }
+            ed.markDirty(.partial);
+        },
+        else => unreachable,
+    }
+}
+
 fn executeDashboardActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
     switch (command) {
         .mode_command => {
@@ -2329,6 +2447,12 @@ fn handleGitDiffInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 }
 
+fn handleTaskPanelInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (taskPanelActionCommandForEvent(ed, event)) |command| {
+        try executeTaskPanelActionCommand(ed, command);
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -2349,6 +2473,11 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (ed.state.mode == .GitDiff) {
         try handleGitDiffInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .TaskPanel) {
+        try handleTaskPanelInput(ed, event);
         return;
     }
 
@@ -2604,6 +2733,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .GitDiff => {
             try handleGitDiffInput(ed, event);
+        },
+        .TaskPanel => {
+            try handleTaskPanelInput(ed, event);
         },
         .SaveConfirmation => {
             if (saveConfirmationActionCommandForEvent(ed, event)) |command| {

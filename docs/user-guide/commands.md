@@ -20,7 +20,7 @@ Examples:
 :goto 20
 ```
 
-Command arguments are split on spaces. File operation command paths reject empty paths, whitespace, and quotes. Project-relative paths are resolved inside the active project root when one is set.
+Most command arguments are split on spaces. `:run` uses a small argv parser with whitespace, single quotes, double quotes, and backslash escaping, and it does not execute through a shell. File operation command paths reject empty paths, whitespace, and quotes. Project-relative paths are resolved inside the active project root when one is set.
 
 ## Confirmed Colon Commands
 
@@ -40,6 +40,9 @@ Command arguments are split on spaces. File operation command paths reject empty
 | `:comments`                                         | optional `refresh` | Open the comments panel, or reload comments from disk.                   |
 | `:gitdiff`                                          | none               | Open the workspace Git Diff panel.                                       |
 | `:gitdiff-refresh`, `:diff-refresh`, `:git-refresh` | none               | Refresh Git diff gutter markers for the current file.                    |
+| `:run <command>`                                    | command argv       | Run a non-interactive task from the workspace root.                      |
+| `:tasks`                                            | none               | Open the task output panel.                                              |
+| `:taskstop`                                         | none               | Cancel the currently running task.                                       |
 | `:git-graph`, `:ggraph`                             | none               | Open the read-only Git commit graph panel.                               |
 | `:newFile`, `:nf`                                   | path               | Create a new file and open it.                                           |
 | `:renameFile`, `:rf`                                | old path, new path | Rename a file and update open buffers.                                   |

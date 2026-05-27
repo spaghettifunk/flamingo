@@ -112,6 +112,9 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:font-info`              |                                 | Show icon mode and terminal font guidance                  |
 | `:gitdiff`                |                                 | Open the workspace Git Diff panel                          |
 | `:gitdiff-refresh`        | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers               |
+| `:run <command>`          |                                 | Run a non-interactive task from the workspace root          |
+| `:tasks`                  |                                 | Open the task output panel                                 |
+| `:taskstop`               |                                 | Cancel the currently running task                          |
 | `:git-graph`              | `:ggraph`                       | Open the read-only Git commit graph panel                  |
 | `:todos`                  |                                 | Open/focus the workspace TODO panel                        |
 | `:comment`                |                                 | Create a comment from the active text selection            |
@@ -215,6 +218,22 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Refresh diff        | `r`                     |
 | Open selected file  | `Enter`                 |
 
+### Task Panel
+
+| Action               | Keybinding              |
+| :------------------- | :---------------------- |
+| Open task panel      | `:tasks`                |
+| Run task             | `:run <command>`        |
+| Cancel running task  | `c`, `Ctrl+c`, `:taskstop` |
+| Scroll output up     | `k`, `Up`               |
+| Scroll output down   | `j`, `Down`             |
+| Page output up       | `PageUp`, `Ctrl+u`      |
+| Page output down     | `PageDown`, `Ctrl+d`    |
+| Select previous task | `[`                     |
+| Select next task     | `]`                     |
+| Rerun selected task  | `r`                     |
+| Close task panel     | `q` or `Esc`            |
+
 ### LSP Completion
 
 | Action                 | Keybinding            |
@@ -283,6 +302,10 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 [keybindings.comments_panel]
 "r" = "comments_panel.reply"
 "R" = "comments_panel.refresh"
+
+[keybindings.task_panel]
+"c" = "task_panel.cancel"
+"r" = "task_panel.rerun"
 
 [keybindings.normal.unbind]
 keys = ["ctrl+w"]

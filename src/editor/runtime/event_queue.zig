@@ -2,6 +2,7 @@ const std = @import("std");
 const syntax = @import("../syntax.zig");
 const git_status = @import("../git_status.zig");
 const git_diff = @import("../git/diff_service.zig");
+const task_mod = @import("../tasks/task.zig");
 
 pub const QueueError = error{
     QueueClosed,
@@ -33,6 +34,32 @@ pub const Event = union(enum) {
 
     terminal_exit: struct {
         code: ?i32,
+    },
+
+    task_started: struct {
+        id: u64,
+        started_at_ms: i64,
+    },
+
+    /// Owned task output bytes. Whoever consumes or discards this event must free them.
+    task_output: struct {
+        id: u64,
+        kind: task_mod.TaskOutputKind,
+        bytes: []u8,
+    },
+
+    task_finished: struct {
+        id: u64,
+        status: task_mod.TaskStatus,
+        exit_code: ?i32,
+        finished_at_ms: i64,
+    },
+
+    /// Owned failure message. Whoever consumes or discards this event must free it.
+    task_failed_to_start: struct {
+        id: u64,
+        message: []u8,
+        finished_at_ms: i64,
     },
 };
 
@@ -92,7 +119,16 @@ pub const EventQueue = struct {
 
     pub fn push(self: *EventQueue, event: Event) !void {
         switch (event) {
-            .lsp_message, .git_status_snapshot, .git_diff_result, .terminal_output, .terminal_exit => try self.pushFifo(event),
+            .lsp_message,
+            .git_status_snapshot,
+            .git_diff_result,
+            .terminal_output,
+            .terminal_exit,
+            .task_started,
+            .task_output,
+            .task_finished,
+            .task_failed_to_start,
+            => try self.pushFifo(event),
             .syntax_parse_result => |result| try self.pushSyntaxResult(result),
         }
     }
@@ -231,6 +267,14 @@ pub const EventQueue = struct {
                 self.allocator.free(output.bytes);
             },
             .terminal_exit => {},
+            .task_started => {},
+            .task_output => |output| {
+                self.allocator.free(output.bytes);
+            },
+            .task_finished => {},
+            .task_failed_to_start => |failure| {
+                self.allocator.free(failure.message);
+            },
         }
     }
 };

@@ -7,6 +7,8 @@ const todos = @import("todos.zig");
 const comments = @import("comments.zig");
 const workspace = @import("workspace.zig");
 const git_graph = @import("git_graph.zig");
+const command_parser = @import("tasks/command_parser.zig");
+const task_mod = @import("tasks/task.zig");
 
 pub const Command = enum {
     quit,
@@ -22,6 +24,9 @@ pub const Command = enum {
     comment,
     comments,
     git_diff,
+    run,
+    tasks,
+    task_stop,
     git_graph,
     git_diff_refresh,
     rename_file,
@@ -43,6 +48,9 @@ pub const Command = enum {
             .comment => .comment_create,
             .comments => .comments_open,
             .git_diff => .git_diff_open,
+            .run => .task_run,
+            .tasks => .tasks_open,
+            .task_stop => .task_stop,
             .git_graph => .git_graph_open,
             .git_diff_refresh => .git_diff_refresh,
             .rename_file => .file_rename,
@@ -82,6 +90,9 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .comment_create => .comment,
         .comments_open => .comments,
         .git_diff_open => .git_diff,
+        .task_run => .run,
+        .tasks_open => .tasks,
+        .task_stop => .task_stop,
         .git_graph_open => .git_graph,
         .git_diff_refresh => .git_diff_refresh,
         .file_rename => .rename_file,
@@ -113,6 +124,19 @@ fn requireArg(ed: *editor.Editor, it: *std.mem.SplitIterator(u8, .scalar)) ?[]co
         ed.state.mode = .Normal;
         return null;
     };
+}
+
+fn commandTail(input: []const u8, command_name: []const u8) []const u8 {
+    var rest = input;
+    rest = trimLeftAsciiWhitespace(rest);
+    if (std.mem.startsWith(u8, rest, command_name)) rest = rest[command_name.len..];
+    return trimLeftAsciiWhitespace(rest);
+}
+
+fn trimLeftAsciiWhitespace(input: []const u8) []const u8 {
+    var index: usize = 0;
+    while (index < input.len and std.ascii.isWhitespace(input[index])) : (index += 1) {}
+    return input[index..];
 }
 
 fn setFsError(ed: *editor.Editor, err: anyerror) void {
@@ -278,6 +302,18 @@ pub fn execute(ed: *editor.Editor) !void {
         .git_diff => {
             if (!requireNoMoreArgs(ed, &it)) return;
             try openGitDiffPanel(ed);
+        },
+        .run => {
+            const tail = commandTail(command_input, cmd);
+            try runWorkspaceTask(ed, tail);
+        },
+        .tasks => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            openTaskPanel(ed);
+        },
+        .task_stop => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            stopRunningTask(ed);
         },
         .git_graph => {
             if (!requireNoMoreArgs(ed, &it)) return;
@@ -477,6 +513,78 @@ pub fn openGitDiffPanel(ed: *editor.Editor) !void {
     ed.state.comments_panel.focused = false;
     ed.terminal_panel.blur();
     ed.markDirty(.full);
+}
+
+fn taskRoot(ed: *editor.Editor) ?[]const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    if (ed.state.workspace.root_path) |root| return root;
+    return null;
+}
+
+pub fn openTaskPanel(ed: *editor.Editor) void {
+    ed.state.task_manager.open();
+    ed.state.mode = .TaskPanel;
+    ed.state.explorer_focused = false;
+    ed.state.todo_panel.focused = false;
+    ed.state.comments_panel.focused = false;
+    ed.terminal_panel.blur();
+    ed.markDirty(.full);
+}
+
+pub fn runWorkspaceTask(ed: *editor.Editor, command_text: []const u8) !void {
+    const root = taskRoot(ed) orelse {
+        ed.state.error_message = "No workspace root available for task execution.";
+        ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+        ed.markDirty(.partial);
+        return;
+    };
+
+    var parsed = command_parser.parse(ed.allocator, command_text) catch |err| {
+        ed.state.error_message = taskParseErrorMessage(err);
+        ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+        ed.markDirty(.partial);
+        return;
+    };
+    var parsed_owned = true;
+    errdefer if (parsed_owned) parsed.deinit(ed.allocator);
+
+    const id = try ed.state.task_manager.addQueuedTask(parsed, root, task_mod.nowMs(ed.io));
+    parsed_owned = false;
+    openTaskPanel(ed);
+
+    const task = ed.state.task_manager.findTask(id) orelse return;
+    ed.runtime.task_worker.startTask(id, task.argvConst(), task.cwd) catch |err| {
+        const message = switch (err) {
+            error.TaskAlreadyRunning => "Another task is already running.",
+            else => "Unable to start task.",
+        };
+        try ed.state.task_manager.failToStart(id, message, task_mod.nowMs(ed.io));
+        ed.state.error_message = message;
+        ed.markDirty(.partial);
+        return;
+    };
+}
+
+pub fn stopRunningTask(ed: *editor.Editor) void {
+    if (!ed.runtime.task_worker.hasRunningTask()) {
+        ed.state.status_message = "No task is running";
+        ed.state.mode = if (ed.state.task_manager.visible) .TaskPanel else .Normal;
+        ed.markDirty(.partial);
+        return;
+    }
+    ed.runtime.task_worker.cancelRunning();
+    ed.state.status_message = "Cancelling task";
+    openTaskPanel(ed);
+}
+
+fn taskParseErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.EmptyCommand => "Usage: :run <command>",
+        error.UnterminatedQuote => "Task command has an unterminated quote",
+        error.TrailingEscape => "Task command ends with an incomplete escape",
+        else => "Could not parse task command",
+    };
 }
 
 pub fn openCommentsPanel(ed: *editor.Editor) !void {
@@ -726,6 +834,9 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.help, Command.fromString("help").?);
     try std.testing.expectEqual(Command.todos, Command.fromString("todos").?);
     try std.testing.expectEqual(Command.git_diff, Command.fromString("gitdiff").?);
+    try std.testing.expectEqual(Command.run, Command.fromString("run").?);
+    try std.testing.expectEqual(Command.tasks, Command.fromString("tasks").?);
+    try std.testing.expectEqual(Command.task_stop, Command.fromString("taskstop").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("renameFile").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("rf").?);
     try std.testing.expectEqual(Command.delete_file, Command.fromString("deleteFile").?);

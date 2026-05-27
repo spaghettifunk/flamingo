@@ -30,6 +30,9 @@ pub const CommandId = enum {
     comments_open,
     comments_refresh,
     git_diff_open,
+    task_run,
+    tasks_open,
+    task_stop,
     git_diff_close,
     git_diff_move_up,
     git_diff_move_down,
@@ -37,6 +40,15 @@ pub const CommandId = enum {
     git_diff_page_down,
     git_diff_refresh_panel,
     git_diff_open_selected,
+    task_panel_close,
+    task_panel_scroll_up,
+    task_panel_scroll_down,
+    task_panel_page_up,
+    task_panel_page_down,
+    task_panel_previous_task,
+    task_panel_next_task,
+    task_panel_rerun,
+    task_panel_cancel,
     git_graph_open,
     git_graph_close,
     git_graph_move_up,
@@ -196,6 +208,7 @@ pub const CommandCategory = enum {
     explorer,
     dashboard,
     terminal,
+    tasks,
     completion,
     picker,
     prompt,
@@ -212,6 +225,7 @@ pub const CommandContext = enum {
     search,
     global_search,
     git_diff,
+    task_panel,
     git_graph,
     help,
     todo_panel,
@@ -240,8 +254,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 18;
-const command_line_visible_count = 19;
+const command_popup_visible_count = 21;
+const command_line_visible_count = 22;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -393,6 +407,33 @@ const command_metadata = [_]CommandMeta{
         .command_names = &.{"gitdiff"},
         .short_description = "Open workspace Git diff",
         .category = .git,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .task_run,
+        .canonical_name = "tasks.run",
+        .command_names = &.{"run"},
+        .short_description = "Run a workspace command",
+        .category = .tasks,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .tasks_open,
+        .canonical_name = "tasks.open",
+        .command_names = &.{"tasks"},
+        .short_description = "Open task output panel",
+        .category = .tasks,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .task_stop,
+        .canonical_name = "tasks.stop",
+        .command_names = &.{"taskstop"},
+        .short_description = "Cancel the running task",
+        .category = .tasks,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
     },
@@ -838,6 +879,69 @@ const command_metadata = [_]CommandMeta{
         .short_description = "Open selected Git Diff file",
         .category = .git,
         .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .task_panel_close,
+        .canonical_name = "task_panel.close",
+        .short_description = "Close Tasks",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_scroll_up,
+        .canonical_name = "task_panel.scroll_up",
+        .short_description = "Scroll task output up",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_scroll_down,
+        .canonical_name = "task_panel.scroll_down",
+        .short_description = "Scroll task output down",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_page_up,
+        .canonical_name = "task_panel.page_up",
+        .short_description = "Page task output up",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_page_down,
+        .canonical_name = "task_panel.page_down",
+        .short_description = "Page task output down",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_previous_task,
+        .canonical_name = "task_panel.previous_task",
+        .short_description = "Select previous task",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_next_task,
+        .canonical_name = "task_panel.next_task",
+        .short_description = "Select next task",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_rerun,
+        .canonical_name = "task_panel.rerun",
+        .short_description = "Rerun selected task",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .task_panel_cancel,
+        .canonical_name = "task_panel.cancel",
+        .short_description = "Cancel running task",
+        .category = .tasks,
+        .contexts = &.{.task_panel},
     },
     .{
         .id = .git_graph_close,
@@ -1653,6 +1757,7 @@ test "command lookup resolves canonical names" {
     try std.testing.expectEqual(CommandId.fold_toggle_all, commandByCanonicalName("fold.toggle_all").?);
     try std.testing.expectEqual(CommandId.git_diff_open, commandByCanonicalName("git_diff.open").?);
     try std.testing.expectEqual(CommandId.git_diff_refresh, commandByCanonicalName("git_diff.refresh").?);
+    try std.testing.expectEqual(CommandId.task_run, commandByCanonicalName("tasks.run").?);
     try std.testing.expect(commandByCanonicalName("nope") == null);
 }
 
@@ -1675,6 +1780,9 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "comment", .id = .comment_create },
         .{ .name = "comments", .id = .comments_open },
         .{ .name = "gitdiff", .id = .git_diff_open },
+        .{ .name = "run", .id = .task_run },
+        .{ .name = "tasks", .id = .tasks_open },
+        .{ .name = "taskstop", .id = .task_stop },
         .{ .name = "git-graph", .id = .git_graph_open },
         .{ .name = "ggraph", .id = .git_graph_open },
         .{ .name = "gitdiff-refresh", .id = .git_diff_refresh },
@@ -1718,6 +1826,9 @@ test "command line visible commands preserve current popup order" {
         .comment_create,
         .comments_open,
         .git_diff_open,
+        .task_run,
+        .tasks_open,
+        .task_stop,
         .git_graph_open,
         .git_diff_refresh,
     };

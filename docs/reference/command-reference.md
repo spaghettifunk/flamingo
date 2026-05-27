@@ -24,6 +24,9 @@ Command metadata lives in `src/editor/commands.zig`. Colon command execution liv
 | `:gitdiff-refresh` | none               | Refresh Git diff gutter markers for the current file.                                    | `src/editor/command.zig`  |
 | `:diff-refresh`    | none               | Alias for `:gitdiff-refresh`.                                                            | `src/editor/commands.zig` |
 | `:git-refresh`     | none               | Alias for `:gitdiff-refresh`.                                                            | `src/editor/commands.zig` |
+| `:run`             | command argv       | Run a non-interactive task from the workspace root.                                      | `src/editor/command.zig`  |
+| `:tasks`           | none               | Open the task output panel.                                                              | `src/editor/command.zig`  |
+| `:taskstop`        | none               | Cancel the currently running task.                                                       | `src/editor/command.zig`  |
 | `:git-graph`       | none               | Open read-only Git commit graph.                                                         | `src/editor/command.zig`  |
 | `:ggraph`          | none               | Alias for `:git-graph`.                                                                  | `src/editor/commands.zig` |
 | `:renameFile`      | old path, new path | Rename a file and update open buffers.                                                   | `src/editor/command.zig`  |
@@ -52,6 +55,7 @@ Canonical command names are the strings used in config keybinding tables. They a
 | TODOs              | `todos.open`, `todo_panel.new`, `todo_panel.toggle`, `todo_panel.open_selected`                    | `src/editor/commands.zig` |
 | Comments           | `comments.create`, `comments.open`, `comments_panel.reply`, `comments_panel.open_selected`         | `src/editor/commands.zig` |
 | Git                | `git_diff.open`, `git_diff.refresh`, `git_diff.refresh_panel`, `git_graph.open`, `git_graph.refresh` | `src/editor/commands.zig` |
+| Tasks              | `tasks.run`, `tasks.open`, `tasks.stop`, `task_panel.cancel`, `task_panel.rerun`                   | `src/editor/commands.zig` |
 | Terminal           | `terminal.toggle`, `terminal.unfocus`, `terminal.scroll_bottom`                                    | `src/editor/commands.zig` |
 | Completion and LSP | `completion.trigger`, `completion.accept`, `lsp.goto_definition`                                   | `src/editor/commands.zig` |
 | Prompt and picker  | `prompt.submit`, `picker.accept`, `save_confirmation.save`                                         | `src/editor/commands.zig` |
@@ -62,5 +66,6 @@ For all canonical names, inspect the `command_metadata` table in `src/editor/com
 
 - `:w [path]` and `:wq [path]` set the current buffer filename when a path is provided.
 - `:newFile`, `:renameFile`, and `:deleteFile` split arguments on spaces.
+- `:run <command>` tokenizes command argv with whitespace, quotes, and backslash escaping, and does not execute through a shell.
 - File operation paths reject whitespace and quotes.
 - Project-relative paths are resolved inside the active project root when one exists.

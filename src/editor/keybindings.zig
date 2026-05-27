@@ -853,6 +853,23 @@ const default_bindings = [_]Binding{
     .{ .context = .git_diff, .sequence = keyChar('r'), .command = .git_diff_refresh_panel },
     .{ .context = .git_diff, .sequence = keySpecial(.Enter), .command = .git_diff_open_selected },
 
+    // Tasks.
+    .{ .context = .task_panel, .sequence = keySpecial(.Esc), .command = .task_panel_close },
+    .{ .context = .task_panel, .sequence = keyChar('q'), .command = .task_panel_close },
+    .{ .context = .task_panel, .sequence = keySpecial(.Up), .command = .task_panel_scroll_up },
+    .{ .context = .task_panel, .sequence = keyChar('k'), .command = .task_panel_scroll_up },
+    .{ .context = .task_panel, .sequence = keySpecial(.Down), .command = .task_panel_scroll_down },
+    .{ .context = .task_panel, .sequence = keyChar('j'), .command = .task_panel_scroll_down },
+    .{ .context = .task_panel, .sequence = keySpecial(.PageUp), .command = .task_panel_page_up },
+    .{ .context = .task_panel, .sequence = ctrlChar('u'), .command = .task_panel_page_up },
+    .{ .context = .task_panel, .sequence = keySpecial(.PageDown), .command = .task_panel_page_down },
+    .{ .context = .task_panel, .sequence = ctrlChar('d'), .command = .task_panel_page_down },
+    .{ .context = .task_panel, .sequence = keyChar('['), .command = .task_panel_previous_task },
+    .{ .context = .task_panel, .sequence = keyChar(']'), .command = .task_panel_next_task },
+    .{ .context = .task_panel, .sequence = keyChar('r'), .command = .task_panel_rerun },
+    .{ .context = .task_panel, .sequence = keyChar('c'), .command = .task_panel_cancel },
+    .{ .context = .task_panel, .sequence = ctrlChar('c'), .command = .task_panel_cancel },
+
     // Git Graph.
     .{ .context = .git_graph, .sequence = keySpecial(.Esc), .command = .git_graph_close },
     .{ .context = .git_graph, .sequence = keyChar('q'), .command = .git_graph_close },

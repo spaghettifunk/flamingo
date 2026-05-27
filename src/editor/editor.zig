@@ -515,6 +515,8 @@ pub const Editor = struct {
             .git_graph
         else if (self.state.mode == .GitDiff)
             .git_diff
+        else if (self.state.mode == .TaskPanel)
+            .task_panel
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -544,6 +546,12 @@ pub const Editor = struct {
             .git_diff_move_down,
             .git_diff_page_up,
             .git_diff_page_down,
+            .task_panel_scroll_up,
+            .task_panel_scroll_down,
+            .task_panel_page_up,
+            .task_panel_page_down,
+            .task_panel_previous_task,
+            .task_panel_next_task,
             => true,
             else => false,
         };
@@ -1222,6 +1230,9 @@ test "movement coalescing rejects prompt and overlay modes" {
         .GlobalSearch,
         .Help,
         .Terminal,
+        .GitGraph,
+        .GitDiff,
+        .TaskPanel,
     };
 
     for (rejected_modes) |mode| {
@@ -1368,7 +1379,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Help, .Terminal, .SaveConfirmation };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .GitGraph, .GitDiff, .TaskPanel, .Help, .Terminal, .SaveConfirmation };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());

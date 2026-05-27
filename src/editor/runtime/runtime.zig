@@ -4,6 +4,7 @@ const event_queue = @import("event_queue.zig");
 const syntax_worker = @import("syntax_worker.zig");
 const git_status_worker = @import("git_status_worker.zig");
 const git_diff_worker = @import("git_diff_worker.zig");
+const task_worker = @import("task_worker.zig");
 const lsp_manager = @import("../../lsp/manager.zig");
 const perf = @import("../../perf/perf.zig");
 
@@ -16,6 +17,7 @@ pub const EditorRuntime = struct {
     syntax_parse_worker: *syntax_worker.SyntaxParseWorker,
     git_worker: ?*git_status_worker.GitStatusWorker = null,
     git_diff_worker: ?*git_diff_worker.GitDiffWorker = null,
+    task_worker: task_worker.TaskWorker,
     lsp_mgr: ?lsp_manager.LspManager = null,
     fps_sample_start_ns: ?i96 = null,
     fps_frame_count: usize = 0,
@@ -60,6 +62,7 @@ pub const EditorRuntime = struct {
             .syntax_parse_worker = parser_worker,
             .git_worker = git_worker,
             .git_diff_worker = diff_worker,
+            .task_worker = task_worker.TaskWorker.init(allocator, io, queue),
             .lsp_mgr = mgr,
             .perf_sampler = perf.PerfSampler.initFromEnv(),
         };
@@ -74,6 +77,7 @@ pub const EditorRuntime = struct {
             worker.stop();
             self.git_diff_worker = null;
         }
+        self.task_worker.deinit();
         self.syntax_parse_worker.stop();
 
         if (self.lsp_mgr) |*mgr| {

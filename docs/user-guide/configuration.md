@@ -59,6 +59,7 @@ explorer_search
 search
 global_search
 git_diff
+task_panel
 git_graph
 todo_panel
 comments_panel

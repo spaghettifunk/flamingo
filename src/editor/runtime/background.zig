@@ -52,6 +52,30 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 };
                 if (editor.terminal_panel.visible) editor.markDirty(.partial);
             },
+            .task_started => |started| {
+                editor.state.task_manager.markStarted(started.id, started.started_at_ms);
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+            },
+            .task_output => |output| {
+                defer editor.allocator.free(output.bytes);
+                editor.state.task_manager.appendOutput(output.id, output.kind, output.bytes) catch |err| {
+                    logz.err().fmt("msg", "failed to append task output: {any}", .{err}).log();
+                };
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+            },
+            .task_finished => |finished| {
+                editor.state.task_manager.finish(finished.id, finished.status, finished.exit_code, finished.finished_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to finish task: {any}", .{err}).log();
+                };
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+            },
+            .task_failed_to_start => |failure| {
+                defer editor.allocator.free(failure.message);
+                editor.state.task_manager.failToStart(failure.id, failure.message, failure.finished_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to record task start failure: {any}", .{err}).log();
+                };
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+            },
             .syntax_parse_result => unreachable,
         }
     }

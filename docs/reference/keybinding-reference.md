@@ -174,6 +174,20 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `r` | `git_diff.refresh_panel` | Refresh diff. |
 | `enter` | `git_diff.open_selected` | Open selected file. |
 
+## Tasks
+
+| Key | Command | Description |
+| --- | --- | --- |
+| `esc`, `q` | `task_panel.close` | Close panel. |
+| `up`, `k` | `task_panel.scroll_up` | Scroll output up. |
+| `down`, `j` | `task_panel.scroll_down` | Scroll output down. |
+| `pageup`, `ctrl+u` | `task_panel.page_up` | Page output up. |
+| `pagedown`, `ctrl+d` | `task_panel.page_down` | Page output down. |
+| `[` | `task_panel.previous_task` | Select previous task. |
+| `]` | `task_panel.next_task` | Select next task. |
+| `r` | `task_panel.rerun` | Rerun selected task. |
+| `c`, `ctrl+c` | `task_panel.cancel` | Cancel running task. |
+
 ## Git Graph
 
 | Key | Command | Description |
