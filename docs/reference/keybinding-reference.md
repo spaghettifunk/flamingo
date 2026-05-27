@@ -162,6 +162,18 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `n` | `comments_panel.new` | Create from selection. |
 | `enter` | `comments_panel.open_selected` | Jump to anchor. |
 
+## Git Diff
+
+| Key | Command | Description |
+| --- | --- | --- |
+| `esc`, `q` | `git_diff.close` | Close panel. |
+| `up`, `k` | `git_diff.move_up` | Move selection up. |
+| `down`, `j` | `git_diff.move_down` | Move selection down. |
+| `pageup`, `ctrl+u` | `git_diff.page_up` | Page selection up. |
+| `pagedown`, `ctrl+d` | `git_diff.page_down` | Page selection down. |
+| `r` | `git_diff.refresh_panel` | Refresh diff. |
+| `enter` | `git_diff.open_selected` | Open selected file. |
+
 ## Git Graph
 
 | Key | Command | Description |
@@ -236,4 +248,3 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `s`, `S` | `save_confirmation.save` | Save then close. |
 | `d`, `D`, `enter` | `save_confirmation.discard` | Discard then close. |
 | `esc`, `n`, `N` | `save_confirmation.cancel` | Keep editing. |
-

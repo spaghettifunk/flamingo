@@ -37,7 +37,7 @@ After setup, main initializes terminal state, loads configuration, constructs th
 
 ## Editor State And Model
 
-The central mode enum lives in `src/editor/state/state.zig`. Confirmed modes include Dashboard, Normal, Insert, Command, Search, GlobalSearch, GitGraph, Help, Terminal, FilesystemPicker, Prompt, OpenFilePrompt, and SaveConfirmation.
+The central mode enum lives in `src/editor/state/state.zig`. Confirmed modes include Dashboard, Normal, Insert, Command, Search, GlobalSearch, GitDiff, GitGraph, Help, Terminal, FilesystemPicker, Prompt, OpenFilePrompt, and SaveConfirmation.
 
 The editor model is split between:
 
@@ -89,6 +89,7 @@ Feature state is mostly organized as editor modules:
 - Global search: `src/editor/global_search.zig`
 - TODO panel: `src/editor/todos.zig`
 - Comments: `src/editor/comments.zig`
+- Git Diff panel: `src/editor/git/workspace_diff.zig`
 - Git Graph: `src/editor/git_graph.zig`
 - Terminal panel: `src/editor/terminal_panel.zig`
 - Workspace metadata: `src/editor/workspace.zig`
@@ -114,4 +115,3 @@ The runtime loop is under `src/editor/runtime/`. Important files include:
 - `movement_coalesce.zig` and `key_profile.zig` for responsiveness and instrumentation helpers.
 
 Keep long-running work out of direct input handling and rendering. Prefer event queue handoff, worker state, and coalesced updates when the operation can take noticeable time.
-

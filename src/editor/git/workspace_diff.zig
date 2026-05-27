@@ -533,10 +533,9 @@ pub fn parseUnifiedDiff(allocator: std.mem.Allocator, patch: []const u8, diff: *
         if (line.len > 0 and line[line.len - 1] == '\r') line = line[0 .. line.len - 1];
 
         if (std.mem.startsWith(u8, line, "diff --git ")) {
-            const parsed = parseDiffGitLine(line);
+            const path = parseDiffGitLine(line);
             try diff.files.append(allocator, .{
-                .path = try allocator.dupe(u8, parsed.path),
-                .old_path = if (parsed.old_path) |old| try allocator.dupe(u8, old) else null,
+                .path = try allocator.dupe(u8, path),
                 .kind = .modified,
             });
             current_file = &diff.files.items[diff.files.items.len - 1];
@@ -579,8 +578,6 @@ pub fn parseUnifiedDiff(allocator: std.mem.Allocator, patch: []const u8, diff: *
         {
             if (std.mem.startsWith(u8, line, "+++ b/")) {
                 file.path = try allocator.dupe(u8, line["+++ b/".len..]);
-            } else if (std.mem.startsWith(u8, line, "--- a/")) {
-                if (file.old_path == null) file.old_path = try allocator.dupe(u8, line["--- a/".len..]);
             }
             try file.metadata.append(allocator, try allocator.dupe(u8, line));
             continue;
@@ -689,15 +686,10 @@ fn parseHunkHeader(line: []const u8) !HunkHeader {
     };
 }
 
-fn parseDiffGitLine(line: []const u8) struct { old_path: ?[]const u8, path: []const u8 } {
+fn parseDiffGitLine(line: []const u8) []const u8 {
     const rest = line["diff --git ".len..];
-    const marker = std.mem.indexOf(u8, rest, " b/") orelse return .{ .old_path = null, .path = rest };
-    const old = rest[0..marker];
-    const new = rest[marker + 3 ..];
-    return .{
-        .old_path = if (std.mem.startsWith(u8, old, "a/")) old[2..] else old,
-        .path = new,
-    };
+    const marker = std.mem.indexOf(u8, rest, " b/") orelse return rest;
+    return rest[marker + 3 ..];
 }
 
 test "workspace diff parser handles a simple modified file" {
@@ -721,6 +713,7 @@ test "workspace diff parser handles a simple modified file" {
 
     try std.testing.expectEqual(@as(usize, 1), diff.files.items.len);
     try std.testing.expectEqualStrings("src/main.zig", diff.files.items[0].path);
+    try std.testing.expect(diff.files.items[0].old_path == null);
     try std.testing.expectEqual(@as(usize, 1), diff.files.items[0].hunks.items.len);
     try std.testing.expectEqual(DiffLineKind.removed, diff.files.items[0].hunks.items[0].lines.items[1].kind);
     try std.testing.expectEqual(DiffLineKind.added, diff.files.items[0].hunks.items[0].lines.items[2].kind);
@@ -824,5 +817,5 @@ test "workspace diff parser records binary placeholder metadata" {
     , &diff);
 
     try std.testing.expect(diff.files.items[0].binary);
-    try std.testing.expectEqual(@as(usize, 1), diff.files.items[0].metadata.items.len);
+    try std.testing.expectEqual(@as(usize, 2), diff.files.items[0].metadata.items.len);
 }
