@@ -297,17 +297,17 @@ test "Editor: calculateGutterWidth boundary values" {
     defer ed.deinit();
     // No tabs to deinit, just the struct.
 
-    // min is 2 digits → 1 + 2 + 1 = 4
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(0));
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(1));
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(9));
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(10));
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(99));
-    // 3 digits → 1 + 3 + 1 = 5
-    try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
-    try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
-    // 4 digits → 1 + 4 + 1 = 6
-    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(1000));
+    // min is 2 digits -> 1 + 2 + 1 space + 1 diff marker + 1 = 6
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(0));
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(1));
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(9));
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(10));
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(99));
+    // 3 digits -> 1 + 3 + 1 space + 1 diff marker + 1 = 7
+    try std.testing.expectEqual(@as(usize, 7), ed.calculateGutterWidth(100));
+    try std.testing.expectEqual(@as(usize, 7), ed.calculateGutterWidth(999));
+    // 4 digits -> 1 + 4 + 1 space + 1 diff marker + 1 = 8
+    try std.testing.expectEqual(@as(usize, 8), ed.calculateGutterWidth(1000));
 }
 
 // ── clampScroll ───────────────────────────────────────────────────────────────

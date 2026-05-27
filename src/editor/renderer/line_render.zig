@@ -160,6 +160,17 @@ pub fn renderVirtualLine(editor: anytype, tab: *Tab, buffer_line_idx: usize, row
         gutter_col += num_digits - gutter.len;
     }
     editor.renderer.screen.writeText(row, start_col + gutter_col, gutter, if (is_current) .gutter_current else .dim);
+    if (tab.buf.filename) |filename| {
+        if (editor.state.git_diff.getLineChange(filename, buffer_line_idx)) |change| {
+            const marker_col = start_col + ctx.gutter_width -| 2;
+            const style: render_mod.RenderStyle = switch (change.kind) {
+                .added => .git_diff_added,
+                .modified => .git_diff_modified,
+                .deleted => .git_diff_deleted,
+            };
+            editor.renderer.screen.setGlyph(row, marker_col, "▌", style);
+        }
+    }
 
     const content_col = start_col + ctx.gutter_width;
     const content_width = ctx.buf_width -| ctx.gutter_width;

@@ -170,7 +170,7 @@ test "CommandPopup prefix suggestions" {
     popup.close();
     try popup.open(allocator);
     try popup.appendChar(allocator, 'd');
-    try expectSuggestionNames(popup.suggestions.items, &.{ "deleteFile", "df" });
+    try expectSuggestionNames(popup.suggestions.items, &.{ "deleteFile", "df", "diff-refresh" });
 }
 
 test "CommandPopup suggestions include aliases and metadata descriptions" {
@@ -208,7 +208,7 @@ test "CommandPopup suggestions are metadata-backed and hide non-popup commands" 
 
     try popup.open(allocator);
     try popup.appendChar(allocator, 'g');
-    try expectSuggestionNames(popup.suggestions.items, &.{ "git-graph", "ggraph" });
+    try expectSuggestionNames(popup.suggestions.items, &.{ "git-graph", "ggraph", "git-diff-refresh", "git-refresh" });
 
     popup.close();
     try popup.open(allocator);

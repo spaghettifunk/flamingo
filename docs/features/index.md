@@ -11,8 +11,8 @@ Feature pages use a consistent structure: status, overview, usage, data/configur
 | [Global Search](global-search.md) | Partial |
 | [TODOs](todos.md) | Partial |
 | [Comments](comments.md) | Partial |
+| [Git Diff Gutter](git-diff-gutter.md) | Partial |
 | [Git Graph](git-graph.md) | Partial |
 | [Terminal](terminal.md) | Partial |
 | [LSP](lsp.md) | Partial |
 | [Syntax Highlighting](syntax-highlighting.md) | Implemented |
-

@@ -28,6 +28,17 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 editor.state.git_snapshot = snapshot;
                 editor.markDirty(.partial);
             },
+            .git_diff_result => |result| {
+                var owned = result;
+                defer owned.deinit(editor.allocator);
+                const explicit = owned.explicit;
+                const status = owned.status;
+                try editor.state.git_diff.applyRefreshResult(&owned);
+                if (explicit) {
+                    editor.setGitDiffRefreshStatus(status);
+                }
+                editor.markDirty(.partial);
+            },
             .terminal_output => |output| {
                 defer editor.allocator.free(output.bytes);
                 editor.terminal_panel.appendOutput(output.bytes) catch |err| {

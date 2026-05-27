@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const event_queue = @import("event_queue.zig");
 const syntax_worker = @import("syntax_worker.zig");
 const git_status_worker = @import("git_status_worker.zig");
+const git_diff_worker = @import("git_diff_worker.zig");
 const lsp_manager = @import("../../lsp/manager.zig");
 const perf = @import("../../perf/perf.zig");
 
@@ -14,6 +15,7 @@ pub const EditorRuntime = struct {
     event_queue: *event_queue.EventQueue,
     syntax_parse_worker: *syntax_worker.SyntaxParseWorker,
     git_worker: ?*git_status_worker.GitStatusWorker = null,
+    git_diff_worker: ?*git_diff_worker.GitDiffWorker = null,
     lsp_mgr: ?lsp_manager.LspManager = null,
     fps_sample_start_ns: ?i96 = null,
     fps_frame_count: usize = 0,
@@ -47,10 +49,17 @@ pub const EditorRuntime = struct {
             try git_status_worker.GitStatusWorker.start(allocator, io, queue);
         errdefer if (git_worker) |worker| worker.stop();
 
+        const diff_worker = if (builtin.is_test or !options.enable_git_worker)
+            null
+        else
+            try git_diff_worker.GitDiffWorker.start(allocator, io, queue);
+        errdefer if (diff_worker) |worker| worker.stop();
+
         return .{
             .event_queue = queue,
             .syntax_parse_worker = parser_worker,
             .git_worker = git_worker,
+            .git_diff_worker = diff_worker,
             .lsp_mgr = mgr,
             .perf_sampler = perf.PerfSampler.initFromEnv(),
         };
@@ -60,6 +69,10 @@ pub const EditorRuntime = struct {
         if (self.git_worker) |worker| {
             worker.stop();
             self.git_worker = null;
+        }
+        if (self.git_diff_worker) |worker| {
+            worker.stop();
+            self.git_diff_worker = null;
         }
         self.syntax_parse_worker.stop();
 

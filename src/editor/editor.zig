@@ -34,6 +34,7 @@ const runtime_mod = @import("runtime/runtime.zig");
 const renderer_mod = @import("renderer/renderer.zig");
 const terminal_panel_mod = @import("terminal_panel.zig");
 const icons_mod = @import("icons.zig");
+const git_diff = @import("git/diff_model.zig");
 
 pub const EditorMode = state_mod.EditorMode;
 pub const Pos = tab_mod.Pos;
@@ -214,7 +215,11 @@ pub const Editor = struct {
         self.clearAllMultiCursors();
         const added = try self.state.addTab(self.allocator, buf);
         self.markDirty(.full);
-        if (!added) return;
+        if (!added) {
+            self.queueGitDiffRefreshForCurrentTab(false);
+            return;
+        }
+        self.queueGitDiffRefreshForCurrentTab(false);
 
         if (self.runtime.lsp_mgr) |*mgr| {
             if (self.currentTab()) |tab| if (tab.buf.filename) |fname| {
@@ -342,6 +347,7 @@ pub const Editor = struct {
                     logz.err().fmt("msg", "Failed to notify save: {any}", .{err}).log();
                 };
             }
+            self.queueGitDiffRefreshForTab(tab, false);
             self.setStatus("Config saved. Restart Flamingo for all settings to take effect.");
             self.markDirty(.full);
             return;
@@ -353,6 +359,43 @@ pub const Editor = struct {
                 logz.err().fmt("msg", "Failed to notify save: {any}", .{err}).log();
             };
         }
+        self.queueGitDiffRefreshForTab(tab, false);
+    }
+
+    pub fn queueGitDiffRefreshForCurrentTab(self: *Editor, explicit: bool) void {
+        const tab = self.currentTab() orelse {
+            if (explicit) self.setStatus("Git diff refresh unavailable: no file");
+            return;
+        };
+        self.queueGitDiffRefreshForTab(tab, explicit);
+    }
+
+    pub fn queueGitDiffRefreshForTab(self: *Editor, tab: *Tab, explicit: bool) void {
+        const filename = tab.buf.filename orelse {
+            if (explicit) self.setStatus("Git diff refresh unavailable: no file");
+            return;
+        };
+        const worker = self.runtime.git_diff_worker orelse {
+            if (explicit) self.setStatus("Git diff refresh unavailable");
+            return;
+        };
+        worker.requestRefresh(filename, tab.buf.lines.items.len, explicit) catch |err| {
+            logz.debug().fmt("msg", "failed to queue git diff refresh: {any}", .{err}).log();
+            if (explicit) self.setStatus("Git diff refresh failed");
+        };
+    }
+
+    pub fn setGitDiffRefreshStatus(self: *Editor, status: git_diff.RefreshStatus) void {
+        self.setStatus(switch (status) {
+            .disabled => "Git diff unavailable: not a Git repository",
+            .clean => "Git diff refreshed: no unstaged changes",
+            .changed => "Git diff refreshed",
+            .untracked => "Git diff refreshed: untracked file",
+            .outside_repository => "Git diff unavailable: file is outside repository",
+            .git_unavailable => "Git executable not found",
+            .command_failed => "Git diff refresh failed",
+            .output_too_large => "Git diff output too large",
+        });
     }
 
     pub fn setStatus(self: *Editor, message: []const u8) void {
@@ -679,7 +722,7 @@ pub const Editor = struct {
         return picker_help_popups.helpPopupBodyRows(self);
     }
 
-    /// Calculates total gutter width: 1 space + num_digits + 1 space separator.
+    /// Calculates total gutter width: 1 space + num_digits + 1 space + 1 git diff marker + 1 space separator.
     pub fn calculateGutterWidth(self: *const Editor, total_lines: usize) usize {
         _ = self;
         return renderer_mod.calculateGutterWidth(total_lines);
@@ -809,13 +852,13 @@ test "Editor.calculateGutterWidth" {
     ed.width = 120;
     ed.height = 24;
 
-    // 1-99 lines => 2 digits min => 1 + 2 + 1 = 4
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(5));
-    try std.testing.expectEqual(@as(usize, 4), ed.calculateGutterWidth(99));
+    // 1-99 lines => 2 digits min => 1 + 2 + 1 space + 1 marker + 1 = 6
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(5));
+    try std.testing.expectEqual(@as(usize, 6), ed.calculateGutterWidth(99));
 
-    // 100-999 lines => 3 digits => 1 + 3 + 1 = 5
-    try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(100));
-    try std.testing.expectEqual(@as(usize, 5), ed.calculateGutterWidth(999));
+    // 100-999 lines => 3 digits => 1 + 3 + 1 space + 1 marker + 1 = 7
+    try std.testing.expectEqual(@as(usize, 7), ed.calculateGutterWidth(100));
+    try std.testing.expectEqual(@as(usize, 7), ed.calculateGutterWidth(999));
 }
 
 test "tab bar scroll follows active tab with variable label widths" {
@@ -1073,7 +1116,7 @@ test "virtual renderer starts visible line content at horizontal scroll column" 
     tab.mainCursor().row = 0;
     tab.mainCursor().col = 5;
     tab.scroll_col = 5;
-    ed.width = 10; // 4-cell gutter leaves 6 content columns.
+    ed.width = 10; // 6-cell gutter leaves 4 content columns.
     ed.height = 8;
 
     var out = std.Io.Writer.Allocating.init(std.testing.allocator);
@@ -1081,7 +1124,7 @@ test "virtual renderer starts visible line content at horizontal scroll column" 
 
     try ed.renderBenchmarkFrame(&out.writer);
     const rendered = out.written();
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "56789a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "5678") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "012345") == null);
 }
 

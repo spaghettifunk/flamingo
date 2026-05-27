@@ -22,6 +22,7 @@ pub const Command = enum {
     comment,
     comments,
     git_graph,
+    git_diff_refresh,
     rename_file,
     delete_file,
     new_file,
@@ -41,6 +42,7 @@ pub const Command = enum {
             .comment => .comment_create,
             .comments => .comments_open,
             .git_graph => .git_graph_open,
+            .git_diff_refresh => .git_diff_refresh,
             .rename_file => .file_rename,
             .delete_file => .file_delete,
             .new_file => .file_new,
@@ -78,6 +80,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .comment_create => .comment,
         .comments_open => .comments,
         .git_graph_open => .git_graph,
+        .git_diff_refresh => .git_diff_refresh,
         .file_rename => .rename_file,
         .file_delete => .delete_file,
         .file_new => .new_file,
@@ -272,6 +275,12 @@ pub fn execute(ed: *editor.Editor) !void {
         .git_graph => {
             if (!requireNoMoreArgs(ed, &it)) return;
             try openGitGraphPanel(ed);
+        },
+        .git_diff_refresh => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            ed.queueGitDiffRefreshForCurrentTab(true);
+            ed.state.mode = .Normal;
+            ed.markDirty(.partial);
         },
         .new_file => {
             const input_path = requireArg(ed, &it) orelse return;

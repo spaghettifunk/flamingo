@@ -19,6 +19,7 @@ const workspace_mod = @import("../workspace.zig");
 const todos_mod = @import("../todos.zig");
 const comments_mod = @import("../comments.zig");
 const git_graph_mod = @import("../git_graph.zig");
+const git_diff_mod = @import("../git/diff_service.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -66,6 +67,7 @@ pub const EditorState = struct {
     force_full_render: bool = true,
     lsp_ui: lsp_state.LspUiState,
     git_snapshot: ?git_status.Snapshot = null,
+    git_diff: git_diff_mod.DiffService,
     next_syntax_buffer_id: u64 = 1,
     pending_normal_sequence: normal_sequence.KeySequence = .{},
     jump_history: jump_history_mod.JumpHistory = .{},
@@ -77,6 +79,7 @@ pub const EditorState = struct {
             .search_system = search.SearchSystem.init(allocator),
             .lsp_ui = lsp_state.LspUiState.init(allocator),
             .git_graph_panel = git_graph_mod.GitGraphPanel.init(allocator),
+            .git_diff = git_diff_mod.DiffService.init(allocator),
         };
     }
 
@@ -86,6 +89,7 @@ pub const EditorState = struct {
             snapshot.deinit();
             self.git_snapshot = null;
         }
+        self.git_diff.deinit();
         self.jump_history.deinit(allocator);
 
         for (self.tabs.items) |*tab| {

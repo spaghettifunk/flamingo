@@ -20,6 +20,9 @@ Command metadata lives in `src/editor/commands.zig`. Colon command execution liv
 | `:todos` | none | Open workspace TODO panel. | `src/editor/command.zig` |
 | `:comment` | none | Create comment from active text selection. | `src/editor/command.zig` |
 | `:comments` | optional `refresh` | Open comments panel or reload `.flamingo/comments.json`. | `src/editor/command.zig` |
+| `:git-diff-refresh` | none | Refresh Git diff gutter markers for the current file. | `src/editor/command.zig` |
+| `:diff-refresh` | none | Alias for `:git-diff-refresh`. | `src/editor/commands.zig` |
+| `:git-refresh` | none | Alias for `:git-diff-refresh`. | `src/editor/commands.zig` |
 | `:git-graph` | none | Open read-only Git commit graph. | `src/editor/command.zig` |
 | `:ggraph` | none | Alias for `:git-graph`. | `src/editor/commands.zig` |
 | `:renameFile` | old path, new path | Rename a file and update open buffers. | `src/editor/command.zig` |
@@ -47,7 +50,7 @@ Canonical command names are the strings used in config keybinding tables. They a
 | Dashboard | `dashboard.new_file`, `dashboard.open_file`, `dashboard.settings` | `src/editor/commands.zig` |
 | TODOs | `todos.open`, `todo_panel.new`, `todo_panel.toggle`, `todo_panel.open_selected` | `src/editor/commands.zig` |
 | Comments | `comments.create`, `comments.open`, `comments_panel.reply`, `comments_panel.open_selected` | `src/editor/commands.zig` |
-| Git | `git_graph.open`, `git_graph.refresh`, `git_graph.toggle_details` | `src/editor/commands.zig` |
+| Git | `git_diff.refresh`, `git_graph.open`, `git_graph.refresh`, `git_graph.toggle_details` | `src/editor/commands.zig` |
 | Terminal | `terminal.toggle`, `terminal.unfocus`, `terminal.scroll_bottom` | `src/editor/commands.zig` |
 | Completion and LSP | `completion.trigger`, `completion.accept`, `lsp.goto_definition` | `src/editor/commands.zig` |
 | Prompt and picker | `prompt.submit`, `picker.accept`, `save_confirmation.save` | `src/editor/commands.zig` |

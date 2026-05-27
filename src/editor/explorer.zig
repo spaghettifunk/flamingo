@@ -446,7 +446,7 @@ pub const Explorer = struct {
                 const marker = gitMarker(icons, node_status);
                 if (marker.len > 0) {
                     const pad = width - current_len - 2;
-                    _ = writeClippedToScreen(screen, row, start_col + current_len + pad, start_col + width, marker, markerStyle(node_status));
+                    _ = writeClippedToScreen(screen, row, start_col + current_len + pad, start_col + width, marker, markerStyle(node_status, selected));
                 }
             }
 
@@ -588,10 +588,11 @@ fn rowBgStyle(selected: bool) render_mod.RenderStyle {
     return if (selected) .explorer_selected_focus else .explorer_bg;
 }
 
-fn markerStyle(state: ?git_status.FileState) render_mod.RenderStyle {
-    return switch (state orelse return .explorer_bg) {
-        .modified, .untracked => .git_modified,
-        .ignored => .git_ignored,
+fn markerStyle(state: ?git_status.FileState, selected: bool) render_mod.RenderStyle {
+    return switch (state orelse return rowBgStyle(selected)) {
+        .modified => if (selected) .git_diff_modified_selected else .git_diff_modified,
+        .untracked => if (selected) .git_diff_added_selected else .git_diff_added,
+        .ignored => if (selected) .git_ignored_selected else .git_ignored,
     };
 }
 

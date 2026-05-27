@@ -1,5 +1,6 @@
 const std = @import("std");
 const keybindings = @import("keybindings.zig");
+const git_repository = @import("git/repository.zig");
 
 const unit_sep: u8 = 0x1f;
 const record_sep: u8 = 0x1e;
@@ -378,20 +379,9 @@ fn realPathOwned(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]
 }
 
 pub fn findRepositoryRootFromStart(allocator: std.mem.Allocator, io: std.Io, start_path: []const u8) ![]u8 {
-    var current = realPathOwned(allocator, io, start_path) catch try allocator.dupe(u8, start_path);
-    defer allocator.free(current);
-
-    while (true) {
-        if (try hasGitMarker(allocator, io, current)) {
-            return allocator.dupe(u8, current);
-        }
-        const parent = std.fs.path.dirname(current) orelse break;
-        if (std.mem.eql(u8, parent, current)) break;
-        const owned_parent = try allocator.dupe(u8, parent);
-        allocator.free(current);
-        current = owned_parent;
-    }
-    return Error.NotGitRepository;
+    var repo = (try git_repository.discover(allocator, io, start_path)) orelse return Error.NotGitRepository;
+    defer repo.deinit(allocator);
+    return allocator.dupe(u8, repo.root);
 }
 
 fn hasGitMarker(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !bool {

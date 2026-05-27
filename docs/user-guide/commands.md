@@ -38,6 +38,7 @@ Command arguments are split on spaces. File operation command paths reject empty
 | `:todos` | none | Open and focus the workspace TODO panel. |
 | `:comment` | none | Create a comment from the active selection in a supported prose file. |
 | `:comments` | optional `refresh` | Open the comments panel, or reload comments from disk. |
+| `:git-diff-refresh`, `:diff-refresh`, `:git-refresh` | none | Refresh Git diff gutter markers for the current file. |
 | `:git-graph`, `:ggraph` | none | Open the read-only Git commit graph panel. |
 | `:newFile`, `:nf` | path | Create a new file and open it. |
 | `:renameFile`, `:rf` | old path, new path | Rename a file and update open buffers. |

@@ -39,6 +39,7 @@ pub const CommandId = enum {
     git_graph_last,
     git_graph_refresh,
     git_graph_toggle_details,
+    git_diff_refresh,
     comments_panel_close,
     comments_panel_move_up,
     comments_panel_move_down,
@@ -230,8 +231,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 16;
-const command_line_visible_count = 17;
+const command_popup_visible_count = 17;
+const command_line_visible_count = 18;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -383,6 +384,16 @@ const command_metadata = [_]CommandMeta{
         .command_names = &.{"git-graph"},
         .aliases = &.{"ggraph"},
         .short_description = "Open read-only Git commit graph",
+        .category = .git,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .git_diff_refresh,
+        .canonical_name = "git_diff.refresh",
+        .command_names = &.{"git-diff-refresh"},
+        .aliases = &.{ "diff-refresh", "git-refresh" },
+        .short_description = "Refresh current file Git diff markers",
         .category = .git,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
@@ -1573,6 +1584,7 @@ test "command lookup resolves canonical names" {
     try std.testing.expectEqual(CommandId.navigation_goto_file_start, commandByCanonicalName("navigation.goto_file_start").?);
     try std.testing.expectEqual(CommandId.navigation_goto_definition, commandByCanonicalName("lsp.goto_definition").?);
     try std.testing.expectEqual(CommandId.fold_toggle_all, commandByCanonicalName("fold.toggle_all").?);
+    try std.testing.expectEqual(CommandId.git_diff_refresh, commandByCanonicalName("git_diff.refresh").?);
     try std.testing.expect(commandByCanonicalName("nope") == null);
 }
 
@@ -1596,6 +1608,9 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "comments", .id = .comments_open },
         .{ .name = "git-graph", .id = .git_graph_open },
         .{ .name = "ggraph", .id = .git_graph_open },
+        .{ .name = "git-diff-refresh", .id = .git_diff_refresh },
+        .{ .name = "diff-refresh", .id = .git_diff_refresh },
+        .{ .name = "git-refresh", .id = .git_diff_refresh },
         .{ .name = "newFile", .id = .file_new },
         .{ .name = "nf", .id = .file_new },
         .{ .name = "renameFile", .id = .file_rename },
@@ -1634,6 +1649,7 @@ test "command line visible commands preserve current popup order" {
         .comment_create,
         .comments_open,
         .git_graph_open,
+        .git_diff_refresh,
     };
 
     for (expected, 0..) |id, idx| {

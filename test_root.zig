@@ -22,6 +22,10 @@ test {
     _ = @import("src/editor/help.zig");
     _ = @import("src/editor/git_status.zig");
     _ = @import("src/editor/git_graph.zig");
+    _ = @import("src/editor/git/repository.zig");
+    _ = @import("src/editor/git/diff_model.zig");
+    _ = @import("src/editor/git/unified_diff_parser.zig");
+    _ = @import("src/editor/git/diff_service.zig");
     _ = @import("src/editor/workspace.zig");
     _ = @import("src/editor/todos.zig");
     _ = @import("src/editor/comments.zig");
