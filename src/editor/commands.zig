@@ -391,7 +391,7 @@ const command_metadata = [_]CommandMeta{
     .{
         .id = .git_diff_refresh,
         .canonical_name = "git_diff.refresh",
-        .command_names = &.{"git-diff-refresh"},
+        .command_names = &.{"gitdiff-refresh"},
         .aliases = &.{ "diff-refresh", "git-refresh" },
         .short_description = "Refresh current file Git diff markers",
         .category = .git,
@@ -1608,7 +1608,7 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "comments", .id = .comments_open },
         .{ .name = "git-graph", .id = .git_graph_open },
         .{ .name = "ggraph", .id = .git_graph_open },
-        .{ .name = "git-diff-refresh", .id = .git_diff_refresh },
+        .{ .name = "gitdiff-refresh", .id = .git_diff_refresh },
         .{ .name = "diff-refresh", .id = .git_diff_refresh },
         .{ .name = "git-refresh", .id = .git_diff_refresh },
         .{ .name = "newFile", .id = .file_new },

@@ -54,13 +54,13 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 
 ## Multi-Cursor & Selection
 
-| Action               | Keybinding                                   |
-| :------------------- | :------------------------------------------- |
-| **Add Cursor Above** | `CTRL + Option + Up`                         |
-| **Add Cursor Below** | `CTRL + Option + Down`                       |
+| Action                  | Keybinding                                                                          |
+| :---------------------- | :---------------------------------------------------------------------------------- |
+| **Add Cursor Above**    | `CTRL + Option + Up`                                                                |
+| **Add Cursor Below**    | `CTRL + Option + Down`                                                              |
 | **Add Next Occurrence** | `Option + D` in Normal mode (uses selection or word under cursor, then `i` to edit) |
-| **Extend Selection** | `Shift + Arrows` (works with word jumps too) |
-| **Clear Selections** | `Esc`                                        |
+| **Extend Selection**    | `Shift + Arrows` (works with word jumps too)                                        |
+| **Clear Selections**    | `Esc`                                                                               |
 
 ---
 
@@ -96,29 +96,29 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 
 Execute these by pressing `:` and typing the command followed by `Enter`.
 
-| Command                   | Alias     | Description                                                |
-| :------------------------ | :-------- | :--------------------------------------------------------- |
-| `:q`                      |           | Quit current tab / Dashboard                               |
-| `:qall`                   | `:qa`     | Quit all open tabs                                         |
-| `:q!`                     |           | Force quit (discard unsaved changes)                       |
-| `:w [path]`               |           | Write (Save) current buffer to [path] or its original file |
-| `:wall`                   | `:wa`     | Write (Save) all modified buffers                          |
-| `:wq [path]`              |           | Save and Quit                                              |
-| `:newFile <path>`         | `:nf`     | Create a new file at `<path>` and open it                  |
-| `:renameFile <old> <new>` | `:rf`     | Rename file from `<old>` to `<new>`                        |
-| `:deleteFile <path>`      | `:df`     | Delete file at `<path>`                                    |
-| `:search`                 |           | Open project-wide Global Search                            |
-| `:help`                   |           | Open the Help popup                                        |
-| `:font-info`              |           | Show icon mode and terminal font guidance                  |
-| `:git-diff-refresh`       | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers |
-| `:git-graph`              | `:ggraph` | Open the read-only Git commit graph panel                  |
-| `:todos`                  |           | Open/focus the workspace TODO panel                        |
-| `:comment`                |           | Create a comment from the active text selection            |
-| `:comments`               |           | Open/focus the workspace comments panel                    |
-| `:comments refresh`       |           | Reload `.flamingo/comments.json`                           |
-| `:<number>`               |           | Jump to line `<number>`                                    |
-| `:goto <number>`          |           | Jump to line `<number>`                                    |
-| `:line <number>`          |           | Jump to line `<number>`                                    |
+| Command                   | Alias                           | Description                                                |
+| :------------------------ | :------------------------------ | :--------------------------------------------------------- |
+| `:q`                      |                                 | Quit current tab / Dashboard                               |
+| `:qall`                   | `:qa`                           | Quit all open tabs                                         |
+| `:q!`                     |                                 | Force quit (discard unsaved changes)                       |
+| `:w [path]`               |                                 | Write (Save) current buffer to [path] or its original file |
+| `:wall`                   | `:wa`                           | Write (Save) all modified buffers                          |
+| `:wq [path]`              |                                 | Save and Quit                                              |
+| `:newFile <path>`         | `:nf`                           | Create a new file at `<path>` and open it                  |
+| `:renameFile <old> <new>` | `:rf`                           | Rename file from `<old>` to `<new>`                        |
+| `:deleteFile <path>`      | `:df`                           | Delete file at `<path>`                                    |
+| `:search`                 |                                 | Open project-wide Global Search                            |
+| `:help`                   |                                 | Open the Help popup                                        |
+| `:font-info`              |                                 | Show icon mode and terminal font guidance                  |
+| `:gitdiff-refresh`        | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers               |
+| `:git-graph`              | `:ggraph`                       | Open the read-only Git commit graph panel                  |
+| `:todos`                  |                                 | Open/focus the workspace TODO panel                        |
+| `:comment`                |                                 | Create a comment from the active text selection            |
+| `:comments`               |                                 | Open/focus the workspace comments panel                    |
+| `:comments refresh`       |                                 | Reload `.flamingo/comments.json`                           |
+| `:<number>`               |                                 | Jump to line `<number>`                                    |
+| `:goto <number>`          |                                 | Jump to line `<number>`                                    |
+| `:line <number>`          |                                 | Jump to line `<number>`                                    |
 
 ---
 
@@ -194,13 +194,13 @@ Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.or
 
 ### Git Diff Gutter
 
-| Color | Meaning |
-| :---- | :------ |
-| Green | Added line |
-| Yellow | Modified line |
-| Red | Deleted line boundary |
+| Color  | Meaning               |
+| :----- | :-------------------- |
+| Green  | Added line            |
+| Yellow | Modified line         |
+| Red    | Deleted line boundary |
 
-Diff markers appear beside line numbers for files opened inside a Git repository. They refresh on open, after saving, and with `:git-diff-refresh`.
+Diff markers appear beside line numbers for files opened inside a Git repository. They refresh on open, after saving, and with `:gitdiff-refresh`.
 
 ### LSP Completion
 

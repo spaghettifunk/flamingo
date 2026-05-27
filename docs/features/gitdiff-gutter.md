@@ -10,11 +10,11 @@ The Git diff gutter marks unstaged working-tree changes for the current file whe
 
 Markers appear as a thin colored rectangle beside the line numbers:
 
-| Color | Meaning |
-| --- | --- |
-| Green | Added line |
-| Yellow | Modified line |
-| Red | Deleted line boundary |
+| Color  | Meaning               |
+| ------ | --------------------- |
+| Green  | Added line            |
+| Yellow | Modified line         |
+| Red    | Deleted line boundary |
 
 Deleted lines no longer exist in the buffer, so the marker is attached to the nearest visible line boundary.
 
@@ -25,7 +25,7 @@ Open a file inside a Git repository. Diff markers refresh when a file is opened 
 Manual refresh:
 
 ```text
-:git-diff-refresh
+:gitdiff-refresh
 :diff-refresh
 :git-refresh
 ```
