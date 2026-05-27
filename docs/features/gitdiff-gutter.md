@@ -47,5 +47,6 @@ Repository detection walks upward from the file path and supports normal `.git` 
 ## Limitations
 
 - Only unstaged working-tree changes are shown.
-- Staged changes, staging operations, inline word diffs, and a full diff panel are not implemented yet.
+- Staged changes, staging operations, and inline word diffs are not implemented yet.
+- Use `:gitdiff` for a read-only workspace diff panel.
 - The feature depends on the `git` executable, but missing Git or non-Git folders should not prevent editing.

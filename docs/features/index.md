@@ -12,6 +12,7 @@ Feature pages use a consistent structure: status, overview, usage, data/configur
 | [TODOs](todos.md)                             | Partial     |
 | [Comments](comments.md)                       | Partial     |
 | [Git Diff Gutter](gitdiff-gutter.md)          | Partial     |
+| [Git Diff Panel](git-diff-panel.md)           | Partial     |
 | [Git Graph](git-graph.md)                     | Partial     |
 | [Terminal](terminal.md)                       | Partial     |
 | [LSP](lsp.md)                                 | Partial     |

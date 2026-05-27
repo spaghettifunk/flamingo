@@ -135,6 +135,7 @@ pub fn contextLabel(context: commands.CommandContext) []const u8 {
         .explorer_search => "explorer search",
         .search => "search",
         .global_search => "global search",
+        .git_diff => "git diff",
         .git_graph => "git graph",
         .todo_panel => "todo panel",
         .comments_panel => "comments panel",

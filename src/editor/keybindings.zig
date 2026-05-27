@@ -839,6 +839,20 @@ const default_bindings = [_]Binding{
     .{ .context = .comments_panel, .sequence = keyChar('n'), .command = .comments_panel_new },
     .{ .context = .comments_panel, .sequence = keySpecial(.Enter), .command = .comments_panel_open_selected },
 
+    // Git Diff.
+    .{ .context = .git_diff, .sequence = keySpecial(.Esc), .command = .git_diff_close },
+    .{ .context = .git_diff, .sequence = keyChar('q'), .command = .git_diff_close },
+    .{ .context = .git_diff, .sequence = keySpecial(.Up), .command = .git_diff_move_up },
+    .{ .context = .git_diff, .sequence = keyChar('k'), .command = .git_diff_move_up },
+    .{ .context = .git_diff, .sequence = keySpecial(.Down), .command = .git_diff_move_down },
+    .{ .context = .git_diff, .sequence = keyChar('j'), .command = .git_diff_move_down },
+    .{ .context = .git_diff, .sequence = keySpecial(.PageUp), .command = .git_diff_page_up },
+    .{ .context = .git_diff, .sequence = ctrlChar('u'), .command = .git_diff_page_up },
+    .{ .context = .git_diff, .sequence = keySpecial(.PageDown), .command = .git_diff_page_down },
+    .{ .context = .git_diff, .sequence = ctrlChar('d'), .command = .git_diff_page_down },
+    .{ .context = .git_diff, .sequence = keyChar('r'), .command = .git_diff_refresh_panel },
+    .{ .context = .git_diff, .sequence = keySpecial(.Enter), .command = .git_diff_open_selected },
+
     // Git Graph.
     .{ .context = .git_graph, .sequence = keySpecial(.Esc), .command = .git_graph_close },
     .{ .context = .git_graph, .sequence = keyChar('q'), .command = .git_graph_close },

@@ -21,6 +21,7 @@ pub const Command = enum {
     todos,
     comment,
     comments,
+    git_diff,
     git_graph,
     git_diff_refresh,
     rename_file,
@@ -41,6 +42,7 @@ pub const Command = enum {
             .todos => .todos_open,
             .comment => .comment_create,
             .comments => .comments_open,
+            .git_diff => .git_diff_open,
             .git_graph => .git_graph_open,
             .git_diff_refresh => .git_diff_refresh,
             .rename_file => .file_rename,
@@ -79,6 +81,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .todos_open => .todos,
         .comment_create => .comment,
         .comments_open => .comments,
+        .git_diff_open => .git_diff,
         .git_graph_open => .git_graph,
         .git_diff_refresh => .git_diff_refresh,
         .file_rename => .rename_file,
@@ -272,6 +275,10 @@ pub fn execute(ed: *editor.Editor) !void {
             ed.terminal_panel.blur();
             ed.markDirty(.full);
         },
+        .git_diff => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            try openGitDiffPanel(ed);
+        },
         .git_graph => {
             if (!requireNoMoreArgs(ed, &it)) return;
             try openGitGraphPanel(ed);
@@ -449,6 +456,22 @@ pub fn openGitGraphPanel(ed: *editor.Editor) !void {
         else => return err,
     };
     ed.state.mode = .GitGraph;
+    ed.state.explorer_focused = false;
+    ed.state.todo_panel.focused = false;
+    ed.state.comments_panel.focused = false;
+    ed.terminal_panel.blur();
+    ed.markDirty(.full);
+}
+
+pub fn openGitDiffPanel(ed: *editor.Editor) !void {
+    const explorer_root = if (ed.state.tree) |tree| tree.root_path else null;
+    const current_file = if (ed.currentTab()) |tab| tab.buf.filename else null;
+    try ed.state.git_diff_panel.open(ed.allocator, ed.io, .{
+        .project_root = ed.state.project_root,
+        .explorer_root = explorer_root,
+        .current_file = current_file,
+    });
+    ed.state.mode = .GitDiff;
     ed.state.explorer_focused = false;
     ed.state.todo_panel.focused = false;
     ed.state.comments_panel.focused = false;
@@ -702,6 +725,7 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.search, Command.fromString("search").?);
     try std.testing.expectEqual(Command.help, Command.fromString("help").?);
     try std.testing.expectEqual(Command.todos, Command.fromString("todos").?);
+    try std.testing.expectEqual(Command.git_diff, Command.fromString("gitdiff").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("renameFile").?);
     try std.testing.expectEqual(Command.rename_file, Command.fromString("rf").?);
     try std.testing.expectEqual(Command.delete_file, Command.fromString("deleteFile").?);

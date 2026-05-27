@@ -513,6 +513,8 @@ pub const Editor = struct {
             .comments_panel
         else if (self.state.mode == .GitGraph)
             .git_graph
+        else if (self.state.mode == .GitDiff)
+            .git_diff
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -538,6 +540,10 @@ pub const Editor = struct {
             .git_graph_move_down,
             .git_graph_page_up,
             .git_graph_page_down,
+            .git_diff_move_up,
+            .git_diff_move_down,
+            .git_diff_page_up,
+            .git_diff_page_down,
             => true,
             else => false,
         };

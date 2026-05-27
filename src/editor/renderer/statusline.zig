@@ -60,6 +60,7 @@ pub fn buildStatusText(editor: anytype, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
         .Command => "COMMAND",
         .GlobalSearch => "GLOBAL SEARCH",
         .GitGraph => "GIT",
+        .GitDiff => "GIT DIFF",
         .Help => "HELP",
         .FilesystemPicker => "FILES",
         .Prompt => "PROMPT",
@@ -85,6 +86,7 @@ pub fn statusModeLabel(editor: anytype) []const u8 {
         .Search => "SEARCH",
         .GlobalSearch => "GLOBAL",
         .GitGraph => "GIT",
+        .GitDiff => "DIFF",
         .Help => "HELP",
         .FilesystemPicker => "FILES",
         .Prompt => "PROMPT",
@@ -96,7 +98,7 @@ pub fn statusModeLabel(editor: anytype) []const u8 {
 pub fn statusModeStyle(editor: anytype) render_mod.RenderStyle {
     return switch (editor.state.mode) {
         .Insert => .status_mode_insert,
-        .Command, .FilesystemPicker, .Prompt, .Help, .Terminal, .GitGraph => .status_mode_command,
+        .Command, .FilesystemPicker, .Prompt, .Help, .Terminal, .GitGraph, .GitDiff => .status_mode_command,
         .Search, .GlobalSearch => .status_mode_search,
         else => .status_mode_normal,
     };
@@ -105,7 +107,7 @@ pub fn statusModeStyle(editor: anytype) render_mod.RenderStyle {
 pub fn statusModeSepStyle(editor: anytype) render_mod.RenderStyle {
     return switch (editor.state.mode) {
         .Insert => .status_sep_insert,
-        .Command, .FilesystemPicker, .Prompt, .Help, .Terminal, .GitGraph => .status_sep_command,
+        .Command, .FilesystemPicker, .Prompt, .Help, .Terminal, .GitGraph, .GitDiff => .status_sep_command,
         .Search, .GlobalSearch => .status_sep_search,
         else => .status_sep_normal,
     };
@@ -134,6 +136,7 @@ pub fn statusContext(editor: anytype) ?[]const u8 {
     if (editor.state.mode == .Prompt) return @tagName(editor.state.prompt_popup.kind);
     if (editor.state.mode == .Command) return "command";
     if (editor.state.mode == .GitGraph) return "git_graph";
+    if (editor.state.mode == .GitDiff) return "git_diff";
     if (editor.state.mode == .Help) return "help";
     if (editor.state.mode == .Search) return "search";
     if (editor.state.mode == .GlobalSearch) return "global_search";

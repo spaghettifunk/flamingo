@@ -29,6 +29,14 @@ pub const CommandId = enum {
     comment_create,
     comments_open,
     comments_refresh,
+    git_diff_open,
+    git_diff_close,
+    git_diff_move_up,
+    git_diff_move_down,
+    git_diff_page_up,
+    git_diff_page_down,
+    git_diff_refresh_panel,
+    git_diff_open_selected,
     git_graph_open,
     git_graph_close,
     git_graph_move_up,
@@ -203,6 +211,7 @@ pub const CommandContext = enum {
     explorer_search,
     search,
     global_search,
+    git_diff,
     git_graph,
     help,
     todo_panel,
@@ -231,8 +240,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 17;
-const command_line_visible_count = 18;
+const command_popup_visible_count = 18;
+const command_line_visible_count = 19;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -375,6 +384,15 @@ const command_metadata = [_]CommandMeta{
         .command_names = &.{"comments"},
         .short_description = "Open comments panel",
         .category = .comments,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .git_diff_open,
+        .canonical_name = "git_diff.open",
+        .command_names = &.{"gitdiff"},
+        .short_description = "Open workspace Git diff",
+        .category = .git,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
     },
@@ -771,6 +789,55 @@ const command_metadata = [_]CommandMeta{
         .short_description = "Jump to selected comment anchor",
         .category = .comments,
         .contexts = &.{.comments_panel},
+    },
+    .{
+        .id = .git_diff_close,
+        .canonical_name = "git_diff.close",
+        .short_description = "Close Git Diff",
+        .category = .git,
+        .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .git_diff_move_up,
+        .canonical_name = "git_diff.move_up",
+        .short_description = "Move Git Diff selection up",
+        .category = .git,
+        .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .git_diff_move_down,
+        .canonical_name = "git_diff.move_down",
+        .short_description = "Move Git Diff selection down",
+        .category = .git,
+        .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .git_diff_page_up,
+        .canonical_name = "git_diff.page_up",
+        .short_description = "Page Git Diff up",
+        .category = .git,
+        .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .git_diff_page_down,
+        .canonical_name = "git_diff.page_down",
+        .short_description = "Page Git Diff down",
+        .category = .git,
+        .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .git_diff_refresh_panel,
+        .canonical_name = "git_diff.refresh_panel",
+        .short_description = "Refresh Git Diff",
+        .category = .git,
+        .contexts = &.{.git_diff},
+    },
+    .{
+        .id = .git_diff_open_selected,
+        .canonical_name = "git_diff.open_selected",
+        .short_description = "Open selected Git Diff file",
+        .category = .git,
+        .contexts = &.{.git_diff},
     },
     .{
         .id = .git_graph_close,
@@ -1584,6 +1651,7 @@ test "command lookup resolves canonical names" {
     try std.testing.expectEqual(CommandId.navigation_goto_file_start, commandByCanonicalName("navigation.goto_file_start").?);
     try std.testing.expectEqual(CommandId.navigation_goto_definition, commandByCanonicalName("lsp.goto_definition").?);
     try std.testing.expectEqual(CommandId.fold_toggle_all, commandByCanonicalName("fold.toggle_all").?);
+    try std.testing.expectEqual(CommandId.git_diff_open, commandByCanonicalName("git_diff.open").?);
     try std.testing.expectEqual(CommandId.git_diff_refresh, commandByCanonicalName("git_diff.refresh").?);
     try std.testing.expect(commandByCanonicalName("nope") == null);
 }
@@ -1606,6 +1674,7 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "todos", .id = .todos_open },
         .{ .name = "comment", .id = .comment_create },
         .{ .name = "comments", .id = .comments_open },
+        .{ .name = "gitdiff", .id = .git_diff_open },
         .{ .name = "git-graph", .id = .git_graph_open },
         .{ .name = "ggraph", .id = .git_graph_open },
         .{ .name = "gitdiff-refresh", .id = .git_diff_refresh },
@@ -1648,6 +1717,7 @@ test "command line visible commands preserve current popup order" {
         .file_new,
         .comment_create,
         .comments_open,
+        .git_diff_open,
         .git_graph_open,
         .git_diff_refresh,
     };

@@ -68,6 +68,7 @@ Supported contexts:
 | `explorer_search` | Explorer search prompt controls. | Implemented |
 | `search` | Current-buffer search controls. | Implemented |
 | `global_search` | Project search controls. | Implemented |
+| `git_diff` | Git Diff panel controls. | Implemented |
 | `git_graph` | Git Graph panel controls. | Implemented |
 | `todo_panel` | TODO panel controls. | Implemented |
 | `comments_panel` | Comments panel controls. | Implemented |

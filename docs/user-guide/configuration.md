@@ -58,6 +58,7 @@ explorer
 explorer_search
 search
 global_search
+git_diff
 git_graph
 todo_panel
 comments_panel

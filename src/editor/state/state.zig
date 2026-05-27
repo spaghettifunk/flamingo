@@ -20,6 +20,7 @@ const todos_mod = @import("../todos.zig");
 const comments_mod = @import("../comments.zig");
 const git_graph_mod = @import("../git_graph.zig");
 const git_diff_mod = @import("../git/diff_service.zig");
+const workspace_diff_mod = @import("../git/workspace_diff.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -32,6 +33,7 @@ pub const EditorMode = enum {
     Search,
     GlobalSearch,
     GitGraph,
+    GitDiff,
     Help,
     Terminal,
     SaveConfirmation,
@@ -62,6 +64,7 @@ pub const EditorState = struct {
     todo_panel: todos_mod.TodoPanel = .{},
     comments_panel: comments_mod.CommentsPanel = .{},
     git_graph_panel: git_graph_mod.GitGraphPanel,
+    git_diff_panel: workspace_diff_mod.GitDiffPanel,
     clipboard: ?[]u8 = null,
     render_dirty: bool = true,
     force_full_render: bool = true,
@@ -79,6 +82,7 @@ pub const EditorState = struct {
             .search_system = search.SearchSystem.init(allocator),
             .lsp_ui = lsp_state.LspUiState.init(allocator),
             .git_graph_panel = git_graph_mod.GitGraphPanel.init(allocator),
+            .git_diff_panel = workspace_diff_mod.GitDiffPanel.init(allocator),
             .git_diff = git_diff_mod.DiffService.init(allocator),
         };
     }
@@ -110,6 +114,7 @@ pub const EditorState = struct {
         self.todo_panel.deinit(allocator);
         self.comments_panel.deinit(allocator);
         self.git_graph_panel.deinit();
+        self.git_diff_panel.deinit();
         if (self.search_system) |*s| {
             s.deinit();
             self.search_system = null;

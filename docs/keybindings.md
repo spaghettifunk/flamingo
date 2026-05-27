@@ -110,6 +110,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:search`                 |                                 | Open project-wide Global Search                            |
 | `:help`                   |                                 | Open the Help popup                                        |
 | `:font-info`              |                                 | Show icon mode and terminal font guidance                  |
+| `:gitdiff`                |                                 | Open the workspace Git Diff panel                          |
 | `:gitdiff-refresh`        | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers               |
 | `:git-graph`              | `:ggraph`                       | Open the read-only Git commit graph panel                  |
 | `:todos`                  |                                 | Open/focus the workspace TODO panel                        |
@@ -201,6 +202,18 @@ Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.or
 | Red    | Deleted line boundary |
 
 Diff markers appear beside line numbers for files opened inside a Git repository. They refresh on open, after saving, and with `:gitdiff-refresh`.
+
+### Git Diff Panel
+
+| Action              | Keybinding              |
+| :------------------ | :---------------------- |
+| Close panel         | `q`, `Esc`              |
+| Move selection up   | `k`, `Up`               |
+| Move selection down | `j`, `Down`             |
+| Page up             | `PageUp`, `Ctrl+u`      |
+| Page down           | `PageDown`, `Ctrl+d`    |
+| Refresh diff        | `r`                     |
+| Open selected file  | `Enter`                 |
 
 ### LSP Completion
 

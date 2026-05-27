@@ -86,6 +86,17 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             => true,
             else => false,
         },
+        .git_diff => switch (id) {
+            .git_diff_close,
+            .git_diff_move_up,
+            .git_diff_move_down,
+            .git_diff_page_up,
+            .git_diff_page_down,
+            .git_diff_refresh_panel,
+            .git_diff_open_selected,
+            => true,
+            else => false,
+        },
         .explorer => switch (id) {
             .explorer_move_up,
             .explorer_move_down,
@@ -233,6 +244,7 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .todo_panel,
         .comments_panel,
         .git_graph,
+        .git_diff,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -378,6 +390,10 @@ fn gitGraphActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) G
             return .none;
         },
     }
+}
+
+fn gitDiffActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .git_diff, event);
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1313,8 +1329,18 @@ fn gitGraphPageRows(ed: *const editor.Editor) usize {
     return @max(@as(usize, 1), (ed.height * 70) / 100 -| 6);
 }
 
+fn gitDiffPageRows(ed: *const editor.Editor) usize {
+    return @max(@as(usize, 1), (ed.height * 70) / 100 -| 6);
+}
+
 fn closeGitGraph(ed: *editor.Editor) void {
     ed.state.git_graph_panel.close();
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn closeGitDiff(ed: *editor.Editor) void {
+    ed.state.git_diff_panel.close();
     ed.state.mode = .Normal;
     ed.markDirty(.full);
 }
@@ -1365,6 +1391,105 @@ fn executeGitGraphActionCommand(ed: *editor.Editor, command: commands.CommandId)
             _ = ed.state.git_graph_panel.toggleDetails();
             ed.markDirty(.full);
         },
+        else => unreachable,
+    }
+}
+
+const GitDiffOpenTarget = struct {
+    path: []const u8,
+    line: ?usize = null,
+    deleted: bool = false,
+};
+
+fn selectedGitDiffOpenTarget(ed: *editor.Editor) ?GitDiffOpenTarget {
+    const panel = &ed.state.git_diff_panel;
+    const row = panel.selectedRow() orelse return null;
+    const path = row.file_path orelse return null;
+    var target_line = row.new_line;
+    if (target_line == null and panel.selected_index > 0) {
+        var index = panel.selected_index;
+        while (index > 0) {
+            index -= 1;
+            const candidate = panel.rows.items[index];
+            const candidate_path = candidate.file_path orelse continue;
+            if (!std.mem.eql(u8, candidate_path, path)) break;
+            if (candidate.new_line) |line| {
+                target_line = line;
+                break;
+            }
+        }
+    }
+    return .{
+        .path = path,
+        .line = target_line,
+        .deleted = row.change_kind != null and row.change_kind.? == .deleted,
+    };
+}
+
+fn openSelectedGitDiffFile(ed: *editor.Editor) !void {
+    const target = selectedGitDiffOpenTarget(ed) orelse return;
+    if (target.deleted) {
+        ed.state.status_message = "Deleted file cannot be opened from the working tree";
+        return;
+    }
+    const root = ed.state.git_diff_panel.repo_root orelse return;
+    const open_path = if (std.fs.path.isAbsolute(target.path))
+        try ed.allocator.dupe(u8, target.path)
+    else
+        try std.fs.path.join(ed.allocator, &.{ root, target.path });
+    defer ed.allocator.free(open_path);
+
+    var b = buffer.Buffer.loadFromFile(ed.allocator, ed.io, open_path) catch {
+        ed.state.error_message = "Could not open Git diff file";
+        return;
+    };
+    var consumed = false;
+    errdefer if (!consumed) b.deinit();
+    try navigation.recordCurrentJump(ed);
+    try ed.addTab(b);
+    consumed = true;
+    const row = if (target.line) |line| line -| 1 else 0;
+    _ = try navigation.jumpTo(ed, row, 0, .{ .record_history = false });
+    ed.state.mode = .Normal;
+    ed.state.git_diff_panel.close();
+    ed.state.explorer_focused = false;
+}
+
+fn executeGitDiffActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .git_diff_close => closeGitDiff(ed),
+        .git_diff_move_up => {
+            ed.state.git_diff_panel.moveUp();
+            ed.markDirty(.full);
+        },
+        .git_diff_move_down => {
+            ed.state.git_diff_panel.moveDown();
+            ed.markDirty(.full);
+        },
+        .git_diff_page_up => {
+            ed.state.git_diff_panel.pageUp(gitDiffPageRows(ed));
+            ed.markDirty(.full);
+        },
+        .git_diff_page_down => {
+            ed.state.git_diff_panel.pageDown(gitDiffPageRows(ed));
+            ed.markDirty(.full);
+        },
+        .git_diff_refresh_panel => {
+            ed.state.git_diff_panel.refresh(ed.allocator, ed.io) catch |err| switch (err) {
+                error.NotGitRepository => {
+                    ed.state.git_diff_panel.error_message = "This workspace is not a Git repository.";
+                    ed.state.error_message = "This workspace is not a Git repository.";
+                    ed.markDirty(.full);
+                    return;
+                },
+                else => return err,
+            };
+            if (ed.state.git_diff_panel.error_message == null) {
+                ed.state.status_message = "Git Diff refreshed";
+            }
+            ed.markDirty(.full);
+        },
+        .git_diff_open_selected => try openSelectedGitDiffFile(ed),
         else => unreachable,
     }
 }
@@ -2198,6 +2323,12 @@ fn handleGitGraphInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 }
 
+fn handleGitDiffInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (gitDiffActionCommandForEvent(ed, event)) |command| {
+        try executeGitDiffActionCommand(ed, command);
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -2213,6 +2344,11 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (ed.state.mode == .GitGraph) {
         try handleGitGraphInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .GitDiff) {
+        try handleGitDiffInput(ed, event);
         return;
     }
 
@@ -2465,6 +2601,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .GitGraph => {
             try handleGitGraphInput(ed, event);
+        },
+        .GitDiff => {
+            try handleGitDiffInput(ed, event);
         },
         .SaveConfirmation => {
             if (saveConfirmationActionCommandForEvent(ed, event)) |command| {
