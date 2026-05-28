@@ -31,6 +31,7 @@ pub const CommandId = enum {
     comments_refresh,
     git_diff_open,
     agent_open,
+    agent_context_open,
     proposals_open,
     task_run,
     tasks_open,
@@ -281,8 +282,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 23;
-const command_line_visible_count = 24;
+const command_popup_visible_count = 24;
+const command_line_visible_count = 25;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -442,6 +443,15 @@ const command_metadata = [_]CommandMeta{
         .canonical_name = "agent.open",
         .command_names = &.{"agent"},
         .short_description = "Open mock Agent panel",
+        .category = .agent,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .agent_context_open,
+        .canonical_name = "agent.context",
+        .command_names = &.{"agentcontext"},
+        .short_description = "Open Agent context details",
         .category = .agent,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
@@ -1974,6 +1984,7 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "comments", .id = .comments_open },
         .{ .name = "gitdiff", .id = .git_diff_open },
         .{ .name = "agent", .id = .agent_open },
+        .{ .name = "agentcontext", .id = .agent_context_open },
         .{ .name = "proposals", .id = .proposals_open },
         .{ .name = "run", .id = .task_run },
         .{ .name = "tasks", .id = .tasks_open },
@@ -2022,6 +2033,7 @@ test "command line visible commands preserve current popup order" {
         .comments_open,
         .git_diff_open,
         .agent_open,
+        .agent_context_open,
         .task_run,
         .tasks_open,
         .task_stop,

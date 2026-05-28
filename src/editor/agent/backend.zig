@@ -1,5 +1,6 @@
 const std = @import("std");
 const agent = @import("session.zig");
+const context_mod = @import("context.zig");
 
 pub const AgentBackendKind = enum {
     mock,
@@ -27,6 +28,7 @@ pub const AgentRequest = struct {
     mode: agent.AgentMode,
     prompt: []const u8,
     workspace_root: []const u8,
+    context: *const context_mod.AgentContextPackage,
 };
 
 pub const AgentBackendError = error{

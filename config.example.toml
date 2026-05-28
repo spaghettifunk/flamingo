@@ -53,7 +53,7 @@ provider = "mock"
 
 [agent.openai]
 # API keys are read from the environment only; never put secrets in config.
-api_key_env = "OPENAI_API_KEY"
+api_key_env = ""
 model = "gpt-5-codex"
 
 [agent.limits]
@@ -61,6 +61,9 @@ max_file_reads = 50
 max_search_results = 100
 max_tool_calls = 100
 max_file_read_bytes = 262144
+max_context_files = 8
+max_context_file_bytes = 32768
+max_context_total_bytes = 262144
 
 [agent.policy]
 require_approval_for_validation = false

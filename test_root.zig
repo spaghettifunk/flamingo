@@ -32,6 +32,9 @@ test {
     _ = @import("src/editor/agent/provider_registry.zig");
     _ = @import("src/editor/agent/manager.zig");
     _ = @import("src/editor/agent/workspace_guard.zig");
+    _ = @import("src/editor/agent/context.zig");
+    _ = @import("src/editor/agent/prompt_templates.zig");
+    _ = @import("src/editor/agent/context_builder.zig");
     _ = @import("src/editor/agent/tools.zig");
     _ = @import("src/editor/agent/tool_executor.zig");
     _ = @import("src/editor/agent/readonly_planner.zig");

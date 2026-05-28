@@ -7,3 +7,5 @@ zig-pkg
 *.log
 
 tracing
+
+config.toml

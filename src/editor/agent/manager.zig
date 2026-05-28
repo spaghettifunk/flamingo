@@ -2,6 +2,7 @@ const std = @import("std");
 const agent = @import("session.zig");
 const approval = @import("approval.zig");
 const audit = @import("audit.zig");
+const context_mod = @import("context.zig");
 const policy = @import("policy.zig");
 
 pub const StartError = error{
@@ -115,6 +116,19 @@ pub const AgentManager = struct {
     ) !void {
         const session = self.findSession(id) orelse return;
         try session.appendAuditEvent(self.allocator, kind, message, timestamp_ms);
+    }
+
+    pub fn attachContextPackage(self: *AgentManager, id: u64, package: context_mod.AgentContextPackage) void {
+        const session = self.findSession(id) orelse return;
+        if (session.context_package) |*old| old.deinit(self.allocator);
+        session.context_package = package;
+        session.show_context_details = false;
+    }
+
+    pub fn toggleContextDetails(self: *AgentManager) void {
+        const session = self.selectedSession() orelse return;
+        if (session.context_package == null) return;
+        session.show_context_details = !session.show_context_details;
     }
 
     pub fn createApprovalRequest(
@@ -290,4 +304,32 @@ test "agent manager rejects concurrent sessions" {
     try manager.prompt_input.appendSlice(allocator, "one");
     _ = try manager.createSession(1);
     try std.testing.expectError(error.AgentSessionAlreadyRunning, manager.createSession(2));
+}
+
+test "agent manager stores context package and toggles details" {
+    const allocator = std.testing.allocator;
+    var manager = AgentManager.init(allocator);
+    defer manager.deinit();
+
+    try manager.prompt_input.appendSlice(allocator, "build context");
+    const id = try manager.createSession(10);
+    const package = context_mod.AgentContextPackage{
+        .session_id = id,
+        .mode = .plan,
+        .system_prompt = try allocator.dupe(u8, "system"),
+        .user_prompt = try allocator.dupe(u8, "user"),
+        .workspace_summary = try allocator.dupe(u8, "Workspace root: test\nGit repository: no\n"),
+        .git_status_summary = try allocator.dupe(u8, "Not a Git repository."),
+        .git_diff_summary = try allocator.dupe(u8, "Not a Git repository."),
+        .relevant_files = .empty,
+        .tool_descriptions = .empty,
+        .policy_summary = try allocator.dupe(u8, "policy"),
+        .validation_summary = try allocator.dupe(u8, "validation"),
+        .budget = .{ .max_total_bytes = 1024, .used_bytes = 128, .truncated = false },
+    };
+    manager.attachContextPackage(id, package);
+    try std.testing.expect(manager.selectedSessionConst().?.context_package != null);
+    try std.testing.expect(!manager.selectedSessionConst().?.show_context_details);
+    manager.toggleContextDetails();
+    try std.testing.expect(manager.selectedSessionConst().?.show_context_details);
 }

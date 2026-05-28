@@ -42,6 +42,10 @@ Terminal applications cannot switch the terminal emulator font automatically. Co
 | `max_file_reads` | `usize` | `50` | Maximum file-read tool calls allowed during one session. | Parsed |
 | `max_search_results` | `usize` | `100` | Maximum search results allowed during one session. | Parsed |
 | `max_tool_calls` | `usize` | `100` | Maximum total tool calls allowed during one session. | Parsed |
+| `max_file_read_bytes` | `usize` | `262144` | Maximum bytes a file-read tool may read. | Parsed |
+| `max_context_files` | `usize` | `8` | Maximum relevant files packaged into agent context. | Parsed |
+| `max_context_file_bytes` | `usize` | `32768` | Maximum bytes packaged per context file. | Parsed |
+| `max_context_total_bytes` | `usize` | `262144` | Maximum total bytes packaged into agent context. | Parsed |
 
 ## `[author]`
 

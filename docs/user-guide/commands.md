@@ -40,7 +40,8 @@ Most command arguments are split on spaces. `:run` uses a small argv parser with
 | `:comments`                                         | optional `refresh` | Open the comments panel, or reload comments from disk.                   |
 | `:gitdiff`                                          | none               | Open the workspace Git Diff panel.                                       |
 | `:gitdiff-refresh`, `:diff-refresh`, `:git-refresh` | none               | Refresh Git diff gutter markers for the current file.                    |
-| `:agent`                                            | none               | Open the mock Agent session panel.                                       |
+| `:agent`                                            | none               | Open the Agent session panel.                                            |
+| `:agentcontext`                                     | none               | Open Agent context details for the selected session.                     |
 | `:run <command>`                                    | command argv       | Run a non-interactive task from the workspace root.                      |
 | `:tasks`                                            | none               | Open the task output panel.                                              |
 | `:taskstop`                                         | none               | Cancel the currently running task.                                       |

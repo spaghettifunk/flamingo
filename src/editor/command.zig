@@ -25,6 +25,7 @@ pub const Command = enum {
     comments,
     git_diff,
     agent,
+    agent_context,
     proposals,
     run,
     tasks,
@@ -51,6 +52,7 @@ pub const Command = enum {
             .comments => .comments_open,
             .git_diff => .git_diff_open,
             .agent => .agent_open,
+            .agent_context => .agent_context_open,
             .proposals => .proposals_open,
             .run => .task_run,
             .tasks => .tasks_open,
@@ -95,6 +97,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .comments_open => .comments,
         .git_diff_open => .git_diff,
         .agent_open => .agent,
+        .agent_context_open => .agent_context,
         .proposals_open => .proposals,
         .task_run => .run,
         .tasks_open => .tasks,
@@ -312,6 +315,11 @@ pub fn execute(ed: *editor.Editor) !void {
         .agent => {
             if (!requireNoMoreArgs(ed, &it)) return;
             openAgentPanel(ed);
+        },
+        .agent_context => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            openAgentPanel(ed);
+            ed.state.agent_manager.toggleContextDetails();
         },
         .proposals => {
             if (!requireNoMoreArgs(ed, &it)) return;

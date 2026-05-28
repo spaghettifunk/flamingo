@@ -20,7 +20,9 @@ const multi_cursor = @import("../multi_cursor.zig");
 const command_parser = @import("../tasks/command_parser.zig");
 const task_mod = @import("../tasks/task.zig");
 const agent_mod = @import("../agent/session.zig");
+const agent_context_builder = @import("../agent/context_builder.zig");
 const execution_pipeline = @import("../agent/execution_pipeline.zig");
+const agent_policy = @import("../agent/policy.zig");
 const workspace_guard = @import("../agent/workspace_guard.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
@@ -1781,11 +1783,46 @@ fn startAgentSession(ed: *editor.Editor) !void {
         else => return err,
     };
     const session = ed.state.agent_manager.findSession(id) orelse return;
+    var active_snapshot: ?[]u8 = null;
+    defer if (active_snapshot) |snapshot| ed.allocator.free(snapshot);
+    const active_buffer = if (ed.state.currentTab()) |tab| active: {
+        const filename = tab.buf.filename orelse break :active null;
+        active_snapshot = tab.buf.toOwnedTextSnapshot(ed.allocator) catch null;
+        break :active if (active_snapshot) |snapshot|
+            agent_context_builder.ActiveBufferContext{ .path = filename, .content = snapshot }
+        else
+            null;
+    } else null;
+    var builder = agent_context_builder.AgentContextBuilder.init(
+        ed.allocator,
+        ed.io,
+        agentRoot(ed),
+        agent_policy.AgentPolicyConfig.fromAgentConfig(ed.config.agent),
+        .{
+            .max_context_files = ed.config.agent.limits.max_context_files,
+            .max_context_file_bytes = ed.config.agent.limits.max_context_file_bytes,
+            .max_context_total_bytes = ed.config.agent.limits.max_context_total_bytes,
+        },
+        ed.config.agent.validation.commands,
+        active_buffer,
+    );
+    const package = builder.build(session, session.prompt, session.mode) catch |err| {
+        const message = switch (err) {
+            error.OutOfMemory => "Unable to build agent context: out of memory.",
+            else => "Unable to build agent context.",
+        };
+        try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
+        ed.state.error_message = message;
+        return;
+    };
+    ed.state.agent_manager.attachContextPackage(id, package);
+    const context = &(ed.state.agent_manager.findSession(id) orelse return).context_package.?;
     ed.runtime.agent_backend.startSession(.{
         .session_id = id,
         .mode = session.mode,
         .prompt = session.prompt,
         .workspace_root = agentRoot(ed),
+        .context = context,
     }) catch |err| {
         const message = switch (err) {
             error.AgentSessionAlreadyRunning => "Agent session is already running.",

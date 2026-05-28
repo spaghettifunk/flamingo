@@ -2,6 +2,7 @@ const std = @import("std");
 const logz = @import("logz");
 const agent = @import("../agent/session.zig");
 const audit = @import("../agent/audit.zig");
+const context_mod = @import("../agent/context.zig");
 const policy = @import("../agent/policy.zig");
 const tools = @import("../agent/tools.zig");
 const tool_executor = @import("../agent/tool_executor.zig");
@@ -16,10 +17,12 @@ const StartRequest = struct {
     mode: agent.AgentMode,
     prompt: []u8,
     workspace_root: []u8,
+    context: context_mod.AgentContextPackage,
 
     fn deinit(self: *StartRequest, allocator: std.mem.Allocator) void {
         allocator.free(self.prompt);
         allocator.free(self.workspace_root);
+        self.context.deinit(allocator);
         self.* = undefined;
     }
 };
@@ -65,6 +68,7 @@ pub const MockAgentWorker = struct {
         mode: agent.AgentMode,
         prompt: []const u8,
         workspace_root: []const u8,
+        context: *const context_mod.AgentContextPackage,
     ) StartError!void {
         try self.prepareForStart();
 
@@ -72,12 +76,14 @@ pub const MockAgentWorker = struct {
         errdefer self.allocator.free(owned_prompt);
         const owned_workspace_root = try self.allocator.dupe(u8, workspace_root);
         errdefer self.allocator.free(owned_workspace_root);
+        const owned_context = try context.clone(self.allocator);
 
         var request = StartRequest{
             .id = id,
             .mode = mode,
             .prompt = owned_prompt,
             .workspace_root = owned_workspace_root,
+            .context = owned_context,
         };
         errdefer request.deinit(self.allocator);
 
@@ -135,6 +141,11 @@ pub const MockAgentWorker = struct {
         }
 
         self.emit(.status, "User prompt received.", owned_request.id);
+        const context_summary = owned_request.context.formatCompactSummary(self.allocator) catch null;
+        if (context_summary) |text| {
+            defer self.allocator.free(text);
+            self.emit(.status, text, owned_request.id);
+        }
         if (self.pauseOrCancel(owned_request.id)) return;
 
         switch (owned_request.mode) {
@@ -352,7 +363,23 @@ test "implementation mode emits proposal without editing files" {
     var worker = MockAgentWorker.init(allocator, io, &queue);
     defer worker.deinit();
 
-    try worker.startSession(9, .implementation, "add help panel", root);
+    var context_package = context_mod.AgentContextPackage{
+        .session_id = 9,
+        .mode = .implementation,
+        .system_prompt = try allocator.dupe(u8, "system"),
+        .user_prompt = try allocator.dupe(u8, "add help panel"),
+        .workspace_summary = try allocator.dupe(u8, "Workspace root: test\nGit repository: no\n"),
+        .git_status_summary = try allocator.dupe(u8, "Not a Git repository."),
+        .git_diff_summary = try allocator.dupe(u8, "Not a Git repository."),
+        .relevant_files = .empty,
+        .tool_descriptions = .empty,
+        .policy_summary = try allocator.dupe(u8, "policy"),
+        .validation_summary = try allocator.dupe(u8, "validation"),
+        .budget = .{ .max_total_bytes = 1024, .used_bytes = 128, .truncated = false },
+    };
+    defer context_package.deinit(allocator);
+
+    try worker.startSession(9, .implementation, "add help panel", root, &context_package);
 
     var proposal_seen = false;
     var finished = false;

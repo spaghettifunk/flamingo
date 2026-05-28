@@ -21,7 +21,7 @@ When the default user config is selected and missing, Flamingo creates `~/.flami
 | `[explorer]` | `width_percentage` | Implemented. |
 | `[agent]` | `provider` | Implemented. |
 | `[agent.openai]` | `api_key_env`, `model` | Implemented. |
-| `[agent.limits]` | tool/session limits | Parsed. |
+| `[agent.limits]` | tool/session/context limits | Parsed. |
 | `[author]` | `name`, `email` | Implemented as comments author fallback. |
 | `[keybindings.<context>]` | key sequence to canonical command name | Implemented. |
 | `[keybindings.<context>.unbind]` | `keys` array | Implemented. |

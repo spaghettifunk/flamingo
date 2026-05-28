@@ -1,5 +1,6 @@
 const std = @import("std");
 const audit = @import("audit.zig");
+const context_mod = @import("context.zig");
 
 pub const max_agent_events = 10_000;
 
@@ -122,9 +123,12 @@ pub const AgentSession = struct {
     search_result_count: usize = 0,
     truncated: bool = false,
     audit_truncated: bool = false,
+    context_package: ?context_mod.AgentContextPackage = null,
+    show_context_details: bool = false,
 
     pub fn deinit(self: *AgentSession, allocator: std.mem.Allocator) void {
         allocator.free(self.prompt);
+        if (self.context_package) |*package| package.deinit(allocator);
         for (self.events.items) |*event| event.deinit(allocator);
         self.events.deinit(allocator);
         for (self.audit_events.items) |*event| event.deinit(allocator);

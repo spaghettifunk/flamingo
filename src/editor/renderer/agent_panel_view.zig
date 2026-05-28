@@ -21,7 +21,7 @@ pub fn renderVirtualAgentPanel(editor: anytype) void {
     fillRows(screen, geom, .command_popup);
     renderControls(editor, geom);
 
-    const body_start = geom.row + 5;
+    const body_start = geom.row + 6;
     const bottom_row = geom.row + geom.height - 1;
     const footer_row = bottom_row - 1;
     const footer_sep_row = footer_row - 1;
@@ -119,7 +119,15 @@ fn renderControls(editor: anytype, geom: popup.FilesystemPickerGeometry) void {
         popup.writeVirtualTruncatedCells(screen, row, &col, end, "Session: idle", .explorer_dim, false);
     }
 
-    popup.drawPickerSeparator(screen, geom.row + 4, geom.col, geom.width, .command_popup_border);
+    row += 1;
+    col = geom.col + 2;
+    if (session) |selected| {
+        renderContextSummary(screen, row, geom, selected);
+    } else {
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, "Context: none", .explorer_dim, false);
+    }
+
+    popup.drawPickerSeparator(screen, geom.row + 5, geom.col, geom.width, .command_popup_border);
 }
 
 fn writeModeSegment(
@@ -171,6 +179,18 @@ fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: 
         }
     }
 
+    if (session.show_context_details and session.context_package != null and event_rows > 2) {
+        const block_rows = @min(event_rows, contextDetailRows(session));
+        renderContextDetails(screen, geom, event_start, block_rows, session.context_package.?);
+        event_start += block_rows;
+        event_rows -|= block_rows;
+        if (event_rows > 0) {
+            popup.drawPickerSeparator(screen, event_start, geom.col, geom.width, .command_popup_border);
+            event_start += 1;
+            event_rows -|= 1;
+        }
+    }
+
     if (session.audit_events.items.len > 0 and event_rows > 2) {
         const block_rows = @min(event_rows, auditBlockRows(session));
         renderAuditBlock(screen, geom, event_start, block_rows, session);
@@ -199,6 +219,86 @@ fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: 
         const event = session.events.items[index];
         popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
         renderEventRow(screen, row, geom, event);
+    }
+}
+
+fn renderContextSummary(screen: *render_mod.VirtualScreen, row: usize, geom: popup.FilesystemPickerGeometry, session: anytype) void {
+    const end = geom.col + geom.width - 1;
+    var col = geom.col + 2;
+    const package = session.context_package orelse {
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, "Context: pending", .explorer_dim, true);
+        return;
+    };
+    var buf: [192]u8 = undefined;
+    const workspace = workspaceName(package.workspace_summary);
+    const text = std.fmt.bufPrint(&buf, "Context: Workspace {s}  Git changes {d}  Files {d}  Tools {d}  Budget {d}/{d} KiB{s}", .{
+        workspace,
+        countSummaryLines(package.git_status_summary),
+        package.relevant_files.items.len,
+        package.tool_descriptions.items.len,
+        package.budget.used_bytes / 1024,
+        package.budget.max_total_bytes / 1024,
+        if (package.budget.truncated) " truncated" else "",
+    }) catch "Context";
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, text, .explorer_dim, true);
+}
+
+fn contextDetailRows(session: anytype) usize {
+    const package = session.context_package orelse return 0;
+    return 7 + package.relevant_files.items.len + package.tool_descriptions.items.len + package.notes.items.len;
+}
+
+fn renderContextDetails(screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerGeometry, start_row: usize, rows: usize, package: anytype) void {
+    if (rows == 0) return;
+    const end = geom.col + geom.width - 1;
+    var row = start_row;
+    var col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, "Context Package", .command_popup_prompt, true);
+    if (rows == 1) return;
+
+    row += 1;
+    col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, package.system_prompt, .explorer_dim, true);
+    if (row + 1 >= start_row + rows) return;
+
+    row += 1;
+    col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, package.workspace_summary, .explorer_dim, true);
+    if (row + 1 >= start_row + rows) return;
+
+    row += 1;
+    col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, "Git Status: ", .explorer_dim, false);
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, firstLine(package.git_status_summary), .git_diff_modified, true);
+    if (row + 1 >= start_row + rows) return;
+
+    row += 1;
+    col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, "Files", .explorer_dim, true);
+    for (package.relevant_files.items) |file| {
+        if (row + 1 >= start_row + rows) return;
+        row += 1;
+        col = geom.col + 2;
+        var buf: [192]u8 = undefined;
+        const text = std.fmt.bufPrint(&buf, "- {s} ({s}){s}", .{ file.path, file.reason, if (file.truncated) " truncated" else "" }) catch file.path;
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, text, .command_popup, true);
+    }
+    if (row + 1 >= start_row + rows) return;
+
+    row += 1;
+    col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, "Tools", .explorer_dim, true);
+    for (package.tool_descriptions.items) |tool| {
+        if (row + 1 >= start_row + rows) return;
+        row += 1;
+        col = geom.col + 2;
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, tool.name, .git_graph_lane_blue, true);
+    }
+    for (package.notes.items) |note| {
+        if (row + 1 >= start_row + rows) return;
+        row += 1;
+        col = geom.col + 2;
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, note, .popup_error, true);
     }
 }
 
@@ -361,6 +461,33 @@ fn validationStyle(status: anytype) render_mod.RenderStyle {
         .failed => .git_diff_deleted,
         .cancelled => .explorer_dim,
     };
+}
+
+fn workspaceName(summary: []const u8) []const u8 {
+    const prefix = "Workspace root: ";
+    const line = firstLine(summary);
+    if (!std.mem.startsWith(u8, line, prefix)) return "workspace";
+    const root = line[prefix.len..];
+    const base = std.fs.path.basename(root);
+    return if (base.len > 0) base else root;
+}
+
+fn firstLine(text: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, text, '\n')) |index| return text[0..index];
+    return text;
+}
+
+fn countSummaryLines(text: []const u8) usize {
+    if (text.len == 0 or
+        std.mem.eql(u8, text, "No changed files.") or
+        std.mem.eql(u8, text, "Not a Git repository."))
+        return 0;
+    var count: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.trim(u8, line, " \t\r").len > 0) count += 1;
+    }
+    return count;
 }
 
 test "agent panel geometry uses wide modal" {

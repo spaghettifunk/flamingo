@@ -41,3 +41,4 @@ Do not invent extra build, test, or formatting commands unless the repository ad
 - Mention any commands or tests that could not be run.
 - If a new command or keybinding is added, update `docs/keybindings.md`.
 - Update the documentation `docs` if necessary
+- Update `config.example.toml` if you add a new entry; ignore other config files

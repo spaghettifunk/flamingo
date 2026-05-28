@@ -102,6 +102,9 @@ pub const AgentLimitsConfig = struct {
     max_search_results: usize = 100,
     max_tool_calls: usize = 100,
     max_file_read_bytes: usize = 262144,
+    max_context_files: usize = 8,
+    max_context_file_bytes: usize = 32768,
+    max_context_total_bytes: usize = 262144,
 };
 
 pub const AgentPolicyPathsConfig = struct {
@@ -161,6 +164,9 @@ fn validateAgentConfig(cfg: *const AgentConfig) ConfigError!void {
         cfg.limits.max_search_results == 0 or
         cfg.limits.max_tool_calls == 0 or
         cfg.limits.max_file_read_bytes == 0 or
+        cfg.limits.max_context_files == 0 or
+        cfg.limits.max_context_file_bytes == 0 or
+        cfg.limits.max_context_total_bytes == 0 or
         cfg.validation.commands.len == 0)
         return error.InvalidAgentLimits;
 }

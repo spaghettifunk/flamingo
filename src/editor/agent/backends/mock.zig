@@ -14,7 +14,7 @@ pub fn asBackend(worker: *worker_mod.MockAgentWorker) backend.AgentBackend {
 
 fn startSession(ctx: *anyopaque, request: backend.AgentRequest) backend.AgentBackendError!void {
     const worker: *worker_mod.MockAgentWorker = @ptrCast(@alignCast(ctx));
-    return worker.startSession(request.session_id, request.mode, request.prompt, request.workspace_root);
+    return worker.startSession(request.session_id, request.mode, request.prompt, request.workspace_root, request.context);
 }
 
 fn cancelSession(ctx: *anyopaque, session_id: u64) void {

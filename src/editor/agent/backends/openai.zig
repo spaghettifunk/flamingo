@@ -3,6 +3,7 @@ const logz = @import("logz");
 const config = @import("../../../config.zig");
 const backend = @import("../backend.zig");
 const agent = @import("../session.zig");
+const context_mod = @import("../context.zig");
 const openai_client = @import("../openai_client.zig");
 const proposal = @import("../proposal.zig");
 const policy = @import("../policy.zig");
@@ -74,11 +75,17 @@ pub const OpenAIBackend = struct {
         if (self.api_key == null or self.model.len == 0) return error.AgentBackendUnavailable;
         try self.prepareForStart();
 
+        const owned_prompt = try self.allocator.dupe(u8, request.prompt);
+        errdefer self.allocator.free(owned_prompt);
+        const owned_workspace_root = try self.allocator.dupe(u8, request.workspace_root);
+        errdefer self.allocator.free(owned_workspace_root);
+        const owned_context = try request.context.clone(self.allocator);
         var owned = StartRequest{
             .session_id = request.session_id,
             .mode = request.mode,
-            .prompt = try self.allocator.dupe(u8, request.prompt),
-            .workspace_root = try self.allocator.dupe(u8, request.workspace_root),
+            .prompt = owned_prompt,
+            .workspace_root = owned_workspace_root,
+            .context = owned_context,
         };
         errdefer owned.deinit(self.allocator);
 
@@ -231,10 +238,12 @@ const StartRequest = struct {
     mode: agent.AgentMode,
     prompt: []u8,
     workspace_root: []u8,
+    context: context_mod.AgentContextPackage,
 
     fn deinit(self: *StartRequest, allocator: std.mem.Allocator) void {
         allocator.free(self.prompt);
         allocator.free(self.workspace_root);
+        self.context.deinit(allocator);
         self.* = undefined;
     }
 };
