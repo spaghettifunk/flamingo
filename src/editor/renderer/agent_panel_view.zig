@@ -132,7 +132,6 @@ fn writeModeSegment(
 fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: usize, body_rows: usize) void {
     const screen = &editor.renderer.screen;
     const manager = &editor.state.agent_manager;
-    manager.clampScroll(body_rows);
 
     const session = manager.selectedSessionConst() orelse {
         var col = geom.col + 2;
@@ -140,19 +139,80 @@ fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: 
         return;
     };
 
+    var event_start = start_row;
+    var event_rows = body_rows;
+    if (editor.state.execution_manager.latestBySessionConst(session.id)) |execution| {
+        const block_rows = @min(event_rows, executionBlockRows(execution));
+        renderExecutionBlock(screen, geom, event_start, block_rows, execution);
+        event_start += block_rows;
+        event_rows -|= block_rows;
+        if (event_rows > 0) {
+            popup.drawPickerSeparator(screen, event_start, geom.col, geom.width, .command_popup_border);
+            event_start += 1;
+            event_rows -|= 1;
+        }
+    }
+
+    if (event_rows == 0) return;
+    manager.clampScroll(event_rows);
+
     if (session.events.items.len == 0) {
         var col = geom.col + 2;
-        popup.writeVirtualTruncatedCells(screen, start_row, &col, geom.col + geom.width - 1, "No events yet.", .explorer_dim, false);
+        popup.writeVirtualTruncatedCells(screen, event_start, &col, geom.col + geom.width - 1, "No events yet.", .explorer_dim, false);
         return;
     }
 
-    for (0..body_rows) |offset| {
+    for (0..event_rows) |offset| {
         const index = manager.event_scroll + offset;
-        const row = start_row + offset;
+        const row = event_start + offset;
         if (index >= session.events.items.len) break;
         const event = session.events.items[index];
         popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
         renderEventRow(screen, row, geom, event);
+    }
+}
+
+fn executionBlockRows(execution: anytype) usize {
+    var rows: usize = 2;
+    rows += @min(execution.validation_tasks.items.len, @as(usize, 2));
+    if (execution.summary != null or execution.error_message != null) rows += 1;
+    return rows;
+}
+
+fn renderExecutionBlock(screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerGeometry, start_row: usize, rows: usize, execution: anytype) void {
+    if (rows == 0) return;
+    const end = geom.col + geom.width - 1;
+    var row = start_row;
+    var col = geom.col + 2;
+    var buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&buf, "Execution #{d}  Proposal #{d}  Status: {s}", .{
+        execution.id,
+        execution.proposal_id,
+        execution.status.label(),
+    }) catch "Execution";
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, header, .command_popup_prompt, true);
+    if (rows == 1) return;
+
+    row += 1;
+    col = geom.col + 2;
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, "Validation:", .explorer_dim, false);
+
+    var rendered_tasks: usize = 0;
+    while (rendered_tasks < execution.validation_tasks.items.len and rendered_tasks < 2 and row + 1 < start_row + rows) : (rendered_tasks += 1) {
+        row += 1;
+        const task = execution.validation_tasks.items[rendered_tasks];
+        col = geom.col + 2;
+        const marker = validationMarker(task.status);
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, marker, validationStyle(task.status), false);
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, " ", .command_popup, false);
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, task.command, validationStyle(task.status), true);
+    }
+
+    if (row + 1 < start_row + rows) {
+        row += 1;
+        col = geom.col + 2;
+        const summary = execution.summary orelse execution.error_message orelse return;
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, summary, if (execution.status == .failed) .git_diff_deleted else .git_diff_added, true);
     }
 }
 
@@ -189,7 +249,33 @@ fn eventStyle(kind: agent.AgentEventKind) render_mod.RenderStyle {
         .proposal_applied => .git_diff_added,
         .proposal_rejected => .explorer_dim,
         .proposal_failed => .git_diff_deleted,
+        .execution_started, .execution_applying, .execution_validating => .git_diff_modified,
+        .execution_validation_task_started => .git_diff_modified,
+        .execution_validation_task_finished => .git_diff_added,
+        .execution_completed => .git_diff_added,
+        .execution_failed => .git_diff_deleted,
+        .execution_cancelled => .explorer_dim,
         .agent_error => .git_diff_deleted,
+    };
+}
+
+fn validationMarker(status: anytype) []const u8 {
+    return switch (status) {
+        .queued => "o",
+        .running => "*",
+        .success => "+",
+        .failed => "!",
+        .cancelled => "x",
+    };
+}
+
+fn validationStyle(status: anytype) render_mod.RenderStyle {
+    return switch (status) {
+        .queued => .explorer_dim,
+        .running => .git_diff_modified,
+        .success => .git_diff_added,
+        .failed => .git_diff_deleted,
+        .cancelled => .explorer_dim,
     };
 }
 

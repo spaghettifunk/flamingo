@@ -4,9 +4,9 @@ Status: Partial
 
 ## Overview
 
-The Agent panel is the local session framework for a future Codex-like workflow. It tracks prompts, Plan/Implementation mode, session status, structured events, and patch proposals. Plan mode uses deterministic local read-only tools to inspect the workspace and produce a structured plan.
+The Agent panel is the local session framework for a future Codex-like workflow. It tracks prompts, Plan/Implementation mode, session status, structured events, patch proposals, and proposal execution. Plan mode uses deterministic local read-only tools to inspect the workspace and produce a structured plan.
 
-No network calls are made, and the agent does not edit files directly or execute tasks.
+No network calls are made, and the agent does not edit files directly. Implementation mode creates proposals first; approved proposals can then be applied and validated locally.
 
 ## Usage
 
@@ -25,7 +25,7 @@ No network calls are made, and the agent does not edit files directly or execute
 | `up`, `down` | Scroll events. |
 | `pageup`, `pagedown` | Page through events. |
 | `ctrl+u`, `ctrl+d` | Page through events. |
-| `ctrl+c` | Cancel the running session. |
+| `ctrl+c` | Cancel the running session or active execution. |
 | `esc` | Close the panel when no session is running. |
 
 ## Implementation Notes
@@ -34,7 +34,9 @@ Agent sessions are owned by `AgentManager` in editor state. The backend runs on 
 
 Tool calls are validated by the host before execution. Paths must stay inside the workspace root, `.git` internals are rejected, binary and large file reads are summarized, and search/read outputs are capped before they are shown in the panel.
 
-Implementation mode creates deterministic patch proposals instead of writing files. Proposals are reviewed in `:proposals`; pressing `a` approves and applies the selected proposal, while `r` rejects it. Applied proposals write through the local proposal apply service and then appear naturally in `:gitdiff`.
+Implementation mode creates deterministic patch proposals instead of writing files. Proposals are reviewed in `:proposals`; pressing `a` approves the selected proposal, applies it through the local proposal apply service, and runs validation through the Task Runner. Pressing `r` rejects the selected proposal.
+
+The V1 execution pipeline runs `zig build test` and then `zig build` sequentially after a proposal applies. If validation fails, applied file changes remain in the workspace, task output is available in `:tasks`, and the resulting file changes appear naturally in `:gitdiff`.
 
 The session event log is capped at 10,000 events.
 
@@ -45,4 +47,5 @@ The session event log is capped at 10,000 events.
 - Plan mode is deterministic and read-only.
 - Implementation mode creates deterministic mock proposals only.
 - There is no OpenAI, Codex CLI, MCP, or LLM integration yet.
-- Real task execution, validation pipelines, and autonomous patch generation are intentionally out of scope.
+- Validation commands are hardcoded for now.
+- Autonomous patch generation and auto-fix loops are intentionally out of scope.

@@ -24,6 +24,7 @@ const workspace_diff_mod = @import("../git/workspace_diff.zig");
 const task_manager_mod = @import("../tasks/task_manager.zig");
 const agent_manager_mod = @import("../agent/manager.zig");
 const proposal_manager_mod = @import("../agent/proposal_manager.zig");
+const execution_manager_mod = @import("../agent/execution_manager.zig");
 
 pub const EditorMode = enum {
     Dashboard,
@@ -74,6 +75,7 @@ pub const EditorState = struct {
     task_manager: task_manager_mod.TaskManager,
     agent_manager: agent_manager_mod.AgentManager,
     proposal_manager: proposal_manager_mod.ProposalManager,
+    execution_manager: execution_manager_mod.AgentExecutionManager,
     clipboard: ?[]u8 = null,
     render_dirty: bool = true,
     force_full_render: bool = true,
@@ -95,6 +97,7 @@ pub const EditorState = struct {
             .task_manager = task_manager_mod.TaskManager.init(allocator),
             .agent_manager = agent_manager_mod.AgentManager.init(allocator),
             .proposal_manager = proposal_manager_mod.ProposalManager.init(allocator),
+            .execution_manager = execution_manager_mod.AgentExecutionManager.init(allocator),
             .git_diff = git_diff_mod.DiffService.init(allocator),
         };
     }
@@ -130,6 +133,7 @@ pub const EditorState = struct {
         self.task_manager.deinit();
         self.agent_manager.deinit();
         self.proposal_manager.deinit();
+        self.execution_manager.deinit();
         if (self.search_system) |*s| {
             s.deinit();
             self.search_system = null;

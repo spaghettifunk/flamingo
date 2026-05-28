@@ -244,7 +244,7 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Start session          | `Enter`                 |
 | Toggle Plan/Implementation | `Tab`              |
 | Delete prompt character | `Backspace`            |
-| Cancel running session | `Ctrl+c`                |
+| Cancel running session/execution | `Ctrl+c`      |
 | Scroll events up       | `Up`                    |
 | Scroll events down     | `Down`                  |
 | Page events up         | `PageUp`, `Ctrl+u`      |
@@ -255,7 +255,7 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Action                 | Keybinding              |
 | :--------------------- | :---------------------- |
 | Open proposals panel   | `:proposals`            |
-| Apply selected proposal | `a`                    |
+| Apply and validate selected proposal | `a`         |
 | Reject selected proposal | `r`                   |
 | Previous/next proposal | `[`, `]`                |
 | Open target file       | `Enter`                 |

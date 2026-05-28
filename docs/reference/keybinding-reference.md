@@ -196,7 +196,7 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `enter` | `agent.submit` | Start mock session. |
 | `backspace` | `agent.backspace` | Delete prompt character. |
 | `tab` | `agent.toggle_mode` | Toggle Plan/Implementation mode. |
-| `ctrl+c` | `agent.cancel` | Cancel running session. |
+| `ctrl+c` | `agent.cancel` | Cancel running session or active execution. |
 | `up` | `agent.scroll_up` | Scroll events up. |
 | `down` | `agent.scroll_down` | Scroll events down. |
 | `pageup`, `ctrl+u` | `agent.page_up` | Page events up. |

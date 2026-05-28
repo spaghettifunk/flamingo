@@ -114,7 +114,7 @@ fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: 
     const sep_row = start_row + list_rows;
     popup.drawPickerSeparator(screen, sep_row, geom.col, geom.width, .command_popup_border);
     const detail_row = sep_row + 1;
-    renderDetail(screen, geom, detail_row, manager.selectedProposalConst());
+    renderDetail(editor, screen, geom, detail_row, manager.selectedProposalConst());
 
     const diff_start = detail_row + 3;
     const diff_rows = body_rows -| (list_rows + 4);
@@ -145,7 +145,7 @@ fn renderProposalList(screen: *render_mod.VirtualScreen, geom: popup.FilesystemP
     }
 }
 
-fn renderDetail(screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerGeometry, row: usize, selected: ?*const proposal.PatchProposal) void {
+fn renderDetail(editor: anytype, screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerGeometry, row: usize, selected: ?*const proposal.PatchProposal) void {
     const item = selected orelse return;
     const end = geom.col + geom.width - 1;
     var col = geom.col + 2;
@@ -164,6 +164,11 @@ fn renderDetail(screen: *render_mod.VirtualScreen, geom: popup.FilesystemPickerG
     if (item.error_message) |message| {
         col = geom.col + 2;
         popup.writeVirtualTruncatedCells(screen, row + 2, &col, end, message, .popup_error, true);
+    } else if (editor.state.execution_manager.latestByProposalConst(item.id)) |execution| {
+        col = geom.col + 2;
+        var exec_buf: [160]u8 = undefined;
+        const text = std.fmt.bufPrint(&exec_buf, "Execution: #{d} {s}", .{ execution.id, execution.status.label() }) catch "Execution";
+        popup.writeVirtualTruncatedCells(screen, row + 2, &col, end, text, executionStyle(execution.status), true);
     }
 }
 
@@ -211,6 +216,15 @@ fn statusStyle(status: proposal.PatchProposalStatus, selected: bool) render_mod.
         .applied => if (selected) .git_diff_added_selected else .git_diff_added,
         .rejected => if (selected) .explorer_selected_focus else .explorer_dim,
         .failed => if (selected) .git_diff_deleted_selected else .git_diff_deleted,
+    };
+}
+
+fn executionStyle(status: anytype) render_mod.RenderStyle {
+    return switch (status) {
+        .waiting_for_approval, .applying, .validating => .git_diff_modified,
+        .completed => .git_diff_added,
+        .failed => .git_diff_deleted,
+        .cancelled => .explorer_dim,
     };
 }
 

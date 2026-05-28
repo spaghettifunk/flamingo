@@ -191,17 +191,27 @@ pub const TaskWorker = struct {
 
         if (wait_error) |err| {
             self.pushOutputFmt(owned_request.id, .system, "Task wait failed: {s}", .{@errorName(err)});
+            self.markIdleBeforeFinishedEvent();
             self.pushFinished(owned_request.id, .failed, null);
             return;
         }
         if (cancelled) {
+            self.markIdleBeforeFinishedEvent();
             self.pushFinished(owned_request.id, .cancelled, null);
             return;
         }
 
         const exit_code = exitCode(term.?);
         const status: task_mod.TaskStatus = if (exit_code != null and exit_code.? == 0) .success else .failed;
+        self.markIdleBeforeFinishedEvent();
         self.pushFinished(owned_request.id, status, exit_code);
+    }
+
+    fn markIdleBeforeFinishedEvent(self: *TaskWorker) void {
+        self.mutex.lockUncancelable(self.io);
+        self.child = null;
+        self.running = false;
+        self.mutex.unlock(self.io);
     }
 
     fn pushStarted(self: *TaskWorker, id: u64) void {

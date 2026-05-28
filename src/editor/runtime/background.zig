@@ -4,6 +4,7 @@ const syntax = @import("../syntax.zig");
 const editor_lsp = @import("../lsp/editor_lsp.zig");
 const editor_syntax = @import("../syntax_editor.zig");
 const statusline = @import("../renderer/statusline.zig");
+const execution_pipeline = @import("../agent/execution_pipeline.zig");
 
 pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
     var fifo_events_processed: usize = 0;
@@ -54,7 +55,9 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
             },
             .task_started => |started| {
                 editor.state.task_manager.markStarted(started.id, started.started_at_ms);
+                execution_pipeline.onTaskStarted(editor, started.id, started.started_at_ms);
                 if (editor.state.task_manager.visible) editor.markDirty(.partial);
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
             },
             .task_output => |output| {
                 defer editor.allocator.free(output.bytes);
@@ -67,14 +70,18 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 editor.state.task_manager.finish(finished.id, finished.status, finished.exit_code, finished.finished_at_ms) catch |err| {
                     logz.err().fmt("msg", "failed to finish task: {any}", .{err}).log();
                 };
+                execution_pipeline.onTaskFinished(editor, finished.id, finished.status, finished.exit_code, finished.finished_at_ms);
                 if (editor.state.task_manager.visible) editor.markDirty(.partial);
+                if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
             },
             .task_failed_to_start => |failure| {
                 defer editor.allocator.free(failure.message);
                 editor.state.task_manager.failToStart(failure.id, failure.message, failure.finished_at_ms) catch |err| {
                     logz.err().fmt("msg", "failed to record task start failure: {any}", .{err}).log();
                 };
+                execution_pipeline.onTaskFailedToStart(editor, failure.id, failure.message, failure.finished_at_ms);
                 if (editor.state.task_manager.visible) editor.markDirty(.partial);
+                if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
             },
             .agent_event => |agent_event| {
                 defer editor.allocator.free(agent_event.text);

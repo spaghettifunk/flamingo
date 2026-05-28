@@ -55,6 +55,14 @@ pub const AgentEventKind = enum {
     proposal_applying,
     proposal_applied,
     proposal_failed,
+    execution_started,
+    execution_applying,
+    execution_validating,
+    execution_validation_task_started,
+    execution_validation_task_finished,
+    execution_completed,
+    execution_failed,
+    execution_cancelled,
     agent_error,
 
     pub fn label(self: AgentEventKind) []const u8 {
@@ -74,6 +82,14 @@ pub const AgentEventKind = enum {
             .proposal_applying => "Proposal",
             .proposal_applied => "Proposal",
             .proposal_failed => "Proposal",
+            .execution_started => "Execution",
+            .execution_applying => "Execution",
+            .execution_validating => "Execution",
+            .execution_validation_task_started => "Validation",
+            .execution_validation_task_finished => "Validation",
+            .execution_completed => "Execution",
+            .execution_failed => "Execution",
+            .execution_cancelled => "Execution",
             .agent_error => "Error",
         };
     }

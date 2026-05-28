@@ -33,9 +33,11 @@ The command is tokenized into argv directly. Flamingo supports whitespace, singl
 
 Task state is owned by `TaskManager` in editor state. Process execution runs on a worker thread, captures stdout and stderr through pipes, and forwards task lifecycle/output events through the shared runtime event queue. Output is capped at 10,000 lines per task.
 
+Agent proposal execution reuses this same task path for validation. The agent execution pipeline queues `zig build test` and `zig build` sequentially after an approved proposal applies; output remains inspectable in `:tasks`.
+
 ## Limitations
 
 - Only one task can run at a time.
 - Commands are non-interactive and are not PTY-backed.
 - Shell syntax such as pipes, redirects, and environment assignment is not interpreted.
-- There is no problem matcher, staging integration, or agent integration yet.
+- There is no problem matcher or staging integration yet.

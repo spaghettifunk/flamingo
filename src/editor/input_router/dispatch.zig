@@ -20,7 +20,7 @@ const multi_cursor = @import("../multi_cursor.zig");
 const command_parser = @import("../tasks/command_parser.zig");
 const task_mod = @import("../tasks/task.zig");
 const agent_mod = @import("../agent/session.zig");
-const proposal_apply = @import("../agent/proposal_apply.zig");
+const execution_pipeline = @import("../agent/execution_pipeline.zig");
 const workspace_guard = @import("../agent/workspace_guard.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
@@ -1801,6 +1801,10 @@ fn closeAgentPanel(ed: *editor.Editor) void {
 }
 
 fn cancelAgentSession(ed: *editor.Editor) void {
+    if (execution_pipeline.cancelActiveExecution(ed)) {
+        ed.markDirty(.partial);
+        return;
+    }
     if (!ed.runtime.mock_agent_worker.hasRunningSession()) {
         ed.state.status_message = "No agent session is running";
         ed.markDirty(.partial);
@@ -1882,36 +1886,7 @@ fn approveApplySelectedProposal(ed: *editor.Editor) void {
         ed.state.status_message = "No proposal selected";
         return;
     };
-    const id = selected.id;
-    const now = agent_mod.nowMs(ed.io);
-    ed.state.proposal_manager.approveProposal(id, now) catch |err| switch (err) {
-        error.ProposalNotPending => {},
-        else => {
-            ed.state.error_message = proposalActionErrorMessage(err);
-            return;
-        },
-    };
-    appendProposalEvent(ed, id, .proposal_approved, "Proposal #{d} approved.", .{id});
-
-    ed.state.proposal_manager.markApplying(id, agent_mod.nowMs(ed.io)) catch |err| {
-        ed.state.error_message = proposalActionErrorMessage(err);
-        return;
-    };
-    appendProposalEvent(ed, id, .proposal_applying, "Proposal #{d} applying.", .{id});
-
-    const root = agentRoot(ed);
-    const proposal = ed.state.proposal_manager.getProposal(id) orelse return;
-    proposal_apply.applyProposalToEditor(ed, proposal, root) catch |err| {
-        const message = proposalApplyErrorMessage(err);
-        ed.state.proposal_manager.markFailed(id, message, agent_mod.nowMs(ed.io)) catch {};
-        appendProposalEvent(ed, id, .proposal_failed, "Proposal #{d} failed: {s}", .{ id, message });
-        ed.state.error_message = message;
-        return;
-    };
-
-    ed.state.proposal_manager.markApplied(id, agent_mod.nowMs(ed.io)) catch {};
-    appendProposalEvent(ed, id, .proposal_applied, "Proposal #{d} applied. Open :gitdiff to review workspace changes.", .{id});
-    ed.state.status_message = "Proposal applied";
+    execution_pipeline.approveApplyAndStart(ed, selected.id);
 }
 
 fn openSelectedProposalFile(ed: *editor.Editor) !void {
