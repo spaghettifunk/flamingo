@@ -94,6 +94,13 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 editor.state.agent_manager.finishSession(finished.id, finished.status, finished.finished_at_ms);
                 if (editor.state.agent_manager.visible) editor.markDirty(.partial);
             },
+            .agent_audit_event => |audit_event| {
+                defer editor.allocator.free(audit_event.message);
+                editor.state.agent_manager.appendAuditEvent(audit_event.id, audit_event.kind, audit_event.message, audit_event.timestamp_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append agent audit event: {any}", .{err}).log();
+                };
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
             .agent_proposal_created => |draft| {
                 var owned = draft;
                 const session_id = owned.session_id;
@@ -111,6 +118,9 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 }) catch "Proposal created. Open :proposals to inspect.";
                 editor.state.agent_manager.appendEvent(session_id, .proposal_created, text, created_at_ms) catch |err| {
                     logz.err().fmt("msg", "failed to append proposal event: {any}", .{err}).log();
+                };
+                editor.state.agent_manager.appendAuditEvent(session_id, .proposal_created, text, created_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append proposal audit event: {any}", .{err}).log();
                 };
                 if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
             },

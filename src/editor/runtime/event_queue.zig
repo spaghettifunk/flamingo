@@ -5,6 +5,7 @@ const git_diff = @import("../git/diff_service.zig");
 const task_mod = @import("../tasks/task.zig");
 const agent_mod = @import("../agent/session.zig");
 const proposal_mod = @import("../agent/proposal.zig");
+const audit_mod = @import("../agent/audit.zig");
 
 pub const QueueError = error{
     QueueClosed,
@@ -78,6 +79,14 @@ pub const Event = union(enum) {
         finished_at_ms: i64,
     },
 
+    /// Owned audit event text. Whoever consumes or discards this event must free it.
+    agent_audit_event: struct {
+        id: u64,
+        kind: audit_mod.AgentAuditEventKind,
+        message: []u8,
+        timestamp_ms: i64,
+    },
+
     /// Owned proposal draft. Whoever consumes or discards this event must deinit it.
     agent_proposal_created: proposal_mod.PatchProposalDraft,
 };
@@ -149,6 +158,7 @@ pub const EventQueue = struct {
             .task_failed_to_start,
             .agent_event,
             .agent_session_finished,
+            .agent_audit_event,
             .agent_proposal_created,
             => try self.pushFifo(event),
             .syntax_parse_result => |result| try self.pushSyntaxResult(result),
@@ -301,6 +311,9 @@ pub const EventQueue = struct {
                 self.allocator.free(event.text);
             },
             .agent_session_finished => {},
+            .agent_audit_event => |event| {
+                self.allocator.free(event.message);
+            },
             .agent_proposal_created => |*draft| {
                 draft.deinit(self.allocator);
             },

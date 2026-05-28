@@ -245,6 +245,8 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Toggle Plan/Implementation | `Tab`              |
 | Delete prompt character | `Backspace`            |
 | Cancel running session/execution | `Ctrl+c`      |
+| Approve pending request | `a`                 |
+| Deny pending request    | `d`                 |
 | Scroll events up       | `Up`                    |
 | Scroll events down     | `Down`                  |
 | Page events up         | `PageUp`, `Ctrl+u`      |
@@ -341,6 +343,8 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 "enter" = "agent.submit"
 "tab" = "agent.toggle_mode"
 "ctrl+c" = "agent.cancel"
+"a" = "agent.approval_approve"
+"d" = "agent.approval_deny"
 
 [keybindings.proposals]
 "a" = "proposals.approve_apply"

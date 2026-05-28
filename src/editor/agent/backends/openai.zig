@@ -5,6 +5,7 @@ const backend = @import("../backend.zig");
 const agent = @import("../session.zig");
 const openai_client = @import("../openai_client.zig");
 const proposal = @import("../proposal.zig");
+const policy = @import("../policy.zig");
 const tools = @import("../tools.zig");
 const tool_executor = @import("../tool_executor.zig");
 const guard = @import("../workspace_guard.zig");
@@ -17,7 +18,7 @@ pub const OpenAIBackend = struct {
     model: []u8,
     api_key_env: []u8,
     api_key: ?[]u8 = null,
-    limits: config.AgentLimitsConfig = .{},
+    policy_config: policy.AgentPolicyConfig = .{},
     mutex: std.Io.Mutex = .init,
     running: bool = false,
     cancelled: bool = false,
@@ -39,7 +40,7 @@ pub const OpenAIBackend = struct {
         if (self.api_key) |key| self.allocator.free(key);
         self.model = try self.allocator.dupe(u8, cfg.openai.model);
         self.api_key_env = try self.allocator.dupe(u8, cfg.openai.api_key_env);
-        self.limits = cfg.limits;
+        self.policy_config = policy.AgentPolicyConfig.fromAgentConfig(cfg);
         self.api_key = if (env.get(cfg.openai.api_key_env)) |value|
             if (value.len > 0) try self.allocator.dupe(u8, value) else null
         else
@@ -154,6 +155,7 @@ pub const OpenAIBackend = struct {
         var sink = StreamSink{
             .backend = self,
             .session_id = owned.session_id,
+            .mode = owned.mode,
             .workspace_root = owned.workspace_root,
         };
         openai_client.parseSseEvents(self.allocator, stream, &sink) catch |err| {
@@ -208,6 +210,19 @@ pub const OpenAIBackend = struct {
             logz.debug().fmt("msg", "dropping OpenAI finish event: {any}", .{err}).log();
         };
     }
+
+    fn audit(self: *OpenAIBackend, id: u64, kind: @import("../audit.zig").AgentAuditEventKind, message: []const u8) void {
+        const owned = self.allocator.dupe(u8, message) catch return;
+        self.queue.push(.{ .agent_audit_event = .{
+            .id = id,
+            .kind = kind,
+            .message = owned,
+            .timestamp_ms = agent.nowMs(self.io),
+        } }) catch |err| {
+            self.allocator.free(owned);
+            logz.debug().fmt("msg", "dropping OpenAI audit event: {any}", .{err}).log();
+        };
+    }
 };
 
 const StartRequest = struct {
@@ -226,11 +241,9 @@ const StartRequest = struct {
 const StreamSink = struct {
     backend: *OpenAIBackend,
     session_id: u64,
+    mode: agent.AgentMode,
     workspace_root: []const u8,
     next_tool_call_id: u64 = 1,
-    tool_call_count: usize = 0,
-    file_read_count: usize = 0,
-    search_result_count: usize = 0,
 
     pub fn emit(self: *StreamSink, event: openai_client.OpenAIStreamEvent) !void {
         if (self.backend.isCancelled()) return;
@@ -243,12 +256,6 @@ const StreamSink = struct {
     }
 
     fn handleToolCall(self: *StreamSink, name: []const u8, arguments: []const u8) !void {
-        self.tool_call_count += 1;
-        if (self.tool_call_count > self.backend.limits.max_tool_calls) {
-            self.backend.emit(.agent_error, "Session aborted: tool limit reached.", self.session_id);
-            return error.OpenAIToolLimitReached;
-        }
-
         if (std.mem.eql(u8, name, "propose_patch")) {
             try self.handlePatchProposal(arguments);
             return;
@@ -261,31 +268,21 @@ const StreamSink = struct {
         defer deinitToolCall(self.backend.allocator, call);
         self.next_tool_call_id += 1;
 
-        if (std.meta.activeTag(call.input) == .read_file) {
-            self.file_read_count += 1;
-            if (self.file_read_count > self.backend.limits.max_file_reads) {
-                self.backend.emit(.agent_error, "Session aborted: file read limit reached.", self.session_id);
-                return error.OpenAIToolLimitReached;
-            }
-        }
-
         const call_text = tools.formatToolCall(self.backend.allocator, call) catch name;
         defer if (call_text.ptr != name.ptr) self.backend.allocator.free(call_text);
         self.backend.emit(.tool_call, call_text, self.session_id);
 
-        var executor = tool_executor.AgentToolExecutor.init(self.backend.allocator, self.backend.io, self.workspace_root);
+        var executor = tool_executor.AgentToolExecutor.initWithPolicy(
+            self.backend.allocator,
+            self.backend.io,
+            self.workspace_root,
+            self.session_id,
+            self.mode,
+            self.backend.policy_config,
+            self.backend.queue,
+        );
         var result = executor.execute(call);
         defer result.deinit(self.backend.allocator);
-
-        if (result.output) |output| {
-            if (std.meta.activeTag(output) == .search_text) {
-                self.search_result_count += output.search_text.matches.len;
-                if (self.search_result_count > self.backend.limits.max_search_results) {
-                    self.backend.emit(.agent_error, "Session aborted: search result limit reached.", self.session_id);
-                    return error.OpenAIToolLimitReached;
-                }
-            }
-        }
 
         const result_text = tools.formatToolResult(self.backend.allocator, result) catch {
             self.backend.emit(.tool_result, "tool result unavailable", self.session_id);
@@ -309,6 +306,24 @@ const StreamSink = struct {
             return;
         };
         errdefer draft.deinit(self.backend.allocator);
+        var state = policy.AgentPolicySessionState{ .id = self.session_id, .mode = self.mode };
+        var engine = policy.AgentPolicyEngine.init(self.backend.allocator, self.backend.io, self.workspace_root, self.backend.policy_config);
+        self.backend.audit(self.session_id, .tool_requested, "create_patch_proposal");
+        const decision = engine.evaluate(&state, .{
+            .session_id = self.session_id,
+            .capability = .create_patch_proposal,
+            .path = draft.file_path,
+            .reason = draft.description,
+        });
+        if (decision.decision != .allow) {
+            const message = decision.message orelse "patch proposal denied by policy";
+            self.backend.audit(self.session_id, .tool_denied, message);
+            self.backend.audit(self.session_id, .policy_violation, message);
+            self.backend.emitFmt(.agent_error, self.session_id, "Rejected patch proposal: {s}", .{message});
+            draft.deinit(self.backend.allocator);
+            return;
+        }
+        self.backend.audit(self.session_id, .tool_allowed, decision.message orelse "proposal allowed");
         self.backend.queue.push(.{ .agent_proposal_created = draft }) catch |err| {
             draft.deinit(self.backend.allocator);
             logz.debug().fmt("msg", "dropping OpenAI proposal event: {any}", .{err}).log();

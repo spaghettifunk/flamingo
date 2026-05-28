@@ -1,5 +1,7 @@
 const std = @import("std");
 const agent = @import("session.zig");
+const audit = @import("audit.zig");
+const policy = @import("policy.zig");
 const proposal_apply = @import("proposal_apply.zig");
 const command_parser = @import("../tasks/command_parser.zig");
 const task_mod = @import("../tasks/task.zig");
@@ -20,6 +22,8 @@ pub fn approveApplyAndStart(ed: anytype, proposal_id: u64) void {
     }
 
     const now = agent.nowMs(ed.io);
+    if (!evaluateProposalApplyPolicy(ed, selected.session_id, proposal_id, selected.file_path, selected.description, now)) return;
+
     const execution_id = ed.state.execution_manager.createForProposal(selected.session_id, proposal_id, now) catch |err| {
         ed.state.error_message = executionErrorMessage(err);
         return;
@@ -59,6 +63,7 @@ pub fn approveApplyAndStart(ed: anytype, proposal_id: u64) void {
 
     ed.state.proposal_manager.markApplied(proposal_id, agent.nowMs(ed.io)) catch {};
     appendProposalEvent(ed, proposal_id, .proposal_applied, "Proposal #{d} applied.", .{proposal_id});
+    ed.state.agent_manager.appendAuditEvent(proposal.session_id, .proposal_applied, "proposal applied", agent.nowMs(ed.io)) catch {};
 
     if (executionCancelRequested(ed, execution_id)) {
         cancelExecution(ed, execution_id, "Execution cancelled after applying. Applied file changes were not rolled back. Review changes with :gitdiff.");
@@ -73,6 +78,7 @@ pub fn onTaskStarted(ed: anytype, task_id: u64, started_at_ms: i64) void {
     appendExecutionEventById(ed, execution_item.id, .execution_validation_task_started, "Running validation: {s}", .{
         taskCommand(execution_item, task_id),
     });
+    ed.state.agent_manager.appendAuditEvent(execution_item.session_id, .validation_requested, taskCommand(execution_item, task_id), started_at_ms) catch {};
 }
 
 pub fn onTaskFinished(ed: anytype, task_id: u64, status: task_mod.TaskStatus, exit_code: ?i32, finished_at_ms: i64) void {
@@ -81,6 +87,7 @@ pub fn onTaskFinished(ed: anytype, task_id: u64, status: task_mod.TaskStatus, ex
     const command = taskCommand(execution_item, task_id);
 
     appendExecutionEventById(ed, execution_id, .execution_validation_task_finished, "{s}: {s}", .{ command, status.label() });
+    ed.state.agent_manager.appendAuditEvent(execution_item.session_id, .validation_completed, command, finished_at_ms) catch {};
 
     if (status == .cancelled) {
         cancelExecution(ed, execution_id, "Execution cancelled. Applied file changes were not rolled back. Review changes with :gitdiff.");
@@ -125,6 +132,39 @@ pub fn cancelActiveExecution(ed: anytype) bool {
     return true;
 }
 
+pub fn approvePendingApproval(ed: anytype) bool {
+    const request = ed.state.agent_manager.selectedPendingApproval() orelse return false;
+    const request_id = request.id;
+    const session_id = request.session_id;
+    const capability = request.capability;
+    const now = agent.nowMs(ed.io);
+    if (!ed.state.agent_manager.resolveApproval(request_id, .approved, now)) return false;
+    ed.state.agent_manager.appendAuditEvent(session_id, .approval_approved, "user approved request", now) catch {};
+    ed.state.agent_manager.appendEvent(session_id, .status, "Approval granted.", now) catch {};
+    if (capability == .run_validation_task) {
+        const active = ed.state.execution_manager.activeExecutionConst() orelse return true;
+        startNextValidationCommand(ed, active.id);
+    }
+    return true;
+}
+
+pub fn denyPendingApproval(ed: anytype) bool {
+    const request = ed.state.agent_manager.selectedPendingApproval() orelse return false;
+    const request_id = request.id;
+    const session_id = request.session_id;
+    const capability = request.capability;
+    const now = agent.nowMs(ed.io);
+    if (!ed.state.agent_manager.resolveApproval(request_id, .denied, now)) return false;
+    ed.state.agent_manager.appendAuditEvent(session_id, .approval_denied, "user denied request", now) catch {};
+    ed.state.agent_manager.appendEvent(session_id, .agent_error, "Approval denied.", now) catch {};
+    if (capability == .run_validation_task) {
+        if (ed.state.execution_manager.activeExecutionConst()) |active| {
+            failExecution(ed, active.id, "Validation approval denied", "Validation was denied by the user.");
+        }
+    }
+    return true;
+}
+
 fn startValidation(ed: anytype, execution_id: u64) void {
     ed.state.execution_manager.markValidating(execution_id) catch |err| {
         failExecution(ed, execution_id, executionErrorMessage(err), "Execution failed before validation could start.");
@@ -136,9 +176,19 @@ fn startValidation(ed: anytype, execution_id: u64) void {
 
 fn startNextValidationCommand(ed: anytype, execution_id: u64) void {
     const execution_item = ed.state.execution_manager.getExecutionConst(execution_id) orelse return;
-    if (execution_item.next_validation_index >= validation_commands.len) return;
-    const command = validation_commands[execution_item.next_validation_index];
+    const commands = configuredValidationCommands(ed);
+    if (execution_item.next_validation_index >= commands.len) return;
+    const command = commands[execution_item.next_validation_index];
     const root = agentRoot(ed);
+    const policy_result = evaluateValidationPolicy(ed, execution_item.session_id, execution_id, command);
+    switch (policy_result) {
+        .allowed => {},
+        .pending => return,
+        .denied => |message| {
+            failExecution(ed, execution_id, message, "Validation command was denied by policy.");
+            return;
+        },
+    }
 
     var parsed = command_parser.parse(ed.allocator, command) catch |err| {
         failExecution(ed, execution_id, parseErrorMessage(err), "Validation command could not be parsed.");
@@ -169,9 +219,96 @@ fn startNextValidationCommand(ed: anytype, execution_id: u64) void {
     };
 }
 
+const ValidationPolicyOutcome = union(enum) {
+    allowed,
+    pending,
+    denied: []const u8,
+};
+
+fn evaluateProposalApplyPolicy(ed: anytype, session_id: u64, proposal_id: u64, path: []const u8, description: []const u8, now: i64) bool {
+    var engine = policy.AgentPolicyEngine.init(ed.allocator, ed.io, agentRoot(ed), policy.AgentPolicyConfig.fromAgentConfig(ed.config.agent));
+    var state = policy.AgentPolicySessionState{ .id = session_id, .mode = .implementation };
+    ed.state.agent_manager.appendAuditEvent(session_id, .tool_requested, "apply_patch_proposal", now) catch {};
+    const decision = engine.evaluate(&state, .{
+        .session_id = session_id,
+        .capability = .apply_patch_proposal,
+        .path = path,
+        .reason = description,
+    });
+    switch (decision.decision) {
+        .allow => {
+            ed.state.agent_manager.appendAuditEvent(session_id, .tool_allowed, decision.message orelse "proposal apply allowed", now) catch {};
+            return true;
+        },
+        .require_user_approval => {
+            _ = ed.state.agent_manager.createApprovalRequest(session_id, .apply_patch_proposal, "Proposal application approved from Proposals panel.", now, proposal_id, null) catch {};
+            if (ed.state.agent_manager.pendingApprovalForSession(session_id)) |request| {
+                _ = ed.state.agent_manager.resolveApproval(request.id, .approved, now);
+            }
+            ed.state.agent_manager.appendAuditEvent(session_id, .approval_approved, "proposal apply approved by proposals panel", now) catch {};
+            return true;
+        },
+        .deny => {
+            const message = decision.message orelse "proposal apply denied";
+            ed.state.agent_manager.appendAuditEvent(session_id, .tool_denied, message, now) catch {};
+            ed.state.agent_manager.appendAuditEvent(session_id, .policy_violation, message, now) catch {};
+            ed.state.agent_manager.appendEvent(session_id, .agent_error, message, now) catch {};
+            ed.state.error_message = message;
+            return false;
+        },
+    }
+}
+
+fn evaluateValidationPolicy(ed: anytype, session_id: u64, execution_id: u64, command: []const u8) ValidationPolicyOutcome {
+    if (hasApprovedValidationApproval(ed, session_id, command)) return .allowed;
+    var engine = policy.AgentPolicyEngine.init(ed.allocator, ed.io, agentRoot(ed), policy.AgentPolicyConfig.fromAgentConfig(ed.config.agent));
+    var state = policy.AgentPolicySessionState{ .id = session_id, .mode = .implementation };
+    const now = agent.nowMs(ed.io);
+    ed.state.agent_manager.appendAuditEvent(session_id, .validation_requested, command, now) catch {};
+    const decision = engine.evaluate(&state, .{
+        .session_id = session_id,
+        .capability = .run_validation_task,
+        .command_display = command,
+        .reason = "Validate applied proposal.",
+    });
+    switch (decision.decision) {
+        .allow => return .allowed,
+        .deny => {
+            const message = decision.message orelse "validation denied";
+            ed.state.agent_manager.appendAuditEvent(session_id, .tool_denied, message, now) catch {};
+            ed.state.agent_manager.appendAuditEvent(session_id, .policy_violation, message, now) catch {};
+            return .{ .denied = message };
+        },
+        .require_user_approval => {
+            var buf: [256]u8 = undefined;
+            const description = std.fmt.bufPrint(&buf, "Agent wants to run validation command: {s}", .{command}) catch "Agent wants to run validation.";
+            _ = ed.state.agent_manager.createApprovalRequest(session_id, .run_validation_task, description, now, null, command) catch {};
+            ed.state.agent_manager.appendAuditEvent(session_id, .approval_requested, command, now) catch {};
+            appendExecutionEventById(ed, execution_id, .status, "Approval required for validation: {s}", .{command});
+            ed.state.status_message = "Agent approval required";
+            return .pending;
+        },
+    }
+}
+
+fn hasApprovedValidationApproval(ed: anytype, session_id: u64, command: []const u8) bool {
+    for (ed.state.agent_manager.approvals.items) |request| {
+        if (request.session_id != session_id or request.status != .approved or request.capability != .run_validation_task) continue;
+        if (request.command_display) |approved_command| {
+            if (std.mem.eql(u8, approved_command, command)) return true;
+        }
+    }
+    return false;
+}
+
 fn hasMoreValidationCommands(ed: anytype, execution_id: u64) bool {
     const execution_item = ed.state.execution_manager.getExecutionConst(execution_id) orelse return false;
-    return execution_item.next_validation_index < validation_commands.len;
+    return execution_item.next_validation_index < configuredValidationCommands(ed).len;
+}
+
+fn configuredValidationCommands(ed: anytype) []const []const u8 {
+    if (ed.config.agent.validation.commands.len == 0) return &validation_commands;
+    return ed.config.agent.validation.commands;
 }
 
 fn executionCancelRequested(ed: anytype, execution_id: u64) bool {

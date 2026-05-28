@@ -1,5 +1,8 @@
 const std = @import("std");
 const agent = @import("session.zig");
+const approval = @import("approval.zig");
+const audit = @import("audit.zig");
+const policy = @import("policy.zig");
 
 pub const StartError = error{
     AgentSessionAlreadyRunning,
@@ -9,7 +12,9 @@ pub const StartError = error{
 pub const AgentManager = struct {
     allocator: std.mem.Allocator,
     sessions: std.ArrayListUnmanaged(agent.AgentSession) = .empty,
+    approvals: std.ArrayListUnmanaged(approval.AgentApprovalRequest) = .empty,
     next_id: u64 = 1,
+    next_approval_id: u64 = 1,
     active_session_id: ?u64 = null,
     selected_index: usize = 0,
     event_scroll: usize = 0,
@@ -24,6 +29,8 @@ pub const AgentManager = struct {
     pub fn deinit(self: *AgentManager) void {
         for (self.sessions.items) |*session| session.deinit(self.allocator);
         self.sessions.deinit(self.allocator);
+        for (self.approvals.items) |*request| request.deinit(self.allocator);
+        self.approvals.deinit(self.allocator);
         self.prompt_input.deinit(self.allocator);
         self.* = undefined;
     }
@@ -97,6 +104,64 @@ pub const AgentManager = struct {
     ) !void {
         const session = self.findSession(id) orelse return;
         try session.appendEvent(self.allocator, kind, text, timestamp_ms);
+    }
+
+    pub fn appendAuditEvent(
+        self: *AgentManager,
+        id: u64,
+        kind: audit.AgentAuditEventKind,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) !void {
+        const session = self.findSession(id) orelse return;
+        try session.appendAuditEvent(self.allocator, kind, message, timestamp_ms);
+    }
+
+    pub fn createApprovalRequest(
+        self: *AgentManager,
+        session_id: u64,
+        capability: policy.AgentCapability,
+        description: []const u8,
+        now_ms: i64,
+        proposal_id: ?u64,
+        command_display: ?[]const u8,
+    ) !u64 {
+        if (self.pendingApprovalForSession(session_id)) |existing| return existing.id;
+        const id = self.next_approval_id;
+        self.next_approval_id +%= 1;
+        try self.approvals.append(self.allocator, .{
+            .id = id,
+            .session_id = session_id,
+            .capability = capability,
+            .description = try self.allocator.dupe(u8, description),
+            .created_at_ms = now_ms,
+            .proposal_id = proposal_id,
+            .command_display = if (command_display) |command| try self.allocator.dupe(u8, command) else null,
+        });
+        return id;
+    }
+
+    pub fn pendingApprovalForSession(self: *AgentManager, session_id: u64) ?*approval.AgentApprovalRequest {
+        for (self.approvals.items) |*request| {
+            if (request.session_id == session_id and request.status == .pending) return request;
+        }
+        return null;
+    }
+
+    pub fn selectedPendingApproval(self: *AgentManager) ?*approval.AgentApprovalRequest {
+        const session = self.selectedSessionConst() orelse return null;
+        return self.pendingApprovalForSession(session.id);
+    }
+
+    pub fn resolveApproval(self: *AgentManager, id: u64, status: approval.AgentApprovalStatus, now_ms: i64) bool {
+        for (self.approvals.items) |*request| {
+            if (request.id == id and request.status == .pending) {
+                request.status = status;
+                request.resolved_at_ms = now_ms;
+                return true;
+            }
+        }
+        return false;
     }
 
     pub fn finishSession(self: *AgentManager, id: u64, status: agent.AgentSessionStatus, finished_at_ms: i64) void {

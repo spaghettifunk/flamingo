@@ -101,12 +101,29 @@ pub const AgentLimitsConfig = struct {
     max_file_reads: usize = 50,
     max_search_results: usize = 100,
     max_tool_calls: usize = 100,
+    max_file_read_bytes: usize = 262144,
+};
+
+pub const AgentPolicyPathsConfig = struct {
+    deny: []const []const u8 = &.{ ".git", "zig-out", ".zig-cache", "node_modules", "target", "dist", "build" },
+};
+
+pub const AgentPolicyConfig = struct {
+    require_approval_for_validation: bool = false,
+    require_approval_for_patch_apply: bool = true,
+    paths: AgentPolicyPathsConfig = .{},
+};
+
+pub const AgentValidationConfig = struct {
+    commands: []const []const u8 = &.{ "zig build test", "zig build" },
 };
 
 pub const AgentConfig = struct {
     provider: []const u8 = "mock",
     openai: AgentOpenAIConfig = .{},
     limits: AgentLimitsConfig = .{},
+    policy: AgentPolicyConfig = .{},
+    validation: AgentValidationConfig = .{},
 
     pub fn providerKind(self: *const AgentConfig) ?agent_backend.AgentBackendKind {
         return agent_backend.AgentBackendKind.fromString(self.provider);
@@ -142,7 +159,9 @@ fn validateAgentConfig(cfg: *const AgentConfig) ConfigError!void {
     if (cfg.openai.api_key_env.len == 0) return error.InvalidAgentApiKeyEnv;
     if (cfg.limits.max_file_reads == 0 or
         cfg.limits.max_search_results == 0 or
-        cfg.limits.max_tool_calls == 0)
+        cfg.limits.max_tool_calls == 0 or
+        cfg.limits.max_file_read_bytes == 0 or
+        cfg.validation.commands.len == 0)
         return error.InvalidAgentLimits;
 }
 

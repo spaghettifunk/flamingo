@@ -2,6 +2,10 @@ const std = @import("std");
 const global_search = @import("../global_search.zig");
 const git_status = @import("../git_status.zig");
 const workspace_diff = @import("../git/workspace_diff.zig");
+const audit = @import("audit.zig");
+const event_queue = @import("../runtime/event_queue.zig");
+const policy = @import("policy.zig");
+const session = @import("session.zig");
 const tools = @import("tools.zig");
 const guard = @import("workspace_guard.zig");
 
@@ -9,23 +13,93 @@ pub const AgentToolExecutor = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     workspace_root: []const u8,
+    policy_config: policy.AgentPolicyConfig = .{},
+    policy_state: policy.AgentPolicySessionState,
+    audit_queue: ?*event_queue.EventQueue = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, workspace_root: []const u8) AgentToolExecutor {
         return .{
             .allocator = allocator,
             .io = io,
             .workspace_root = workspace_root,
+            .policy_state = .{ .id = 0, .mode = .plan },
+        };
+    }
+
+    pub fn initWithPolicy(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        workspace_root: []const u8,
+        session_id: u64,
+        mode: session.AgentMode,
+        policy_config: policy.AgentPolicyConfig,
+        audit_queue: ?*event_queue.EventQueue,
+    ) AgentToolExecutor {
+        return .{
+            .allocator = allocator,
+            .io = io,
+            .workspace_root = workspace_root,
+            .policy_config = policy_config,
+            .policy_state = .{ .id = session_id, .mode = mode },
+            .audit_queue = audit_queue,
         };
     }
 
     pub fn execute(self: *AgentToolExecutor, call: tools.AgentToolCall) tools.AgentToolResult {
+        if (self.policy_state.id == 0) self.policy_state.id = call.session_id;
+        const requested_text = tools.formatToolCall(self.allocator, call) catch null;
+        defer if (requested_text) |text| self.allocator.free(text);
+        auditEvent(self, call.session_id, .tool_requested, requested_text orelse call.name().label());
+        var engine = policy.AgentPolicyEngine.init(self.allocator, self.io, self.workspace_root, self.policy_config);
+        const request = policyRequestFromCall(call);
+        const decision = engine.evaluate(&self.policy_state, request);
+        switch (decision.decision) {
+            .allow => auditEvent(self, call.session_id, .tool_allowed, decision.message orelse "allowed"),
+            .deny => {
+                const message = decision.message orelse "denied by agent policy";
+                auditEvent(self, call.session_id, .tool_denied, message);
+                auditEvent(self, call.session_id, .policy_violation, message);
+                return .{
+                    .call_id = call.id,
+                    .ok = false,
+                    .error_message = std.fmt.allocPrint(self.allocator, "{s}", .{message}) catch null,
+                };
+            },
+            .require_user_approval => {
+                const message = decision.message orelse "approval required";
+                auditEvent(self, call.session_id, .approval_requested, message);
+                return .{
+                    .call_id = call.id,
+                    .ok = false,
+                    .error_message = std.fmt.allocPrint(self.allocator, "{s}", .{message}) catch null,
+                };
+            },
+        }
+
         const output = self.executeOutput(call.input) catch |err| {
+            auditEvent(self, call.session_id, .tool_failed, @errorName(err));
             return .{
                 .call_id = call.id,
                 .ok = false,
                 .error_message = std.fmt.allocPrint(self.allocator, "{s}", .{@errorName(err)}) catch null,
             };
         };
+        if (std.meta.activeTag(output) == .search_text) {
+            const limit_result = engine.recordSearchResults(&self.policy_state, output.search_text.matches.len);
+            if (limit_result.decision != .allow) {
+                var owned_output = output;
+                owned_output.deinit(self.allocator);
+                const message = limit_result.message orelse "search result limit reached";
+                auditEvent(self, call.session_id, .tool_denied, message);
+                auditEvent(self, call.session_id, .policy_violation, message);
+                return .{
+                    .call_id = call.id,
+                    .ok = false,
+                    .error_message = std.fmt.allocPrint(self.allocator, "{s}", .{message}) catch null,
+                };
+            }
+        }
+        auditEvent(self, call.session_id, .tool_completed, "tool completed");
         return .{
             .call_id = call.id,
             .ok = true,
@@ -133,21 +207,13 @@ pub const AgentToolExecutor = struct {
 
         const stat = try std.Io.Dir.cwd().statFile(self.io, absolute_path, .{});
         if (stat.kind != .file) return error.ExpectedFile;
-        if (stat.size > tools.max_file_read_bytes) {
-            return .{
-                .path = try self.allocator.dupe(u8, rel),
-                .content = try self.allocator.dupe(u8, "[file exceeds read byte cap]"),
-                .start_line = input.start_line orelse 1,
-                .line_count = 0,
-                .truncated_bytes = true,
-            };
-        }
+        if (stat.size > self.policy_config.max_file_read_bytes) return error.FileTooLarge;
 
         const contents = try std.Io.Dir.cwd().readFileAlloc(
             self.io,
             absolute_path,
             self.allocator,
-            std.Io.Limit.limited(tools.max_file_read_bytes),
+            std.Io.Limit.limited(self.policy_config.max_file_read_bytes),
         );
         defer self.allocator.free(contents);
 
@@ -372,6 +438,49 @@ pub const AgentToolExecutor = struct {
     }
 };
 
+fn policyRequestFromCall(call: tools.AgentToolCall) policy.AgentPolicyRequest {
+    return switch (call.input) {
+        .list_files => |input| .{
+            .session_id = call.session_id,
+            .capability = .list_files,
+            .tool_name = .list_files,
+            .path = input.root_relative_path orelse ".",
+        },
+        .read_file => |input| .{
+            .session_id = call.session_id,
+            .capability = .read_file,
+            .tool_name = .read_file,
+            .path = input.path,
+        },
+        .search_text => .{
+            .session_id = call.session_id,
+            .capability = .search_text,
+            .tool_name = .search_text,
+        },
+        .get_git_status => .{
+            .session_id = call.session_id,
+            .capability = .get_git_status,
+            .tool_name = .get_git_status,
+        },
+        .get_git_diff_summary => .{
+            .session_id = call.session_id,
+            .capability = .get_git_diff_summary,
+            .tool_name = .get_git_diff_summary,
+        },
+    };
+}
+
+fn auditEvent(self: *AgentToolExecutor, session_id: u64, kind: audit.AgentAuditEventKind, message: []const u8) void {
+    const queue = self.audit_queue orelse return;
+    const owned = self.allocator.dupe(u8, message) catch return;
+    queue.push(.{ .agent_audit_event = .{
+        .id = session_id,
+        .kind = kind,
+        .message = owned,
+        .timestamp_ms = session.nowMs(self.io),
+    } }) catch self.allocator.free(owned);
+}
+
 fn shouldIgnoreName(name: []const u8) bool {
     if (global_search.shouldIgnoreName(name)) return true;
     const ignored = [_][]const u8{ "dist", "build" };
@@ -452,8 +561,7 @@ test "agent read_file applies byte cap" {
     });
     defer result.deinit(allocator);
 
-    try std.testing.expect(result.ok);
-    try std.testing.expect(result.output.?.read_file.truncated_bytes);
+    try std.testing.expect(!result.ok);
 }
 
 test "agent search_text caps results" {

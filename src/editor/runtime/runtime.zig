@@ -83,6 +83,7 @@ pub const EditorRuntime = struct {
     }
 
     pub fn configureAgentBackend(self: *EditorRuntime, cfg: config.AgentConfig, env: anytype) !void {
+        self.mock_agent_worker.configurePolicy(@import("../agent/policy.zig").AgentPolicyConfig.fromAgentConfig(cfg));
         try self.openai_agent_backend.configure(cfg, env);
         self.agent_backend = switch (provider_registry.kindFromConfig(cfg) catch .mock) {
             .mock => mock_backend.asBackend(&self.mock_agent_worker),

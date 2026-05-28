@@ -121,6 +121,8 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .agent_backspace,
             .agent_toggle_mode,
             .agent_cancel,
+            .agent_approval_approve,
+            .agent_approval_deny,
             .agent_scroll_up,
             .agent_scroll_down,
             .agent_page_up,
@@ -1842,6 +1844,14 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.markDirty(.partial);
         },
         .agent_cancel => cancelAgentSession(ed),
+        .agent_approval_approve => {
+            if (!execution_pipeline.approvePendingApproval(ed)) ed.state.status_message = "No pending approval";
+            ed.markDirty(.partial);
+        },
+        .agent_approval_deny => {
+            if (!execution_pipeline.denyPendingApproval(ed)) ed.state.status_message = "No pending approval";
+            ed.markDirty(.partial);
+        },
         .agent_scroll_up => {
             ed.state.agent_manager.scrollUp(1);
             ed.markDirty(.partial);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const audit = @import("audit.zig");
 
 pub const max_agent_events = 10_000;
 
@@ -114,12 +115,20 @@ pub const AgentSession = struct {
     started_at_ms: i64,
     finished_at_ms: ?i64 = null,
     events: std.ArrayListUnmanaged(AgentEvent) = .empty,
+    audit_events: std.ArrayListUnmanaged(audit.AgentAuditEvent) = .empty,
+    next_audit_id: u64 = 1,
+    tool_call_count: usize = 0,
+    file_read_count: usize = 0,
+    search_result_count: usize = 0,
     truncated: bool = false,
+    audit_truncated: bool = false,
 
     pub fn deinit(self: *AgentSession, allocator: std.mem.Allocator) void {
         allocator.free(self.prompt);
         for (self.events.items) |*event| event.deinit(allocator);
         self.events.deinit(allocator);
+        for (self.audit_events.items) |*event| event.deinit(allocator);
+        self.audit_events.deinit(allocator);
         self.* = undefined;
     }
 
@@ -152,6 +161,41 @@ pub const AgentSession = struct {
             .text = owned,
             .timestamp_ms = timestamp_ms,
         });
+    }
+
+    pub fn appendAuditEvent(
+        self: *AgentSession,
+        allocator: std.mem.Allocator,
+        kind: audit.AgentAuditEventKind,
+        message: []const u8,
+        timestamp_ms: i64,
+    ) !void {
+        if (self.audit_events.items.len >= audit.max_audit_events) {
+            if (!self.audit_truncated) {
+                self.audit_truncated = true;
+                if (self.audit_events.items.len > 0) {
+                    var old = self.audit_events.orderedRemove(0);
+                    old.deinit(allocator);
+                }
+                const marker = try allocator.dupe(u8, "Agent audit log truncated after 10000 events.");
+                try self.audit_events.append(allocator, .{
+                    .id = self.next_audit_id,
+                    .kind = .policy_violation,
+                    .message = marker,
+                    .timestamp_ms = timestamp_ms,
+                });
+                self.next_audit_id +%= 1;
+            }
+            return;
+        }
+        const owned = try allocator.dupe(u8, message);
+        try self.audit_events.append(allocator, .{
+            .id = self.next_audit_id,
+            .kind = kind,
+            .message = owned,
+            .timestamp_ms = timestamp_ms,
+        });
+        self.next_audit_id +%= 1;
     }
 };
 

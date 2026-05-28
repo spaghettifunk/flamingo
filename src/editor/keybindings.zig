@@ -876,6 +876,8 @@ const default_bindings = [_]Binding{
     .{ .context = .agent, .sequence = keySpecial(.Backspace), .command = .agent_backspace },
     .{ .context = .agent, .sequence = keyChar('\t'), .command = .agent_toggle_mode },
     .{ .context = .agent, .sequence = ctrlChar('c'), .command = .agent_cancel },
+    .{ .context = .agent, .sequence = keyChar('a'), .command = .agent_approval_approve },
+    .{ .context = .agent, .sequence = keyChar('d'), .command = .agent_approval_deny },
     .{ .context = .agent, .sequence = keySpecial(.Up), .command = .agent_scroll_up },
     .{ .context = .agent, .sequence = keySpecial(.Down), .command = .agent_scroll_down },
     .{ .context = .agent, .sequence = keySpecial(.PageUp), .command = .agent_page_up },

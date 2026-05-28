@@ -60,6 +60,20 @@ model = "gpt-5-codex"
 max_file_reads = 50
 max_search_results = 100
 max_tool_calls = 100
+max_file_read_bytes = 262144
+
+[agent.policy]
+require_approval_for_validation = false
+require_approval_for_patch_apply = true
+
+[agent.policy.paths]
+deny = [".git", "zig-out", ".zig-cache", "node_modules", "target", "dist", "build"]
+
+[agent.validation]
+commands = [
+  "zig build test",
+  "zig build",
+]
 
 # Built-in language server defaults can be overridden per language.
 # Protobuf defaults to Buf's LSP:

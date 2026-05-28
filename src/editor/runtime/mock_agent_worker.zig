@@ -1,6 +1,8 @@
 const std = @import("std");
 const logz = @import("logz");
 const agent = @import("../agent/session.zig");
+const audit = @import("../agent/audit.zig");
+const policy = @import("../agent/policy.zig");
 const tools = @import("../agent/tools.zig");
 const tool_executor = @import("../agent/tool_executor.zig");
 const readonly_planner = @import("../agent/readonly_planner.zig");
@@ -35,6 +37,7 @@ pub const MockAgentWorker = struct {
     running: bool = false,
     cancelled: bool = false,
     thread: ?std.Thread = null,
+    policy_config: policy.AgentPolicyConfig = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, queue: *event_queue.EventQueue) MockAgentWorker {
         return .{
@@ -50,6 +53,10 @@ pub const MockAgentWorker = struct {
             thread.join();
             self.thread = null;
         }
+    }
+
+    pub fn configurePolicy(self: *MockAgentWorker, policy_config: policy.AgentPolicyConfig) void {
+        self.policy_config = policy_config;
     }
 
     pub fn startSession(
@@ -137,7 +144,7 @@ pub const MockAgentWorker = struct {
     }
 
     fn runPlanScript(self: *MockAgentWorker, id: u64, prompt: []const u8, workspace_root: []const u8) void {
-        var executor = tool_executor.AgentToolExecutor.init(self.allocator, self.io, workspace_root);
+        var executor = tool_executor.AgentToolExecutor.initWithPolicy(self.allocator, self.io, workspace_root, id, .plan, self.policy_config, self.queue);
         var planner = readonly_planner.ReadOnlyPlanner.init(self.allocator, &executor, id);
         var emitter = WorkerPlannerEmitter{ .worker = self, .id = id };
         planner.run(prompt, &emitter) catch |err| switch (err) {
@@ -156,7 +163,7 @@ pub const MockAgentWorker = struct {
         self.emit(.status, "Starting implementation session.", id);
         if (self.pauseOrCancel(id)) return;
 
-        var executor = tool_executor.AgentToolExecutor.init(self.allocator, self.io, workspace_root);
+        var executor = tool_executor.AgentToolExecutor.initWithPolicy(self.allocator, self.io, workspace_root, id, .implementation, self.policy_config, self.queue);
         const query = implementationSearchQuery(prompt);
         const call = tools.AgentToolCall{
             .id = 1,
@@ -183,6 +190,25 @@ pub const MockAgentWorker = struct {
             self.finish(id, .failed);
             return;
         };
+        var state = policy.AgentPolicySessionState{ .id = id, .mode = .implementation };
+        var engine = policy.AgentPolicyEngine.init(self.allocator, self.io, workspace_root, self.policy_config);
+        self.emitAudit(id, .tool_requested, "create_patch_proposal");
+        const decision = engine.evaluate(&state, .{
+            .session_id = id,
+            .capability = .create_patch_proposal,
+            .path = draft.file_path,
+            .reason = draft.description,
+        });
+        if (decision.decision != .allow) {
+            const message = decision.message orelse "patch proposal denied by policy";
+            self.emitAudit(id, .tool_denied, message);
+            self.emitAudit(id, .policy_violation, message);
+            self.emitFmt(.proposal_failed, id, "Proposal generation denied: {s}", .{message});
+            draft.deinit(self.allocator);
+            self.finish(id, .failed);
+            return;
+        }
+        self.emitAudit(id, .tool_allowed, decision.message orelse "proposal allowed");
         self.queue.push(.{ .agent_proposal_created = draft }) catch |err| {
             draft.deinit(self.allocator);
             self.emitFmt(.proposal_failed, id, "Proposal could not be queued: {s}", .{@errorName(err)});
@@ -256,6 +282,19 @@ pub const MockAgentWorker = struct {
             logz.debug().fmt("msg", "dropping agent finish event: {any}", .{err}).log();
         };
     }
+
+    fn emitAudit(self: *MockAgentWorker, id: u64, kind: audit.AgentAuditEventKind, message: []const u8) void {
+        const owned = self.allocator.dupe(u8, message) catch return;
+        self.queue.push(.{ .agent_audit_event = .{
+            .id = id,
+            .kind = kind,
+            .message = owned,
+            .timestamp_ms = agent.nowMs(self.io),
+        } }) catch |err| {
+            self.allocator.free(owned);
+            logz.debug().fmt("msg", "dropping agent audit event: {any}", .{err}).log();
+        };
+    }
 };
 
 fn implementationSearchQuery(prompt: []const u8) []const u8 {
@@ -322,6 +361,7 @@ test "implementation mode emits proposal without editing files" {
         var ev = queue.pop().?;
         switch (ev) {
             .agent_event => |event| allocator.free(event.text),
+            .agent_audit_event => |event| allocator.free(event.message),
             .agent_proposal_created => |*draft| {
                 proposal_seen = true;
                 try std.testing.expectEqual(@as(u64, 9), draft.session_id);
