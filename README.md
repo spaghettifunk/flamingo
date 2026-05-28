@@ -59,16 +59,6 @@ Zig dependencies are declared in `build.zig.zon`; vendored tree-sitter grammars 
 
 ## Quick Start
 
-Install with Homebrew from the project tap:
-
-```bash
-brew tap spaghettifunk/flamingo https://github.com/spaghettifunk/flamingo
-brew install flamingo
-flamingo --version
-```
-
-For v1, Homebrew builds Flamingo from the tagged source release using Zig. The formula lives in [Formula/flamingo.rb](Formula/flamingo.rb), so this repository can be used directly as the tap by passing the repository URL. A future `homebrew-flamingo` tap repository would enable the shorter `brew tap spaghettifunk/flamingo` command and would be cleaner long term, but keeping the formula here has the least operational overhead for the first public release.
-
 Build and run the editor:
 
 ```bash

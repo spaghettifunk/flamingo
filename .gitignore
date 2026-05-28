@@ -8,4 +8,4 @@ zig-pkg
 
 tracing
 
-config.toml
+config.local.toml

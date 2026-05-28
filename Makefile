@@ -10,7 +10,7 @@ run:
 	zig build run
 
 run-dev:
-	zig build run -- --config ./config.toml
+	zig build run -- --config ./config.local.toml
 
 perf:
 	zig build perf

@@ -53,7 +53,7 @@ provider = "mock"
 
 [agent.openai]
 # API keys are read from the environment only; never put secrets in config.
-api_key_env = ""
+api_key_env = "OPENAI_API_KEY"
 model = "gpt-5-codex"
 
 [agent.limits]
