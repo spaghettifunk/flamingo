@@ -25,6 +25,7 @@ pub const Command = enum {
     comments,
     git_diff,
     agent,
+    proposals,
     run,
     tasks,
     task_stop,
@@ -50,6 +51,7 @@ pub const Command = enum {
             .comments => .comments_open,
             .git_diff => .git_diff_open,
             .agent => .agent_open,
+            .proposals => .proposals_open,
             .run => .task_run,
             .tasks => .tasks_open,
             .task_stop => .task_stop,
@@ -93,6 +95,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .comments_open => .comments,
         .git_diff_open => .git_diff,
         .agent_open => .agent,
+        .proposals_open => .proposals,
         .task_run => .run,
         .tasks_open => .tasks,
         .task_stop => .task_stop,
@@ -309,6 +312,10 @@ pub fn execute(ed: *editor.Editor) !void {
         .agent => {
             if (!requireNoMoreArgs(ed, &it)) return;
             openAgentPanel(ed);
+        },
+        .proposals => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            openProposalsPanel(ed);
         },
         .run => {
             const tail = commandTail(command_input, cmd);
@@ -542,6 +549,16 @@ pub fn openTaskPanel(ed: *editor.Editor) void {
 pub fn openAgentPanel(ed: *editor.Editor) void {
     ed.state.agent_manager.open();
     ed.state.mode = .Agent;
+    ed.state.explorer_focused = false;
+    ed.state.todo_panel.focused = false;
+    ed.state.comments_panel.focused = false;
+    ed.terminal_panel.blur();
+    ed.markDirty(.full);
+}
+
+pub fn openProposalsPanel(ed: *editor.Editor) void {
+    ed.state.proposal_manager.open();
+    ed.state.mode = .Proposals;
     ed.state.explorer_focused = false;
     ed.state.todo_panel.focused = false;
     ed.state.comments_panel.focused = false;
@@ -852,6 +869,7 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.todos, Command.fromString("todos").?);
     try std.testing.expectEqual(Command.git_diff, Command.fromString("gitdiff").?);
     try std.testing.expectEqual(Command.agent, Command.fromString("agent").?);
+    try std.testing.expectEqual(Command.proposals, Command.fromString("proposals").?);
     try std.testing.expectEqual(Command.run, Command.fromString("run").?);
     try std.testing.expectEqual(Command.tasks, Command.fromString("tasks").?);
     try std.testing.expectEqual(Command.task_stop, Command.fromString("taskstop").?);

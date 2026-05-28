@@ -519,6 +519,8 @@ pub const Editor = struct {
             .task_panel
         else if (self.state.mode == .Agent)
             .agent
+        else if (self.state.mode == .Proposals)
+            .proposals
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -1386,7 +1388,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .GitGraph, .GitDiff, .TaskPanel, .Agent, .Help, .Terminal, .SaveConfirmation };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .GitGraph, .GitDiff, .TaskPanel, .Agent, .Proposals, .Help, .Terminal, .SaveConfirmation };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());

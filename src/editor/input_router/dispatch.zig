@@ -20,6 +20,8 @@ const multi_cursor = @import("../multi_cursor.zig");
 const command_parser = @import("../tasks/command_parser.zig");
 const task_mod = @import("../tasks/task.zig");
 const agent_mod = @import("../agent/session.zig");
+const proposal_apply = @import("../agent/proposal_apply.zig");
+const workspace_guard = @import("../agent/workspace_guard.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -123,6 +125,20 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .agent_scroll_down,
             .agent_page_up,
             .agent_page_down,
+            => true,
+            else => false,
+        },
+        .proposals => switch (id) {
+            .proposals_close,
+            .proposals_move_up,
+            .proposals_move_down,
+            .proposals_page_up,
+            .proposals_page_down,
+            .proposals_previous,
+            .proposals_next,
+            .proposals_approve_apply,
+            .proposals_reject,
+            .proposals_open_file,
             => true,
             else => false,
         },
@@ -433,6 +449,10 @@ fn taskPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) 
 
 fn agentActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     return resolveDefaultContextCommand(ed, .agent, event);
+}
+
+fn proposalsActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .proposals, event);
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1722,6 +1742,25 @@ fn agentEventRows(ed: *const editor.Editor) usize {
     return @max(ed.height / 2, 1);
 }
 
+fn agentRoot(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    if (ed.state.workspace.root_path) |root| return root;
+    return ".";
+}
+
+fn proposalDiffRows(ed: *const editor.Editor) usize {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse return 0;
+    var count: usize = 0;
+    var it = std.mem.splitScalar(u8, selected.unified_diff, '\n');
+    while (it.next()) |_| count += 1;
+    return count;
+}
+
+fn proposalVisibleRows(ed: *const editor.Editor) usize {
+    return @max(ed.height / 2, 1);
+}
+
 fn startAgentSession(ed: *editor.Editor) !void {
     const prompt = std.mem.trim(u8, ed.state.agent_manager.prompt_input.items, " \t\r\n");
     if (prompt.len == 0) {
@@ -1740,10 +1779,10 @@ fn startAgentSession(ed: *editor.Editor) !void {
         else => return err,
     };
     const session = ed.state.agent_manager.findSession(id) orelse return;
-    ed.runtime.mock_agent_worker.startSession(id, session.mode, session.prompt) catch |err| {
+    ed.runtime.mock_agent_worker.startSession(id, session.mode, session.prompt, agentRoot(ed)) catch |err| {
         const message = switch (err) {
             error.AgentSessionAlreadyRunning => "Agent session is already running.",
-            else => "Unable to start mock agent.",
+            else => "Unable to start agent.",
         };
         try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
         ed.state.error_message = message;
@@ -1805,6 +1844,153 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.state.agent_manager.scrollDown(rows, rows);
             ed.markDirty(.partial);
         },
+        else => unreachable,
+    }
+}
+
+fn closeProposalsPanel(ed: *editor.Editor) void {
+    ed.state.proposal_manager.close();
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn appendProposalEvent(ed: *editor.Editor, proposal_id: u64, kind: agent_mod.AgentEventKind, comptime fmt: []const u8, args: anytype) void {
+    const proposal = ed.state.proposal_manager.getProposalConst(proposal_id) orelse return;
+    var buf: [256]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    ed.state.agent_manager.appendEvent(proposal.session_id, kind, text, agent_mod.nowMs(ed.io)) catch |err| {
+        logz.err().fmt("msg", "failed to append proposal event: {any}", .{err}).log();
+    };
+}
+
+fn rejectSelectedProposal(ed: *editor.Editor) void {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse {
+        ed.state.status_message = "No proposal selected";
+        return;
+    };
+    const id = selected.id;
+    ed.state.proposal_manager.rejectProposal(id, agent_mod.nowMs(ed.io)) catch |err| {
+        ed.state.error_message = proposalActionErrorMessage(err);
+        return;
+    };
+    appendProposalEvent(ed, id, .proposal_rejected, "Proposal #{d} rejected.", .{id});
+    ed.state.status_message = "Proposal rejected";
+}
+
+fn approveApplySelectedProposal(ed: *editor.Editor) void {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse {
+        ed.state.status_message = "No proposal selected";
+        return;
+    };
+    const id = selected.id;
+    const now = agent_mod.nowMs(ed.io);
+    ed.state.proposal_manager.approveProposal(id, now) catch |err| switch (err) {
+        error.ProposalNotPending => {},
+        else => {
+            ed.state.error_message = proposalActionErrorMessage(err);
+            return;
+        },
+    };
+    appendProposalEvent(ed, id, .proposal_approved, "Proposal #{d} approved.", .{id});
+
+    ed.state.proposal_manager.markApplying(id, agent_mod.nowMs(ed.io)) catch |err| {
+        ed.state.error_message = proposalActionErrorMessage(err);
+        return;
+    };
+    appendProposalEvent(ed, id, .proposal_applying, "Proposal #{d} applying.", .{id});
+
+    const root = agentRoot(ed);
+    const proposal = ed.state.proposal_manager.getProposal(id) orelse return;
+    proposal_apply.applyProposalToEditor(ed, proposal, root) catch |err| {
+        const message = proposalApplyErrorMessage(err);
+        ed.state.proposal_manager.markFailed(id, message, agent_mod.nowMs(ed.io)) catch {};
+        appendProposalEvent(ed, id, .proposal_failed, "Proposal #{d} failed: {s}", .{ id, message });
+        ed.state.error_message = message;
+        return;
+    };
+
+    ed.state.proposal_manager.markApplied(id, agent_mod.nowMs(ed.io)) catch {};
+    appendProposalEvent(ed, id, .proposal_applied, "Proposal #{d} applied. Open :gitdiff to review workspace changes.", .{id});
+    ed.state.status_message = "Proposal applied";
+}
+
+fn openSelectedProposalFile(ed: *editor.Editor) !void {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse {
+        ed.state.status_message = "No proposal selected";
+        return;
+    };
+    const path = workspace_guard.resolveWorkspacePath(ed.allocator, ed.io, agentRoot(ed), selected.file_path) catch |err| {
+        ed.state.error_message = proposalApplyErrorMessage(err);
+        return;
+    };
+    defer ed.allocator.free(path);
+    fs_ops.openFileInEditor(ed, path) catch |err| {
+        ed.state.error_message = proposalApplyErrorMessage(err);
+        return;
+    };
+    ed.markDirty(.full);
+}
+
+fn proposalActionErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ProposalNotFound => "Proposal not found",
+        error.ProposalNotPending => "Proposal is not pending",
+        error.ProposalNotApplicable => "Proposal cannot be changed from its current state",
+        else => "Proposal action failed",
+    };
+}
+
+fn proposalApplyErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.OutsideWorkspace => "Proposal target is outside the workspace",
+        error.GitInternalsForbidden => "Proposal cannot target .git internals",
+        error.BinaryFile => "Proposal target appears to be binary",
+        error.PathAlreadyExists => "Proposal target already exists",
+        error.FileNotFound => "Proposal target file was not found",
+        error.ExpectedFile => "Proposal target is not a file",
+        error.HunkMismatch => "Proposal no longer matches the target file",
+        error.InvalidLine => "Proposal target line is invalid",
+        else => "Proposal apply failed",
+    };
+}
+
+fn executeProposalsActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const rows = proposalVisibleRows(ed);
+    switch (command) {
+        .proposals_close => closeProposalsPanel(ed),
+        .proposals_move_up => {
+            ed.state.proposal_manager.scrollUp(1);
+            ed.markDirty(.partial);
+        },
+        .proposals_move_down => {
+            ed.state.proposal_manager.scrollDown(1, proposalDiffRows(ed), rows);
+            ed.markDirty(.partial);
+        },
+        .proposals_page_up => {
+            ed.state.proposal_manager.scrollUp(rows);
+            ed.markDirty(.partial);
+        },
+        .proposals_page_down => {
+            ed.state.proposal_manager.scrollDown(rows, proposalDiffRows(ed), rows);
+            ed.markDirty(.partial);
+        },
+        .proposals_previous => {
+            ed.state.proposal_manager.selectPrevious();
+            ed.markDirty(.partial);
+        },
+        .proposals_next => {
+            ed.state.proposal_manager.selectNext();
+            ed.markDirty(.partial);
+        },
+        .proposals_approve_apply => {
+            approveApplySelectedProposal(ed);
+            ed.markDirty(.full);
+        },
+        .proposals_reject => {
+            rejectSelectedProposal(ed);
+            ed.markDirty(.partial);
+        },
+        .proposals_open_file => try openSelectedProposalFile(ed),
         else => unreachable,
     }
 }
@@ -2582,6 +2768,12 @@ fn handleAgentInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 }
 
+fn handleProposalsInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (proposalsActionCommandForEvent(ed, event)) |command| {
+        try executeProposalsActionCommand(ed, command);
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -2873,6 +3065,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .Agent => {
             try handleAgentInput(ed, event);
+        },
+        .Proposals => {
+            try handleProposalsInput(ed, event);
         },
         .SaveConfirmation => {
             if (saveConfirmationActionCommandForEvent(ed, event)) |command| {

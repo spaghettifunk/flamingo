@@ -181,8 +181,14 @@ fn eventStyle(kind: agent.AgentEventKind) render_mod.RenderStyle {
         .status => .explorer_dim,
         .tool_call => .git_graph_lane_blue,
         .tool_result => .git_diff_added,
+        .final_plan => .git_diff_modified,
         .task_started, .task_finished => .git_diff_modified,
         .diff_available => .git_diff_modified,
+        .proposal_created => .git_graph_lane_blue,
+        .proposal_approved, .proposal_applying => .git_diff_modified,
+        .proposal_applied => .git_diff_added,
+        .proposal_rejected => .explorer_dim,
+        .proposal_failed => .git_diff_deleted,
         .agent_error => .git_diff_deleted,
     };
 }

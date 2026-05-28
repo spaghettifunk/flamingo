@@ -112,7 +112,8 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:font-info`              |                                 | Show icon mode and terminal font guidance                  |
 | `:gitdiff`                |                                 | Open the workspace Git Diff panel                          |
 | `:gitdiff-refresh`        | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers               |
-| `:agent`                  |                                 | Open the mock Agent session panel                          |
+| `:agent`                  |                                 | Open the Agent session panel                               |
+| `:proposals`              |                                 | Open the Agent proposal review panel                       |
 | `:run <command>`          |                                 | Run a non-interactive task from the workspace root          |
 | `:tasks`                  |                                 | Open the task output panel                                 |
 | `:taskstop`               |                                 | Cancel the currently running task                          |
@@ -240,7 +241,7 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Action                 | Keybinding              |
 | :--------------------- | :---------------------- |
 | Open Agent panel       | `:agent`                |
-| Start mock session     | `Enter`                 |
+| Start session          | `Enter`                 |
 | Toggle Plan/Implementation | `Tab`              |
 | Delete prompt character | `Backspace`            |
 | Cancel running session | `Ctrl+c`                |
@@ -248,6 +249,19 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Scroll events down     | `Down`                  |
 | Page events up         | `PageUp`, `Ctrl+u`      |
 | Page events down       | `PageDown`, `Ctrl+d`    |
+
+### Proposals Panel
+
+| Action                 | Keybinding              |
+| :--------------------- | :---------------------- |
+| Open proposals panel   | `:proposals`            |
+| Apply selected proposal | `a`                    |
+| Reject selected proposal | `r`                   |
+| Previous/next proposal | `[`, `]`                |
+| Open target file       | `Enter`                 |
+| Scroll diff            | `Up`, `Down`            |
+| Page diff              | `PageUp`, `PageDown`, `Ctrl+u`, `Ctrl+d` |
+| Close proposals panel  | `q` or `Esc`            |
 | Close Agent panel      | `Esc`                   |
 
 ### LSP Completion
@@ -327,6 +341,10 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 "enter" = "agent.submit"
 "tab" = "agent.toggle_mode"
 "ctrl+c" = "agent.cancel"
+
+[keybindings.proposals]
+"a" = "proposals.approve_apply"
+"r" = "proposals.reject"
 
 [keybindings.normal.unbind]
 keys = ["ctrl+w"]

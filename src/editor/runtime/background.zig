@@ -87,6 +87,26 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 editor.state.agent_manager.finishSession(finished.id, finished.status, finished.finished_at_ms);
                 if (editor.state.agent_manager.visible) editor.markDirty(.partial);
             },
+            .agent_proposal_created => |draft| {
+                var owned = draft;
+                const session_id = owned.session_id;
+                const description = owned.description;
+                const created_at_ms = owned.created_at_ms;
+                const proposal_id = editor.state.proposal_manager.createProposal(owned) catch |err| {
+                    owned.deinit(editor.allocator);
+                    logz.err().fmt("msg", "failed to create proposal: {any}", .{err}).log();
+                    continue;
+                };
+                var buf: [256]u8 = undefined;
+                const text = std.fmt.bufPrint(&buf, "Proposal #{d} created: {s}. Open :proposals to inspect.", .{
+                    proposal_id,
+                    description,
+                }) catch "Proposal created. Open :proposals to inspect.";
+                editor.state.agent_manager.appendEvent(session_id, .proposal_created, text, created_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append proposal event: {any}", .{err}).log();
+                };
+                if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
+            },
             .syntax_parse_result => unreachable,
         }
     }

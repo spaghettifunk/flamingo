@@ -63,6 +63,7 @@ pub fn buildStatusText(editor: anytype, tab: ?*Tab, buf: *[160]u8) ![]const u8 {
         .GitDiff => "GIT DIFF",
         .TaskPanel => "TASKS",
         .Agent => "AGENT",
+        .Proposals => "PROPOSALS",
         .Help => "HELP",
         .FilesystemPicker => "FILES",
         .Prompt => "PROMPT",
@@ -91,6 +92,7 @@ pub fn statusModeLabel(editor: anytype) []const u8 {
         .GitDiff => "DIFF",
         .TaskPanel => "TASKS",
         .Agent => "AGENT",
+        .Proposals => "PROPS",
         .Help => "HELP",
         .FilesystemPicker => "FILES",
         .Prompt => "PROMPT",
@@ -102,7 +104,7 @@ pub fn statusModeLabel(editor: anytype) []const u8 {
 pub fn statusModeStyle(editor: anytype) render_mod.RenderStyle {
     return switch (editor.state.mode) {
         .Insert => .status_mode_insert,
-        .Command, .FilesystemPicker, .Prompt, .Help, .Terminal, .GitGraph, .GitDiff, .TaskPanel, .Agent => .status_mode_command,
+        .Command, .FilesystemPicker, .Prompt, .Help, .Terminal, .GitGraph, .GitDiff, .TaskPanel, .Agent, .Proposals => .status_mode_command,
         .Search, .GlobalSearch => .status_mode_search,
         else => .status_mode_normal,
     };
@@ -143,6 +145,7 @@ pub fn statusContext(editor: anytype) ?[]const u8 {
     if (editor.state.mode == .GitDiff) return "git_diff";
     if (editor.state.mode == .TaskPanel) return "tasks";
     if (editor.state.mode == .Agent) return "agent";
+    if (editor.state.mode == .Proposals) return "proposals";
     if (editor.state.mode == .Help) return "help";
     if (editor.state.mode == .Search) return "search";
     if (editor.state.mode == .GlobalSearch) return "global_search";

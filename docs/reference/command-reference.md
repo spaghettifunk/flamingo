@@ -24,7 +24,8 @@ Command metadata lives in `src/editor/commands.zig`. Colon command execution liv
 | `:gitdiff-refresh` | none               | Refresh Git diff gutter markers for the current file.                                    | `src/editor/command.zig`  |
 | `:diff-refresh`    | none               | Alias for `:gitdiff-refresh`.                                                            | `src/editor/commands.zig` |
 | `:git-refresh`     | none               | Alias for `:gitdiff-refresh`.                                                            | `src/editor/commands.zig` |
-| `:agent`           | none               | Open the mock Agent session panel.                                                       | `src/editor/command.zig`  |
+| `:agent`           | none               | Open the Agent session panel.                                                            | `src/editor/command.zig`  |
+| `:proposals`       | none               | Open the Agent proposal review panel.                                                    | `src/editor/command.zig`  |
 | `:run`             | command argv       | Run a non-interactive task from the workspace root.                                      | `src/editor/command.zig`  |
 | `:tasks`           | none               | Open the task output panel.                                                              | `src/editor/command.zig`  |
 | `:taskstop`        | none               | Cancel the currently running task.                                                       | `src/editor/command.zig`  |
@@ -56,7 +57,7 @@ Canonical command names are the strings used in config keybinding tables. They a
 | TODOs              | `todos.open`, `todo_panel.new`, `todo_panel.toggle`, `todo_panel.open_selected`                    | `src/editor/commands.zig` |
 | Comments           | `comments.create`, `comments.open`, `comments_panel.reply`, `comments_panel.open_selected`         | `src/editor/commands.zig` |
 | Git                | `git_diff.open`, `git_diff.refresh`, `git_diff.refresh_panel`, `git_graph.open`, `git_graph.refresh` | `src/editor/commands.zig` |
-| Agent              | `agent.open`, `agent.submit`, `agent.toggle_mode`, `agent.cancel`, `agent.page_down`              | `src/editor/commands.zig` |
+| Agent              | `agent.open`, `agent.submit`, `agent.toggle_mode`, `agent.cancel`, `agent.page_down`, `proposals.approve_apply` | `src/editor/commands.zig` |
 | Tasks              | `tasks.run`, `tasks.open`, `tasks.stop`, `task_panel.cancel`, `task_panel.rerun`                   | `src/editor/commands.zig` |
 | Terminal           | `terminal.toggle`, `terminal.unfocus`, `terminal.scroll_bottom`                                    | `src/editor/commands.zig` |
 | Completion and LSP | `completion.trigger`, `completion.accept`, `lsp.goto_definition`                                   | `src/editor/commands.zig` |

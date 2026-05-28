@@ -45,9 +45,16 @@ pub const AgentEventKind = enum {
     status,
     tool_call,
     tool_result,
+    final_plan,
     task_started,
     task_finished,
     diff_available,
+    proposal_created,
+    proposal_approved,
+    proposal_rejected,
+    proposal_applying,
+    proposal_applied,
+    proposal_failed,
     agent_error,
 
     pub fn label(self: AgentEventKind) []const u8 {
@@ -57,9 +64,16 @@ pub const AgentEventKind = enum {
             .status => "Status",
             .tool_call => "Tool",
             .tool_result => "Result",
+            .final_plan => "Plan",
             .task_started => "Task",
             .task_finished => "Task",
             .diff_available => "Diff",
+            .proposal_created => "Proposal",
+            .proposal_approved => "Proposal",
+            .proposal_rejected => "Proposal",
+            .proposal_applying => "Proposal",
+            .proposal_applied => "Proposal",
+            .proposal_failed => "Proposal",
             .agent_error => "Error",
         };
     }

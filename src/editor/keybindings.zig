@@ -883,6 +883,23 @@ const default_bindings = [_]Binding{
     .{ .context = .agent, .sequence = keySpecial(.PageDown), .command = .agent_page_down },
     .{ .context = .agent, .sequence = ctrlChar('d'), .command = .agent_page_down },
 
+    // Proposals.
+    .{ .context = .proposals, .sequence = keySpecial(.Esc), .command = .proposals_close },
+    .{ .context = .proposals, .sequence = keyChar('q'), .command = .proposals_close },
+    .{ .context = .proposals, .sequence = keySpecial(.Up), .command = .proposals_move_up },
+    .{ .context = .proposals, .sequence = keyChar('k'), .command = .proposals_move_up },
+    .{ .context = .proposals, .sequence = keySpecial(.Down), .command = .proposals_move_down },
+    .{ .context = .proposals, .sequence = keyChar('j'), .command = .proposals_move_down },
+    .{ .context = .proposals, .sequence = keySpecial(.PageUp), .command = .proposals_page_up },
+    .{ .context = .proposals, .sequence = ctrlChar('u'), .command = .proposals_page_up },
+    .{ .context = .proposals, .sequence = keySpecial(.PageDown), .command = .proposals_page_down },
+    .{ .context = .proposals, .sequence = ctrlChar('d'), .command = .proposals_page_down },
+    .{ .context = .proposals, .sequence = keyChar('['), .command = .proposals_previous },
+    .{ .context = .proposals, .sequence = keyChar(']'), .command = .proposals_next },
+    .{ .context = .proposals, .sequence = keyChar('a'), .command = .proposals_approve_apply },
+    .{ .context = .proposals, .sequence = keyChar('r'), .command = .proposals_reject },
+    .{ .context = .proposals, .sequence = keySpecial(.Enter), .command = .proposals_open_file },
+
     // Git Graph.
     .{ .context = .git_graph, .sequence = keySpecial(.Esc), .command = .git_graph_close },
     .{ .context = .git_graph, .sequence = keyChar('q'), .command = .git_graph_close },

@@ -391,7 +391,7 @@ pub fn findRepositoryRootFromStart(allocator: std.mem.Allocator, io: std.Io, sta
     return allocator.dupe(u8, repo.root);
 }
 
-fn loadWorkspaceDiff(arena_allocator: std.mem.Allocator, scratch_allocator: std.mem.Allocator, io: std.Io, root: []const u8) !WorkspaceDiff {
+pub fn loadWorkspaceDiff(arena_allocator: std.mem.Allocator, scratch_allocator: std.mem.Allocator, io: std.Io, root: []const u8) !WorkspaceDiff {
     var repo = (try repository.discover(scratch_allocator, io, root)) orelse return Error.NotGitRepository;
     defer repo.deinit(scratch_allocator);
 

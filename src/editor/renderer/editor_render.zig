@@ -18,6 +18,7 @@ const git_graph_panel_view = @import("git_graph_panel_view.zig");
 const git_diff_panel_view = @import("git_diff_panel_view.zig");
 const task_panel_view = @import("task_panel_view.zig");
 const agent_panel_view = @import("agent_panel_view.zig");
+const proposals_panel_view = @import("proposals_panel_view.zig");
 
 pub const RenderContext = struct {
     tab: ?*tab_mod.Tab,
@@ -108,6 +109,7 @@ pub fn renderVirtual(editor: anytype, writer: anytype, metrics: *perf.FrameMetri
     git_diff_panel_view.renderVirtualGitDiffPanel(editor);
     task_panel_view.renderVirtualTaskPanel(editor);
     agent_panel_view.renderVirtualAgentPanel(editor);
+    proposals_panel_view.renderVirtualProposalsPanel(editor);
     completion_menu.renderVirtualCompletionMenu(editor);
     if (editor.active_keypress_trace) |trace| trace.popup_ns += perf.elapsedNs(popup_start);
     const status_start = if (editor.active_keypress_trace != null) perf.nowNs() else 0;
@@ -161,7 +163,7 @@ pub fn setVirtualCursor(editor: anytype, ctx: RenderContext) void {
         editor.renderer.screen.setCursor(viewport_mod.statusTerminalRow(editor), @min(editor.width, 12 + editor.state.command_buffer.items.len));
         return;
     }
-    if (editor.state.mode == .FilesystemPicker or editor.state.mode == .Prompt or editor.state.mode == .Help or editor.state.mode == .GitGraph or editor.state.mode == .GitDiff or editor.state.mode == .TaskPanel or editor.state.mode == .Agent or
+    if (editor.state.mode == .FilesystemPicker or editor.state.mode == .Prompt or editor.state.mode == .Help or editor.state.mode == .GitGraph or editor.state.mode == .GitDiff or editor.state.mode == .TaskPanel or editor.state.mode == .Agent or editor.state.mode == .Proposals or
         editor.state.mode == .Dashboard or editor.state.mode == .SaveConfirmation)
     {
         editor.renderer.screen.hideCursor();
