@@ -157,6 +157,7 @@ pub const OpenAIBackend = struct {
             .session_id = owned.session_id,
             .mode = owned.mode,
             .workspace_root = owned.workspace_root,
+            .policy_state = .{ .id = owned.session_id, .mode = owned.mode },
         };
         openai_client.parseSseEvents(self.allocator, stream, &sink) catch |err| {
             if (err != error.OpenAIToolLimitReached) {
@@ -243,6 +244,7 @@ const StreamSink = struct {
     session_id: u64,
     mode: agent.AgentMode,
     workspace_root: []const u8,
+    policy_state: policy.AgentPolicySessionState,
     next_tool_call_id: u64 = 1,
 
     pub fn emit(self: *StreamSink, event: openai_client.OpenAIStreamEvent) !void {
@@ -281,7 +283,9 @@ const StreamSink = struct {
             self.backend.policy_config,
             self.backend.queue,
         );
+        executor.policy_state = self.policy_state;
         var result = executor.execute(call);
+        self.policy_state = executor.policy_state;
         defer result.deinit(self.backend.allocator);
 
         const result_text = tools.formatToolResult(self.backend.allocator, result) catch {
@@ -306,10 +310,9 @@ const StreamSink = struct {
             return;
         };
         errdefer draft.deinit(self.backend.allocator);
-        var state = policy.AgentPolicySessionState{ .id = self.session_id, .mode = self.mode };
         var engine = policy.AgentPolicyEngine.init(self.backend.allocator, self.backend.io, self.workspace_root, self.backend.policy_config);
         self.backend.audit(self.session_id, .tool_requested, "create_patch_proposal");
-        const decision = engine.evaluate(&state, .{
+        const decision = engine.evaluate(&self.policy_state, .{
             .session_id = self.session_id,
             .capability = .create_patch_proposal,
             .path = draft.file_path,

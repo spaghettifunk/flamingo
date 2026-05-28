@@ -190,10 +190,9 @@ pub const MockAgentWorker = struct {
             self.finish(id, .failed);
             return;
         };
-        var state = policy.AgentPolicySessionState{ .id = id, .mode = .implementation };
         var engine = policy.AgentPolicyEngine.init(self.allocator, self.io, workspace_root, self.policy_config);
         self.emitAudit(id, .tool_requested, "create_patch_proposal");
-        const decision = engine.evaluate(&state, .{
+        const decision = engine.evaluate(&executor.policy_state, .{
             .session_id = id,
             .capability = .create_patch_proposal,
             .path = draft.file_path,

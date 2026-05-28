@@ -1,6 +1,5 @@
 const std = @import("std");
 const agent = @import("session.zig");
-const audit = @import("audit.zig");
 const policy = @import("policy.zig");
 const proposal_apply = @import("proposal_apply.zig");
 const command_parser = @import("../tasks/command_parser.zig");
