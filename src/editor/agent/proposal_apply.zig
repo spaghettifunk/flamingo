@@ -201,6 +201,48 @@ test "proposal apply rejects git paths" {
     try std.testing.expectError(error.GitInternalsForbidden, applyProposalToEditor(&ed, &item, root));
 }
 
+test "proposal apply rejects paths outside workspace" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(root);
+
+    var ed = try editor_mod.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+
+    var item = try testProposal(allocator, "../outside.md", .{ .create_file = .{
+        .content = try allocator.dupe(u8, "bad\n"),
+    } });
+    defer item.deinit(allocator);
+
+    try std.testing.expectError(error.OutsideWorkspace, applyProposalToEditor(&ed, &item, root));
+}
+
+test "proposal apply rejects binary insert targets" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "binary.bin", .data = "abc\x00def\n" });
+
+    const root = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer allocator.free(root);
+
+    var ed = try editor_mod.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+
+    var item = try testProposal(allocator, "binary.bin", .{ .insert_at_line = .{
+        .line = 1,
+        .content = try allocator.dupe(u8, "insert\n"),
+    } });
+    defer item.deinit(allocator);
+
+    try std.testing.expectError(error.BinaryFile, applyProposalToEditor(&ed, &item, root));
+}
+
 test "proposal apply fails on insert mismatch" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;

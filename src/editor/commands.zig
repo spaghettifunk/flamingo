@@ -279,8 +279,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 22;
-const command_line_visible_count = 23;
+const command_popup_visible_count = 23;
+const command_line_visible_count = 24;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -492,21 +492,21 @@ const command_metadata = [_]CommandMeta{
         .show_in_command_popup = true,
     },
     .{
+        .id = .proposals_open,
+        .canonical_name = "proposals.open",
+        .command_names = &.{"proposals"},
+        .short_description = "Open Agent proposals",
+        .category = .proposals,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
         .id = .navigation_goto_line,
         .canonical_name = "navigation.goto_line",
         .command_names = &.{ "<number>", "goto", "line" },
         .short_description = "Jump to line",
         .long_description = "Command-line forms are :<number>, :goto <number>, and :line <number>.",
         .category = .navigation,
-        .contexts = &.{.command_line},
-        .show_in_command_popup = false,
-    },
-    .{
-        .id = .proposals_open,
-        .canonical_name = "proposals.open",
-        .command_names = &.{"proposals"},
-        .short_description = "Open Agent proposals",
-        .category = .proposals,
         .contexts = &.{.command_line},
         .show_in_command_popup = false,
     },
@@ -1958,6 +1958,7 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "comments", .id = .comments_open },
         .{ .name = "gitdiff", .id = .git_diff_open },
         .{ .name = "agent", .id = .agent_open },
+        .{ .name = "proposals", .id = .proposals_open },
         .{ .name = "run", .id = .task_run },
         .{ .name = "tasks", .id = .tasks_open },
         .{ .name = "taskstop", .id = .task_stop },
@@ -2010,6 +2011,7 @@ test "command line visible commands preserve current popup order" {
         .task_stop,
         .git_graph_open,
         .git_diff_refresh,
+        .proposals_open,
     };
 
     for (expected, 0..) |id, idx| {

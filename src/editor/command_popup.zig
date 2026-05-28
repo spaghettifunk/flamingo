@@ -159,6 +159,11 @@ test "CommandPopup prefix suggestions" {
 
     popup.close();
     try popup.open(allocator);
+    try popup.appendChar(allocator, 'p');
+    try expectSuggestionNames(popup.suggestions.items, &.{"proposals"});
+
+    popup.close();
+    try popup.open(allocator);
     try popup.appendChar(allocator, 'n');
     try expectSuggestionNames(popup.suggestions.items, &.{ "newFile", "nf" });
 
