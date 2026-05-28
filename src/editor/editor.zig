@@ -128,6 +128,7 @@ pub const Editor = struct {
     ) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
+        try runtime.configureAgentBackend(cfg.agent, env);
         if (runtime.lsp_mgr) |*mgr| {
             if (cfg.languages.protobuf) |protobuf| {
                 if (protobuf.extensions.len > 0) {
@@ -513,6 +514,14 @@ pub const Editor = struct {
             .comments_panel
         else if (self.state.mode == .GitGraph)
             .git_graph
+        else if (self.state.mode == .GitDiff)
+            .git_diff
+        else if (self.state.mode == .TaskPanel)
+            .task_panel
+        else if (self.state.mode == .Agent)
+            .agent
+        else if (self.state.mode == .Proposals)
+            .proposals
         else if (self.state.mode == .Insert)
             .insert
         else
@@ -538,6 +547,20 @@ pub const Editor = struct {
             .git_graph_move_down,
             .git_graph_page_up,
             .git_graph_page_down,
+            .git_diff_move_up,
+            .git_diff_move_down,
+            .git_diff_page_up,
+            .git_diff_page_down,
+            .task_panel_scroll_up,
+            .task_panel_scroll_down,
+            .task_panel_page_up,
+            .task_panel_page_down,
+            .task_panel_previous_task,
+            .task_panel_next_task,
+            .agent_scroll_up,
+            .agent_scroll_down,
+            .agent_page_up,
+            .agent_page_down,
             => true,
             else => false,
         };
@@ -1216,6 +1239,10 @@ test "movement coalescing rejects prompt and overlay modes" {
         .GlobalSearch,
         .Help,
         .Terminal,
+        .GitGraph,
+        .GitDiff,
+        .TaskPanel,
+        .Agent,
     };
 
     for (rejected_modes) |mode| {
@@ -1362,7 +1389,7 @@ test "completion trigger is limited to buffer editing modes" {
         try std.testing.expect(ed.modeAllowsCompletion());
     }
 
-    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .Help, .Terminal, .SaveConfirmation };
+    const rejected = [_]EditorMode{ .Dashboard, .Command, .OpenFilePrompt, .FilesystemPicker, .Prompt, .Search, .GlobalSearch, .GitGraph, .GitDiff, .TaskPanel, .Agent, .Proposals, .Help, .Terminal, .SaveConfirmation };
     for (rejected) |mode| {
         ed.state.mode = mode;
         try std.testing.expect(!ed.modeAllowsCompletion());

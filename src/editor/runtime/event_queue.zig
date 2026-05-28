@@ -2,6 +2,10 @@ const std = @import("std");
 const syntax = @import("../syntax.zig");
 const git_status = @import("../git_status.zig");
 const git_diff = @import("../git/diff_service.zig");
+const task_mod = @import("../tasks/task.zig");
+const agent_mod = @import("../agent/session.zig");
+const proposal_mod = @import("../agent/proposal.zig");
+const audit_mod = @import("../agent/audit.zig");
 
 pub const QueueError = error{
     QueueClosed,
@@ -34,6 +38,57 @@ pub const Event = union(enum) {
     terminal_exit: struct {
         code: ?i32,
     },
+
+    task_started: struct {
+        id: u64,
+        started_at_ms: i64,
+    },
+
+    /// Owned task output bytes. Whoever consumes or discards this event must free them.
+    task_output: struct {
+        id: u64,
+        kind: task_mod.TaskOutputKind,
+        bytes: []u8,
+    },
+
+    task_finished: struct {
+        id: u64,
+        status: task_mod.TaskStatus,
+        exit_code: ?i32,
+        finished_at_ms: i64,
+    },
+
+    /// Owned failure message. Whoever consumes or discards this event must free it.
+    task_failed_to_start: struct {
+        id: u64,
+        message: []u8,
+        finished_at_ms: i64,
+    },
+
+    /// Owned agent event text. Whoever consumes or discards this event must free it.
+    agent_event: struct {
+        id: u64,
+        kind: agent_mod.AgentEventKind,
+        text: []u8,
+        timestamp_ms: i64,
+    },
+
+    agent_session_finished: struct {
+        id: u64,
+        status: agent_mod.AgentSessionStatus,
+        finished_at_ms: i64,
+    },
+
+    /// Owned audit event text. Whoever consumes or discards this event must free it.
+    agent_audit_event: struct {
+        id: u64,
+        kind: audit_mod.AgentAuditEventKind,
+        message: []u8,
+        timestamp_ms: i64,
+    },
+
+    /// Owned proposal draft. Whoever consumes or discards this event must deinit it.
+    agent_proposal_created: proposal_mod.PatchProposalDraft,
 };
 
 pub const EventQueue = struct {
@@ -92,7 +147,20 @@ pub const EventQueue = struct {
 
     pub fn push(self: *EventQueue, event: Event) !void {
         switch (event) {
-            .lsp_message, .git_status_snapshot, .git_diff_result, .terminal_output, .terminal_exit => try self.pushFifo(event),
+            .lsp_message,
+            .git_status_snapshot,
+            .git_diff_result,
+            .terminal_output,
+            .terminal_exit,
+            .task_started,
+            .task_output,
+            .task_finished,
+            .task_failed_to_start,
+            .agent_event,
+            .agent_session_finished,
+            .agent_audit_event,
+            .agent_proposal_created,
+            => try self.pushFifo(event),
             .syntax_parse_result => |result| try self.pushSyntaxResult(result),
         }
     }
@@ -231,6 +299,24 @@ pub const EventQueue = struct {
                 self.allocator.free(output.bytes);
             },
             .terminal_exit => {},
+            .task_started => {},
+            .task_output => |output| {
+                self.allocator.free(output.bytes);
+            },
+            .task_finished => {},
+            .task_failed_to_start => |failure| {
+                self.allocator.free(failure.message);
+            },
+            .agent_event => |event| {
+                self.allocator.free(event.text);
+            },
+            .agent_session_finished => {},
+            .agent_audit_event => |event| {
+                self.allocator.free(event.message);
+            },
+            .agent_proposal_created => |*draft| {
+                draft.deinit(self.allocator);
+            },
         }
     }
 };

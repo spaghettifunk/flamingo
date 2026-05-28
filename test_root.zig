@@ -26,6 +26,24 @@ test {
     _ = @import("src/editor/git/diff_model.zig");
     _ = @import("src/editor/git/unified_diff_parser.zig");
     _ = @import("src/editor/git/diff_service.zig");
+    _ = @import("src/editor/git/workspace_diff.zig");
+    _ = @import("src/editor/agent/session.zig");
+    _ = @import("src/editor/agent/backend.zig");
+    _ = @import("src/editor/agent/provider_registry.zig");
+    _ = @import("src/editor/agent/manager.zig");
+    _ = @import("src/editor/agent/workspace_guard.zig");
+    _ = @import("src/editor/agent/tools.zig");
+    _ = @import("src/editor/agent/tool_executor.zig");
+    _ = @import("src/editor/agent/readonly_planner.zig");
+    _ = @import("src/editor/agent/proposal.zig");
+    _ = @import("src/editor/agent/proposal_manager.zig");
+    _ = @import("src/editor/agent/proposal_apply.zig");
+    _ = @import("src/editor/agent/mock_implementation.zig");
+    _ = @import("src/editor/agent/openai_client.zig");
+    _ = @import("src/editor/agent/backends/openai.zig");
+    _ = @import("src/editor/tasks/command_parser.zig");
+    _ = @import("src/editor/tasks/task.zig");
+    _ = @import("src/editor/tasks/task_manager.zig");
     _ = @import("src/editor/workspace.zig");
     _ = @import("src/editor/todos.zig");
     _ = @import("src/editor/comments.zig");
@@ -39,5 +57,9 @@ test {
     _ = @import("src/perf/perf.zig");
     _ = @import("src/editor/renderer/virtual_screen.zig");
     _ = @import("src/editor/renderer/git_graph_panel_view.zig");
+    _ = @import("src/editor/renderer/git_diff_panel_view.zig");
+    _ = @import("src/editor/renderer/task_panel_view.zig");
+    _ = @import("src/editor/renderer/agent_panel_view.zig");
+    _ = @import("src/editor/renderer/proposals_panel_view.zig");
     _ = @import("src/editor/terminal_panel.zig");
 }

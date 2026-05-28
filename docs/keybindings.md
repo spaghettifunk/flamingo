@@ -54,13 +54,13 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 
 ## Multi-Cursor & Selection
 
-| Action               | Keybinding                                   |
-| :------------------- | :------------------------------------------- |
-| **Add Cursor Above** | `CTRL + Option + Up`                         |
-| **Add Cursor Below** | `CTRL + Option + Down`                       |
+| Action                  | Keybinding                                                                          |
+| :---------------------- | :---------------------------------------------------------------------------------- |
+| **Add Cursor Above**    | `CTRL + Option + Up`                                                                |
+| **Add Cursor Below**    | `CTRL + Option + Down`                                                              |
 | **Add Next Occurrence** | `Option + D` in Normal mode (uses selection or word under cursor, then `i` to edit) |
-| **Extend Selection** | `Shift + Arrows` (works with word jumps too) |
-| **Clear Selections** | `Esc`                                        |
+| **Extend Selection**    | `Shift + Arrows` (works with word jumps too)                                        |
+| **Clear Selections**    | `Esc`                                                                               |
 
 ---
 
@@ -96,29 +96,35 @@ Flamingo is a modal text editor. This document provides a comprehensive referenc
 
 Execute these by pressing `:` and typing the command followed by `Enter`.
 
-| Command                   | Alias     | Description                                                |
-| :------------------------ | :-------- | :--------------------------------------------------------- |
-| `:q`                      |           | Quit current tab / Dashboard                               |
-| `:qall`                   | `:qa`     | Quit all open tabs                                         |
-| `:q!`                     |           | Force quit (discard unsaved changes)                       |
-| `:w [path]`               |           | Write (Save) current buffer to [path] or its original file |
-| `:wall`                   | `:wa`     | Write (Save) all modified buffers                          |
-| `:wq [path]`              |           | Save and Quit                                              |
-| `:newFile <path>`         | `:nf`     | Create a new file at `<path>` and open it                  |
-| `:renameFile <old> <new>` | `:rf`     | Rename file from `<old>` to `<new>`                        |
-| `:deleteFile <path>`      | `:df`     | Delete file at `<path>`                                    |
-| `:search`                 |           | Open project-wide Global Search                            |
-| `:help`                   |           | Open the Help popup                                        |
-| `:font-info`              |           | Show icon mode and terminal font guidance                  |
-| `:git-diff-refresh`       | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers |
-| `:git-graph`              | `:ggraph` | Open the read-only Git commit graph panel                  |
-| `:todos`                  |           | Open/focus the workspace TODO panel                        |
-| `:comment`                |           | Create a comment from the active text selection            |
-| `:comments`               |           | Open/focus the workspace comments panel                    |
-| `:comments refresh`       |           | Reload `.flamingo/comments.json`                           |
-| `:<number>`               |           | Jump to line `<number>`                                    |
-| `:goto <number>`          |           | Jump to line `<number>`                                    |
-| `:line <number>`          |           | Jump to line `<number>`                                    |
+| Command                   | Alias                           | Description                                                |
+| :------------------------ | :------------------------------ | :--------------------------------------------------------- |
+| `:q`                      |                                 | Quit current tab / Dashboard                               |
+| `:qall`                   | `:qa`                           | Quit all open tabs                                         |
+| `:q!`                     |                                 | Force quit (discard unsaved changes)                       |
+| `:w [path]`               |                                 | Write (Save) current buffer to [path] or its original file |
+| `:wall`                   | `:wa`                           | Write (Save) all modified buffers                          |
+| `:wq [path]`              |                                 | Save and Quit                                              |
+| `:newFile <path>`         | `:nf`                           | Create a new file at `<path>` and open it                  |
+| `:renameFile <old> <new>` | `:rf`                           | Rename file from `<old>` to `<new>`                        |
+| `:deleteFile <path>`      | `:df`                           | Delete file at `<path>`                                    |
+| `:search`                 |                                 | Open project-wide Global Search                            |
+| `:help`                   |                                 | Open the Help popup                                        |
+| `:font-info`              |                                 | Show icon mode and terminal font guidance                  |
+| `:gitdiff`                |                                 | Open the workspace Git Diff panel                          |
+| `:gitdiff-refresh`        | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers               |
+| `:agent`                  |                                 | Open the Agent session panel                               |
+| `:proposals`              |                                 | Open the Agent proposal review panel                       |
+| `:run <command>`          |                                 | Run a non-interactive task from the workspace root          |
+| `:tasks`                  |                                 | Open the task output panel                                 |
+| `:taskstop`               |                                 | Cancel the currently running task                          |
+| `:git-graph`              | `:ggraph`                       | Open the read-only Git commit graph panel                  |
+| `:todos`                  |                                 | Open/focus the workspace TODO panel                        |
+| `:comment`                |                                 | Create a comment from the active text selection            |
+| `:comments`               |                                 | Open/focus the workspace comments panel                    |
+| `:comments refresh`       |                                 | Reload `.flamingo/comments.json`                           |
+| `:<number>`               |                                 | Jump to line `<number>`                                    |
+| `:goto <number>`          |                                 | Jump to line `<number>`                                    |
+| `:line <number>`          |                                 | Jump to line `<number>`                                    |
 
 ---
 
@@ -194,13 +200,71 @@ Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.or
 
 ### Git Diff Gutter
 
-| Color | Meaning |
-| :---- | :------ |
-| Green | Added line |
-| Yellow | Modified line |
-| Red | Deleted line boundary |
+| Color  | Meaning               |
+| :----- | :-------------------- |
+| Green  | Added line            |
+| Yellow | Modified line         |
+| Red    | Deleted line boundary |
 
-Diff markers appear beside line numbers for files opened inside a Git repository. They refresh on open, after saving, and with `:git-diff-refresh`.
+Diff markers appear beside line numbers for files opened inside a Git repository. They refresh on open, after saving, and with `:gitdiff-refresh`.
+
+### Git Diff Panel
+
+| Action              | Keybinding              |
+| :------------------ | :---------------------- |
+| Close panel         | `q`, `Esc`              |
+| Move selection up   | `k`, `Up`               |
+| Move selection down | `j`, `Down`             |
+| Page up             | `PageUp`, `Ctrl+u`      |
+| Page down           | `PageDown`, `Ctrl+d`    |
+| Refresh diff        | `r`                     |
+| Open selected file  | `Enter`                 |
+
+### Task Panel
+
+| Action               | Keybinding              |
+| :------------------- | :---------------------- |
+| Open task panel      | `:tasks`                |
+| Run task             | `:run <command>`        |
+| Cancel running task  | `c`, `Ctrl+c`, `:taskstop` |
+| Scroll output up     | `k`, `Up`               |
+| Scroll output down   | `j`, `Down`             |
+| Page output up       | `PageUp`, `Ctrl+u`      |
+| Page output down     | `PageDown`, `Ctrl+d`    |
+| Select previous task | `[`                     |
+| Select next task     | `]`                     |
+| Rerun selected task  | `r`                     |
+| Close task panel     | `q` or `Esc`            |
+
+### Agent Panel
+
+| Action                 | Keybinding              |
+| :--------------------- | :---------------------- |
+| Open Agent panel       | `:agent`                |
+| Start session          | `Enter`                 |
+| Toggle Plan/Implementation | `Tab`              |
+| Delete prompt character | `Backspace`            |
+| Cancel running session/execution | `Ctrl+c`      |
+| Approve pending request | `a`                 |
+| Deny pending request    | `d`                 |
+| Scroll events up       | `Up`                    |
+| Scroll events down     | `Down`                  |
+| Page events up         | `PageUp`, `Ctrl+u`      |
+| Page events down       | `PageDown`, `Ctrl+d`    |
+
+### Proposals Panel
+
+| Action                 | Keybinding              |
+| :--------------------- | :---------------------- |
+| Open proposals panel   | `:proposals`            |
+| Apply and validate selected proposal | `a`         |
+| Reject selected proposal | `r`                   |
+| Previous/next proposal | `[`, `]`                |
+| Open target file       | `Enter`                 |
+| Scroll diff            | `Up`, `Down`            |
+| Page diff              | `PageUp`, `PageDown`, `Ctrl+u`, `Ctrl+d` |
+| Close proposals panel  | `q` or `Esc`            |
+| Close Agent panel      | `Esc`                   |
 
 ### LSP Completion
 
@@ -270,6 +334,21 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 [keybindings.comments_panel]
 "r" = "comments_panel.reply"
 "R" = "comments_panel.refresh"
+
+[keybindings.task_panel]
+"c" = "task_panel.cancel"
+"r" = "task_panel.rerun"
+
+[keybindings.agent]
+"enter" = "agent.submit"
+"tab" = "agent.toggle_mode"
+"ctrl+c" = "agent.cancel"
+"a" = "agent.approval_approve"
+"d" = "agent.approval_deny"
+
+[keybindings.proposals]
+"a" = "proposals.approve_apply"
+"r" = "proposals.reject"
 
 [keybindings.normal.unbind]
 keys = ["ctrl+w"]

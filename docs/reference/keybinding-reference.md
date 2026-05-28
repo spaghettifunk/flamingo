@@ -162,6 +162,46 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `n` | `comments_panel.new` | Create from selection. |
 | `enter` | `comments_panel.open_selected` | Jump to anchor. |
 
+## Git Diff
+
+| Key | Command | Description |
+| --- | --- | --- |
+| `esc`, `q` | `git_diff.close` | Close panel. |
+| `up`, `k` | `git_diff.move_up` | Move selection up. |
+| `down`, `j` | `git_diff.move_down` | Move selection down. |
+| `pageup`, `ctrl+u` | `git_diff.page_up` | Page selection up. |
+| `pagedown`, `ctrl+d` | `git_diff.page_down` | Page selection down. |
+| `r` | `git_diff.refresh_panel` | Refresh diff. |
+| `enter` | `git_diff.open_selected` | Open selected file. |
+
+## Tasks
+
+| Key | Command | Description |
+| --- | --- | --- |
+| `esc`, `q` | `task_panel.close` | Close panel. |
+| `up`, `k` | `task_panel.scroll_up` | Scroll output up. |
+| `down`, `j` | `task_panel.scroll_down` | Scroll output down. |
+| `pageup`, `ctrl+u` | `task_panel.page_up` | Page output up. |
+| `pagedown`, `ctrl+d` | `task_panel.page_down` | Page output down. |
+| `[` | `task_panel.previous_task` | Select previous task. |
+| `]` | `task_panel.next_task` | Select next task. |
+| `r` | `task_panel.rerun` | Rerun selected task. |
+| `c`, `ctrl+c` | `task_panel.cancel` | Cancel running task. |
+
+## Agent
+
+| Key | Command | Description |
+| --- | --- | --- |
+| `esc` | `agent.close` | Close panel when no session is running. |
+| `enter` | `agent.submit` | Start mock session. |
+| `backspace` | `agent.backspace` | Delete prompt character. |
+| `tab` | `agent.toggle_mode` | Toggle Plan/Implementation mode. |
+| `ctrl+c` | `agent.cancel` | Cancel running session or active execution. |
+| `up` | `agent.scroll_up` | Scroll events up. |
+| `down` | `agent.scroll_down` | Scroll events down. |
+| `pageup`, `ctrl+u` | `agent.page_up` | Page events up. |
+| `pagedown`, `ctrl+d` | `agent.page_down` | Page events down. |
+
 ## Git Graph
 
 | Key | Command | Description |
@@ -236,4 +276,3 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `s`, `S` | `save_confirmation.save` | Save then close. |
 | `d`, `D`, `enter` | `save_confirmation.discard` | Discard then close. |
 | `esc`, `n`, `N` | `save_confirmation.cancel` | Keep editing. |
-

@@ -3,6 +3,7 @@ const toml = @import("toml");
 const commands = @import("editor/commands.zig");
 const command_keybindings = @import("editor/keybindings.zig");
 const icons = @import("editor/icons.zig");
+const agent_backend = @import("editor/agent/backend.zig");
 
 pub const default_config_toml = @embedFile("config/default_config.toml");
 
@@ -16,6 +17,10 @@ pub const KeybindingsConfig = struct {
     explorer_search: ?toml.Table = null,
     search: ?toml.Table = null,
     global_search: ?toml.Table = null,
+    agent: ?toml.Table = null,
+    proposals: ?toml.Table = null,
+    git_diff: ?toml.Table = null,
+    task_panel: ?toml.Table = null,
     git_graph: ?toml.Table = null,
     todo_panel: ?toml.Table = null,
     comments_panel: ?toml.Table = null,
@@ -87,6 +92,44 @@ pub const LanguagesConfig = struct {
     protobuf: ?LanguageConfig = null,
 };
 
+pub const AgentOpenAIConfig = struct {
+    api_key_env: []const u8 = "OPENAI_API_KEY",
+    model: []const u8 = "gpt-5-codex",
+};
+
+pub const AgentLimitsConfig = struct {
+    max_file_reads: usize = 50,
+    max_search_results: usize = 100,
+    max_tool_calls: usize = 100,
+    max_file_read_bytes: usize = 262144,
+};
+
+pub const AgentPolicyPathsConfig = struct {
+    deny: []const []const u8 = &.{ ".git", "zig-out", ".zig-cache", "node_modules", "target", "dist", "build" },
+};
+
+pub const AgentPolicyConfig = struct {
+    require_approval_for_validation: bool = false,
+    require_approval_for_patch_apply: bool = true,
+    paths: AgentPolicyPathsConfig = .{},
+};
+
+pub const AgentValidationConfig = struct {
+    commands: []const []const u8 = &.{ "zig build test", "zig build" },
+};
+
+pub const AgentConfig = struct {
+    provider: []const u8 = "mock",
+    openai: AgentOpenAIConfig = .{},
+    limits: AgentLimitsConfig = .{},
+    policy: AgentPolicyConfig = .{},
+    validation: AgentValidationConfig = .{},
+
+    pub fn providerKind(self: *const AgentConfig) ?agent_backend.AgentBackendKind {
+        return agent_backend.AgentBackendKind.fromString(self.provider);
+    }
+};
+
 // ── Root config ──────────────────────────────────────────────────────────────
 
 pub const Config = struct {
@@ -96,16 +139,30 @@ pub const Config = struct {
     author: AuthorConfig = .{},
     ui: UiConfig = .{},
     languages: LanguagesConfig = .{},
+    agent: AgentConfig = .{},
 };
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
-pub const ConfigError = error{ InvalidKeybinding, InvalidIconMode };
+pub const ConfigError = error{ InvalidKeybinding, InvalidIconMode, InvalidAgentProvider, InvalidAgentModel, InvalidAgentApiKeyEnv, InvalidAgentLimits };
 
 pub fn validate(cfg: *const Config) ConfigError!void {
     _ = configuredIconMode(cfg) catch return error.InvalidIconMode;
+    try validateAgentConfig(&cfg.agent);
     // Keybinding schema validation needs config diagnostics and is performed by
     // buildKeybindingRegistry before the editor enters raw terminal mode.
+}
+
+fn validateAgentConfig(cfg: *const AgentConfig) ConfigError!void {
+    if (cfg.providerKind() == null) return error.InvalidAgentProvider;
+    if (cfg.openai.model.len == 0) return error.InvalidAgentModel;
+    if (cfg.openai.api_key_env.len == 0) return error.InvalidAgentApiKeyEnv;
+    if (cfg.limits.max_file_reads == 0 or
+        cfg.limits.max_search_results == 0 or
+        cfg.limits.max_tool_calls == 0 or
+        cfg.limits.max_file_read_bytes == 0 or
+        cfg.validation.commands.len == 0)
+        return error.InvalidAgentLimits;
 }
 
 pub fn configuredIconMode(cfg: *const Config) !icons.IconMode {
@@ -123,6 +180,10 @@ fn contextTable(cfg: *const KeybindingsConfig, context: command_keybindings.Bind
         .explorer_search => cfg.explorer_search,
         .search => cfg.search,
         .global_search => cfg.global_search,
+        .agent => cfg.agent,
+        .proposals => cfg.proposals,
+        .git_diff => cfg.git_diff,
+        .task_panel => cfg.task_panel,
         .git_graph => cfg.git_graph,
         .todo_panel => cfg.todo_panel,
         .comments_panel => cfg.comments_panel,

@@ -10,11 +10,11 @@ The Git diff gutter marks unstaged working-tree changes for the current file whe
 
 Markers appear as a thin colored rectangle beside the line numbers:
 
-| Color | Meaning |
-| --- | --- |
-| Green | Added line |
-| Yellow | Modified line |
-| Red | Deleted line boundary |
+| Color  | Meaning               |
+| ------ | --------------------- |
+| Green  | Added line            |
+| Yellow | Modified line         |
+| Red    | Deleted line boundary |
 
 Deleted lines no longer exist in the buffer, so the marker is attached to the nearest visible line boundary.
 
@@ -25,7 +25,7 @@ Open a file inside a Git repository. Diff markers refresh when a file is opened 
 Manual refresh:
 
 ```text
-:git-diff-refresh
+:gitdiff-refresh
 :diff-refresh
 :git-refresh
 ```
@@ -47,5 +47,6 @@ Repository detection walks upward from the file path and supports normal `.git` 
 ## Limitations
 
 - Only unstaged working-tree changes are shown.
-- Staged changes, staging operations, inline word diffs, and a full diff panel are not implemented yet.
+- Staged changes, staging operations, and inline word diffs are not implemented yet.
+- Use `:gitdiff` for a read-only workspace diff panel.
 - The feature depends on the `git` executable, but missing Git or non-Git folders should not prevent editing.

@@ -4,6 +4,7 @@ const syntax = @import("../syntax.zig");
 const editor_lsp = @import("../lsp/editor_lsp.zig");
 const editor_syntax = @import("../syntax_editor.zig");
 const statusline = @import("../renderer/statusline.zig");
+const execution_pipeline = @import("../agent/execution_pipeline.zig");
 
 pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
     var fifo_events_processed: usize = 0;
@@ -51,6 +52,77 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                     logz.err().fmt("msg", "failed to record terminal exit: {any}", .{err}).log();
                 };
                 if (editor.terminal_panel.visible) editor.markDirty(.partial);
+            },
+            .task_started => |started| {
+                editor.state.task_manager.markStarted(started.id, started.started_at_ms);
+                execution_pipeline.onTaskStarted(editor, started.id, started.started_at_ms);
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
+            .task_output => |output| {
+                defer editor.allocator.free(output.bytes);
+                editor.state.task_manager.appendOutput(output.id, output.kind, output.bytes) catch |err| {
+                    logz.err().fmt("msg", "failed to append task output: {any}", .{err}).log();
+                };
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+            },
+            .task_finished => |finished| {
+                editor.state.task_manager.finish(finished.id, finished.status, finished.exit_code, finished.finished_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to finish task: {any}", .{err}).log();
+                };
+                execution_pipeline.onTaskFinished(editor, finished.id, finished.status, finished.exit_code, finished.finished_at_ms);
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+                if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
+            },
+            .task_failed_to_start => |failure| {
+                defer editor.allocator.free(failure.message);
+                editor.state.task_manager.failToStart(failure.id, failure.message, failure.finished_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to record task start failure: {any}", .{err}).log();
+                };
+                execution_pipeline.onTaskFailedToStart(editor, failure.id, failure.message, failure.finished_at_ms);
+                if (editor.state.task_manager.visible) editor.markDirty(.partial);
+                if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
+            },
+            .agent_event => |agent_event| {
+                defer editor.allocator.free(agent_event.text);
+                editor.state.agent_manager.appendEvent(agent_event.id, agent_event.kind, agent_event.text, agent_event.timestamp_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append agent event: {any}", .{err}).log();
+                };
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
+            .agent_session_finished => |finished| {
+                editor.state.agent_manager.finishSession(finished.id, finished.status, finished.finished_at_ms);
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
+            .agent_audit_event => |audit_event| {
+                defer editor.allocator.free(audit_event.message);
+                editor.state.agent_manager.appendAuditEvent(audit_event.id, audit_event.kind, audit_event.message, audit_event.timestamp_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append agent audit event: {any}", .{err}).log();
+                };
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
+            .agent_proposal_created => |draft| {
+                var owned = draft;
+                const session_id = owned.session_id;
+                const description = owned.description;
+                const created_at_ms = owned.created_at_ms;
+                const proposal_id = editor.state.proposal_manager.createProposal(owned) catch |err| {
+                    owned.deinit(editor.allocator);
+                    logz.err().fmt("msg", "failed to create proposal: {any}", .{err}).log();
+                    continue;
+                };
+                var buf: [256]u8 = undefined;
+                const text = std.fmt.bufPrint(&buf, "Proposal #{d} created: {s}. Open :proposals to inspect.", .{
+                    proposal_id,
+                    description,
+                }) catch "Proposal created. Open :proposals to inspect.";
+                editor.state.agent_manager.appendEvent(session_id, .proposal_created, text, created_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append proposal event: {any}", .{err}).log();
+                };
+                editor.state.agent_manager.appendAuditEvent(session_id, .proposal_created, text, created_at_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append proposal audit event: {any}", .{err}).log();
+                };
+                if (editor.state.agent_manager.visible or editor.state.proposal_manager.visible) editor.markDirty(.partial);
             },
             .syntax_parse_result => unreachable,
         }

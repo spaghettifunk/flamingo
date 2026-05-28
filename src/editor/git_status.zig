@@ -105,11 +105,15 @@ pub const Snapshot = struct {
     }
 
     pub fn load(allocator: std.mem.Allocator, io: std.Io) !Snapshot {
+        return loadFromRoot(allocator, io, ".");
+    }
+
+    pub fn loadFromRoot(allocator: std.mem.Allocator, io: std.Io, start_path: []const u8) !Snapshot {
         var snapshot = Snapshot.init(allocator);
         errdefer snapshot.deinit();
 
         const root_result = std.process.run(allocator, io, .{
-            .argv = &.{ "git", "rev-parse", "--show-toplevel" },
+            .argv = &.{ "git", "-C", start_path, "rev-parse", "--show-toplevel" },
             .stdout_limit = std.Io.Limit.limited(16 * 1024),
             .stderr_limit = std.Io.Limit.limited(16 * 1024),
         }) catch return snapshot;

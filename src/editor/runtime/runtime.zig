@@ -4,6 +4,13 @@ const event_queue = @import("event_queue.zig");
 const syntax_worker = @import("syntax_worker.zig");
 const git_status_worker = @import("git_status_worker.zig");
 const git_diff_worker = @import("git_diff_worker.zig");
+const task_worker = @import("task_worker.zig");
+const mock_agent_worker = @import("mock_agent_worker.zig");
+const config = @import("../../config.zig");
+const agent_backend = @import("../agent/backend.zig");
+const provider_registry = @import("../agent/provider_registry.zig");
+const mock_backend = @import("../agent/backends/mock.zig");
+const openai_backend = @import("../agent/backends/openai.zig");
 const lsp_manager = @import("../../lsp/manager.zig");
 const perf = @import("../../perf/perf.zig");
 
@@ -16,6 +23,10 @@ pub const EditorRuntime = struct {
     syntax_parse_worker: *syntax_worker.SyntaxParseWorker,
     git_worker: ?*git_status_worker.GitStatusWorker = null,
     git_diff_worker: ?*git_diff_worker.GitDiffWorker = null,
+    task_worker: task_worker.TaskWorker,
+    mock_agent_worker: mock_agent_worker.MockAgentWorker,
+    openai_agent_backend: openai_backend.OpenAIBackend,
+    agent_backend: agent_backend.AgentBackend,
     lsp_mgr: ?lsp_manager.LspManager = null,
     fps_sample_start_ns: ?i96 = null,
     fps_frame_count: usize = 0,
@@ -55,13 +66,28 @@ pub const EditorRuntime = struct {
             try git_diff_worker.GitDiffWorker.start(allocator, io, queue);
         errdefer if (diff_worker) |worker| worker.stop();
 
-        return .{
+        var runtime = EditorRuntime{
             .event_queue = queue,
             .syntax_parse_worker = parser_worker,
             .git_worker = git_worker,
             .git_diff_worker = diff_worker,
+            .task_worker = task_worker.TaskWorker.init(allocator, io, queue),
+            .mock_agent_worker = mock_agent_worker.MockAgentWorker.init(allocator, io, queue),
+            .openai_agent_backend = openai_backend.OpenAIBackend.init(allocator, io, queue),
+            .agent_backend = undefined,
             .lsp_mgr = mgr,
             .perf_sampler = perf.PerfSampler.initFromEnv(),
+        };
+        runtime.agent_backend = mock_backend.asBackend(&runtime.mock_agent_worker);
+        return runtime;
+    }
+
+    pub fn configureAgentBackend(self: *EditorRuntime, cfg: config.AgentConfig, env: anytype) !void {
+        self.mock_agent_worker.configurePolicy(@import("../agent/policy.zig").AgentPolicyConfig.fromAgentConfig(cfg));
+        try self.openai_agent_backend.configure(cfg, env);
+        self.agent_backend = switch (provider_registry.kindFromConfig(cfg) catch .mock) {
+            .mock => mock_backend.asBackend(&self.mock_agent_worker),
+            .openai_codex => self.openai_agent_backend.asBackend(),
         };
     }
 
@@ -74,6 +100,9 @@ pub const EditorRuntime = struct {
             worker.stop();
             self.git_diff_worker = null;
         }
+        self.mock_agent_worker.deinit();
+        self.openai_agent_backend.deinit();
+        self.task_worker.deinit();
         self.syntax_parse_worker.stop();
 
         if (self.lsp_mgr) |*mgr| {

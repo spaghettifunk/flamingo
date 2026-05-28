@@ -17,6 +17,11 @@ const terminal_panel = @import("../terminal_panel.zig");
 const todos = @import("../todos.zig");
 const comments = @import("../comments.zig");
 const multi_cursor = @import("../multi_cursor.zig");
+const command_parser = @import("../tasks/command_parser.zig");
+const task_mod = @import("../tasks/task.zig");
+const agent_mod = @import("../agent/session.zig");
+const execution_pipeline = @import("../agent/execution_pipeline.zig");
+const workspace_guard = @import("../agent/workspace_guard.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -83,6 +88,59 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .git_graph_last,
             .git_graph_refresh,
             .git_graph_toggle_details,
+            => true,
+            else => false,
+        },
+        .git_diff => switch (id) {
+            .git_diff_close,
+            .git_diff_move_up,
+            .git_diff_move_down,
+            .git_diff_page_up,
+            .git_diff_page_down,
+            .git_diff_refresh_panel,
+            .git_diff_open_selected,
+            => true,
+            else => false,
+        },
+        .task_panel => switch (id) {
+            .task_panel_close,
+            .task_panel_scroll_up,
+            .task_panel_scroll_down,
+            .task_panel_page_up,
+            .task_panel_page_down,
+            .task_panel_previous_task,
+            .task_panel_next_task,
+            .task_panel_rerun,
+            .task_panel_cancel,
+            => true,
+            else => false,
+        },
+        .agent => switch (id) {
+            .agent_close,
+            .agent_submit,
+            .agent_backspace,
+            .agent_toggle_mode,
+            .agent_cancel,
+            .agent_approval_approve,
+            .agent_approval_deny,
+            .agent_scroll_up,
+            .agent_scroll_down,
+            .agent_page_up,
+            .agent_page_down,
+            => true,
+            else => false,
+        },
+        .proposals => switch (id) {
+            .proposals_close,
+            .proposals_move_up,
+            .proposals_move_down,
+            .proposals_page_up,
+            .proposals_page_down,
+            .proposals_previous,
+            .proposals_next,
+            .proposals_approve_apply,
+            .proposals_reject,
+            .proposals_open_file,
             => true,
             else => false,
         },
@@ -233,6 +291,9 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .todo_panel,
         .comments_panel,
         .git_graph,
+        .git_diff,
+        .task_panel,
+        .agent,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -378,6 +439,22 @@ fn gitGraphActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) G
             return .none;
         },
     }
+}
+
+fn gitDiffActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .git_diff, event);
+}
+
+fn taskPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .task_panel, event);
+}
+
+fn agentActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .agent, event);
+}
+
+fn proposalsActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .proposals, event);
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1313,8 +1390,18 @@ fn gitGraphPageRows(ed: *const editor.Editor) usize {
     return @max(@as(usize, 1), (ed.height * 70) / 100 -| 6);
 }
 
+fn gitDiffPageRows(ed: *const editor.Editor) usize {
+    return @max(@as(usize, 1), (ed.height * 70) / 100 -| 6);
+}
+
 fn closeGitGraph(ed: *editor.Editor) void {
     ed.state.git_graph_panel.close();
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn closeGitDiff(ed: *editor.Editor) void {
+    ed.state.git_diff_panel.close();
     ed.state.mode = .Normal;
     ed.markDirty(.full);
 }
@@ -1365,6 +1452,105 @@ fn executeGitGraphActionCommand(ed: *editor.Editor, command: commands.CommandId)
             _ = ed.state.git_graph_panel.toggleDetails();
             ed.markDirty(.full);
         },
+        else => unreachable,
+    }
+}
+
+const GitDiffOpenTarget = struct {
+    path: []const u8,
+    line: ?usize = null,
+    deleted: bool = false,
+};
+
+fn selectedGitDiffOpenTarget(ed: *editor.Editor) ?GitDiffOpenTarget {
+    const panel = &ed.state.git_diff_panel;
+    const row = panel.selectedRow() orelse return null;
+    const path = row.file_path orelse return null;
+    var target_line = row.new_line;
+    if (target_line == null and panel.selected_index > 0) {
+        var index = panel.selected_index;
+        while (index > 0) {
+            index -= 1;
+            const candidate = panel.rows.items[index];
+            const candidate_path = candidate.file_path orelse continue;
+            if (!std.mem.eql(u8, candidate_path, path)) break;
+            if (candidate.new_line) |line| {
+                target_line = line;
+                break;
+            }
+        }
+    }
+    return .{
+        .path = path,
+        .line = target_line,
+        .deleted = row.change_kind != null and row.change_kind.? == .deleted,
+    };
+}
+
+fn openSelectedGitDiffFile(ed: *editor.Editor) !void {
+    const target = selectedGitDiffOpenTarget(ed) orelse return;
+    if (target.deleted) {
+        ed.state.status_message = "Deleted file cannot be opened from the working tree";
+        return;
+    }
+    const root = ed.state.git_diff_panel.repo_root orelse return;
+    const open_path = if (std.fs.path.isAbsolute(target.path))
+        try ed.allocator.dupe(u8, target.path)
+    else
+        try std.fs.path.join(ed.allocator, &.{ root, target.path });
+    defer ed.allocator.free(open_path);
+
+    var b = buffer.Buffer.loadFromFile(ed.allocator, ed.io, open_path) catch {
+        ed.state.error_message = "Could not open Git diff file";
+        return;
+    };
+    var consumed = false;
+    errdefer if (!consumed) b.deinit();
+    try navigation.recordCurrentJump(ed);
+    try ed.addTab(b);
+    consumed = true;
+    const row = if (target.line) |line| line -| 1 else 0;
+    _ = try navigation.jumpTo(ed, row, 0, .{ .record_history = false });
+    ed.state.mode = .Normal;
+    ed.state.git_diff_panel.close();
+    ed.state.explorer_focused = false;
+}
+
+fn executeGitDiffActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    switch (command) {
+        .git_diff_close => closeGitDiff(ed),
+        .git_diff_move_up => {
+            ed.state.git_diff_panel.moveUp();
+            ed.markDirty(.full);
+        },
+        .git_diff_move_down => {
+            ed.state.git_diff_panel.moveDown();
+            ed.markDirty(.full);
+        },
+        .git_diff_page_up => {
+            ed.state.git_diff_panel.pageUp(gitDiffPageRows(ed));
+            ed.markDirty(.full);
+        },
+        .git_diff_page_down => {
+            ed.state.git_diff_panel.pageDown(gitDiffPageRows(ed));
+            ed.markDirty(.full);
+        },
+        .git_diff_refresh_panel => {
+            ed.state.git_diff_panel.refresh(ed.allocator, ed.io) catch |err| switch (err) {
+                error.NotGitRepository => {
+                    ed.state.git_diff_panel.error_message = "This workspace is not a Git repository.";
+                    ed.state.error_message = "This workspace is not a Git repository.";
+                    ed.markDirty(.full);
+                    return;
+                },
+                else => return err,
+            };
+            if (ed.state.git_diff_panel.error_message == null) {
+                ed.state.status_message = "Git Diff refreshed";
+            }
+            ed.markDirty(.full);
+        },
+        .git_diff_open_selected => try openSelectedGitDiffFile(ed),
         else => unreachable,
     }
 }
@@ -1453,6 +1639,354 @@ fn executeDashboardSelectedAction(ed: *editor.Editor) !void {
         .Settings => try fs_ops.openSettingsConfig(ed),
         .Quit => ed.should_quit = true,
         else => {},
+    }
+}
+
+fn taskPanelOutputRows(ed: *const editor.Editor) usize {
+    return @max(ed.height / 2, 1);
+}
+
+fn taskRoot(ed: *editor.Editor) ?[]const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    if (ed.state.workspace.root_path) |root| return root;
+    return null;
+}
+
+fn rerunSelectedTask(ed: *editor.Editor) !void {
+    const selected = ed.state.task_manager.selectedTaskConst() orelse {
+        ed.state.status_message = "No task selected";
+        return;
+    };
+    if (selected.status == .running or selected.status == .queued) {
+        ed.state.status_message = "Task is still running";
+        return;
+    }
+    const root = taskRoot(ed) orelse {
+        ed.state.error_message = "No workspace root available for task execution.";
+        return;
+    };
+    var parsed = command_parser.parse(ed.allocator, selected.command_display) catch |err| {
+        ed.state.error_message = switch (err) {
+            error.EmptyCommand => "Usage: :run <command>",
+            error.UnterminatedQuote => "Task command has an unterminated quote",
+            error.TrailingEscape => "Task command ends with an incomplete escape",
+            else => "Could not parse task command",
+        };
+        return;
+    };
+    var parsed_owned = true;
+    errdefer if (parsed_owned) parsed.deinit(ed.allocator);
+    const id = try ed.state.task_manager.addQueuedTask(parsed, root, task_mod.nowMs(ed.io));
+    parsed_owned = false;
+    const task = ed.state.task_manager.findTask(id) orelse return;
+    ed.runtime.task_worker.startTask(id, task.argvConst(), task.cwd) catch |err| {
+        const message = switch (err) {
+            error.TaskAlreadyRunning => "Another task is already running.",
+            else => "Unable to start task.",
+        };
+        try ed.state.task_manager.failToStart(id, message, task_mod.nowMs(ed.io));
+        ed.state.error_message = message;
+        return;
+    };
+}
+
+fn executeTaskPanelActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const rows = taskPanelOutputRows(ed);
+    switch (command) {
+        .task_panel_close => {
+            ed.state.task_manager.close();
+            ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+            ed.markDirty(.full);
+        },
+        .task_panel_scroll_up => {
+            ed.state.task_manager.scrollUp(1);
+            ed.markDirty(.partial);
+        },
+        .task_panel_scroll_down => {
+            ed.state.task_manager.scrollDown(1, rows);
+            ed.markDirty(.partial);
+        },
+        .task_panel_page_up => {
+            ed.state.task_manager.scrollUp(rows);
+            ed.markDirty(.partial);
+        },
+        .task_panel_page_down => {
+            ed.state.task_manager.scrollDown(rows, rows);
+            ed.markDirty(.partial);
+        },
+        .task_panel_previous_task => {
+            ed.state.task_manager.selectPrevious();
+            ed.markDirty(.partial);
+        },
+        .task_panel_next_task => {
+            ed.state.task_manager.selectNext();
+            ed.markDirty(.partial);
+        },
+        .task_panel_rerun => {
+            try rerunSelectedTask(ed);
+            ed.markDirty(.full);
+        },
+        .task_panel_cancel => {
+            if (ed.runtime.task_worker.hasRunningTask()) {
+                ed.runtime.task_worker.cancelRunning();
+                ed.state.status_message = "Cancelling task";
+            } else {
+                ed.state.status_message = "No task is running";
+            }
+            ed.markDirty(.partial);
+        },
+        else => unreachable,
+    }
+}
+
+fn agentEventRows(ed: *const editor.Editor) usize {
+    return @max(ed.height / 2, 1);
+}
+
+fn agentRoot(ed: *editor.Editor) []const u8 {
+    if (ed.state.project_root) |root| return root;
+    if (ed.state.tree) |tree| return tree.root_path;
+    if (ed.state.workspace.root_path) |root| return root;
+    return ".";
+}
+
+fn proposalDiffRows(ed: *const editor.Editor) usize {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse return 0;
+    var count: usize = 0;
+    var it = std.mem.splitScalar(u8, selected.unified_diff, '\n');
+    while (it.next()) |_| count += 1;
+    return count;
+}
+
+fn proposalVisibleRows(ed: *const editor.Editor) usize {
+    return @max(ed.height / 2, 1);
+}
+
+fn startAgentSession(ed: *editor.Editor) !void {
+    const prompt = std.mem.trim(u8, ed.state.agent_manager.prompt_input.items, " \t\r\n");
+    if (prompt.len == 0) {
+        ed.state.status_message = "Agent prompt is empty";
+        return;
+    }
+    const id = ed.state.agent_manager.createSession(agent_mod.nowMs(ed.io)) catch |err| switch (err) {
+        error.AgentSessionAlreadyRunning => {
+            ed.state.status_message = "Agent session is already running";
+            return;
+        },
+        error.EmptyPrompt => {
+            ed.state.status_message = "Agent prompt is empty";
+            return;
+        },
+        else => return err,
+    };
+    const session = ed.state.agent_manager.findSession(id) orelse return;
+    ed.runtime.agent_backend.startSession(.{
+        .session_id = id,
+        .mode = session.mode,
+        .prompt = session.prompt,
+        .workspace_root = agentRoot(ed),
+    }) catch |err| {
+        const message = switch (err) {
+            error.AgentSessionAlreadyRunning => "Agent session is already running.",
+            error.AgentBackendUnavailable => ed.runtime.agent_backend.availabilityMessage() orelse "Agent backend unavailable.",
+            else => "Unable to start agent.",
+        };
+        try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
+        ed.state.error_message = message;
+        return;
+    };
+}
+
+fn closeAgentPanel(ed: *editor.Editor) void {
+    if (!ed.state.agent_manager.close()) {
+        ed.state.status_message = "Cancel the running agent session first";
+        ed.markDirty(.partial);
+        return;
+    }
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn cancelAgentSession(ed: *editor.Editor) void {
+    if (execution_pipeline.cancelActiveExecution(ed)) {
+        ed.markDirty(.partial);
+        return;
+    }
+    if (!ed.runtime.agent_backend.hasRunningSession()) {
+        ed.state.status_message = "No agent session is running";
+        ed.markDirty(.partial);
+        return;
+    }
+    if (ed.state.agent_manager.selectedSessionConst()) |session| {
+        ed.runtime.agent_backend.cancelSession(session.id);
+    } else {
+        ed.runtime.agent_backend.cancelSession(0);
+    }
+    ed.state.status_message = "Cancelling agent session";
+    ed.markDirty(.partial);
+}
+
+fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const rows = agentEventRows(ed);
+    switch (command) {
+        .agent_close => closeAgentPanel(ed),
+        .agent_submit => {
+            try startAgentSession(ed);
+            ed.markDirty(.full);
+        },
+        .agent_backspace => {
+            ed.state.agent_manager.backspacePrompt();
+            ed.markDirty(.partial);
+        },
+        .agent_toggle_mode => {
+            ed.state.agent_manager.toggleMode();
+            ed.markDirty(.partial);
+        },
+        .agent_cancel => cancelAgentSession(ed),
+        .agent_approval_approve => {
+            if (!execution_pipeline.approvePendingApproval(ed)) ed.state.status_message = "No pending approval";
+            ed.markDirty(.partial);
+        },
+        .agent_approval_deny => {
+            if (!execution_pipeline.denyPendingApproval(ed)) ed.state.status_message = "No pending approval";
+            ed.markDirty(.partial);
+        },
+        .agent_scroll_up => {
+            ed.state.agent_manager.scrollUp(1);
+            ed.markDirty(.partial);
+        },
+        .agent_scroll_down => {
+            ed.state.agent_manager.scrollDown(1, rows);
+            ed.markDirty(.partial);
+        },
+        .agent_page_up => {
+            ed.state.agent_manager.scrollUp(rows);
+            ed.markDirty(.partial);
+        },
+        .agent_page_down => {
+            ed.state.agent_manager.scrollDown(rows, rows);
+            ed.markDirty(.partial);
+        },
+        else => unreachable,
+    }
+}
+
+fn closeProposalsPanel(ed: *editor.Editor) void {
+    ed.state.proposal_manager.close();
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn appendProposalEvent(ed: *editor.Editor, proposal_id: u64, kind: agent_mod.AgentEventKind, comptime fmt: []const u8, args: anytype) void {
+    const proposal = ed.state.proposal_manager.getProposalConst(proposal_id) orelse return;
+    var buf: [256]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    ed.state.agent_manager.appendEvent(proposal.session_id, kind, text, agent_mod.nowMs(ed.io)) catch |err| {
+        logz.err().fmt("msg", "failed to append proposal event: {any}", .{err}).log();
+    };
+}
+
+fn rejectSelectedProposal(ed: *editor.Editor) void {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse {
+        ed.state.status_message = "No proposal selected";
+        return;
+    };
+    const id = selected.id;
+    ed.state.proposal_manager.rejectProposal(id, agent_mod.nowMs(ed.io)) catch |err| {
+        ed.state.error_message = proposalActionErrorMessage(err);
+        return;
+    };
+    appendProposalEvent(ed, id, .proposal_rejected, "Proposal #{d} rejected.", .{id});
+    ed.state.status_message = "Proposal rejected";
+}
+
+fn approveApplySelectedProposal(ed: *editor.Editor) void {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse {
+        ed.state.status_message = "No proposal selected";
+        return;
+    };
+    execution_pipeline.approveApplyAndStart(ed, selected.id);
+}
+
+fn openSelectedProposalFile(ed: *editor.Editor) !void {
+    const selected = ed.state.proposal_manager.selectedProposalConst() orelse {
+        ed.state.status_message = "No proposal selected";
+        return;
+    };
+    const path = workspace_guard.resolveWorkspacePath(ed.allocator, ed.io, agentRoot(ed), selected.file_path) catch |err| {
+        ed.state.error_message = proposalApplyErrorMessage(err);
+        return;
+    };
+    defer ed.allocator.free(path);
+    fs_ops.openFileInEditor(ed, path) catch |err| {
+        ed.state.error_message = proposalApplyErrorMessage(err);
+        return;
+    };
+    ed.markDirty(.full);
+}
+
+fn proposalActionErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.ProposalNotFound => "Proposal not found",
+        error.ProposalNotPending => "Proposal is not pending",
+        error.ProposalNotApplicable => "Proposal cannot be changed from its current state",
+        else => "Proposal action failed",
+    };
+}
+
+fn proposalApplyErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.OutsideWorkspace => "Proposal target is outside the workspace",
+        error.GitInternalsForbidden => "Proposal cannot target .git internals",
+        error.BinaryFile => "Proposal target appears to be binary",
+        error.PathAlreadyExists => "Proposal target already exists",
+        error.FileNotFound => "Proposal target file was not found",
+        error.ExpectedFile => "Proposal target is not a file",
+        error.HunkMismatch => "Proposal no longer matches the target file",
+        error.InvalidLine => "Proposal target line is invalid",
+        else => "Proposal apply failed",
+    };
+}
+
+fn executeProposalsActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const rows = proposalVisibleRows(ed);
+    switch (command) {
+        .proposals_close => closeProposalsPanel(ed),
+        .proposals_move_up => {
+            ed.state.proposal_manager.scrollUp(1);
+            ed.markDirty(.partial);
+        },
+        .proposals_move_down => {
+            ed.state.proposal_manager.scrollDown(1, proposalDiffRows(ed), rows);
+            ed.markDirty(.partial);
+        },
+        .proposals_page_up => {
+            ed.state.proposal_manager.scrollUp(rows);
+            ed.markDirty(.partial);
+        },
+        .proposals_page_down => {
+            ed.state.proposal_manager.scrollDown(rows, proposalDiffRows(ed), rows);
+            ed.markDirty(.partial);
+        },
+        .proposals_previous => {
+            ed.state.proposal_manager.selectPrevious();
+            ed.markDirty(.partial);
+        },
+        .proposals_next => {
+            ed.state.proposal_manager.selectNext();
+            ed.markDirty(.partial);
+        },
+        .proposals_approve_apply => {
+            approveApplySelectedProposal(ed);
+            ed.markDirty(.full);
+        },
+        .proposals_reject => {
+            rejectSelectedProposal(ed);
+            ed.markDirty(.partial);
+        },
+        .proposals_open_file => try openSelectedProposalFile(ed),
+        else => unreachable,
     }
 }
 
@@ -2198,6 +2732,43 @@ fn handleGitGraphInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 }
 
+fn handleGitDiffInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (gitDiffActionCommandForEvent(ed, event)) |command| {
+        try executeGitDiffActionCommand(ed, command);
+    }
+}
+
+fn handleTaskPanelInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (taskPanelActionCommandForEvent(ed, event)) |command| {
+        try executeTaskPanelActionCommand(ed, command);
+    }
+}
+
+fn handleAgentInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (event.key == .Char and !event.ctrl and !event.alt and event.char == 'q' and
+        (ed.state.agent_manager.prompt_input.items.len == 0 or !ed.state.agent_manager.canEditPrompt()))
+    {
+        closeAgentPanel(ed);
+        return;
+    }
+
+    if (agentActionCommandForEvent(ed, event)) |command| {
+        try executeAgentActionCommand(ed, command);
+        return;
+    }
+
+    if (event.key == .Char and !event.ctrl and !event.alt) {
+        try ed.state.agent_manager.appendPromptChar(event.char);
+        ed.markDirty(.partial);
+    }
+}
+
+fn handleProposalsInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (proposalsActionCommandForEvent(ed, event)) |command| {
+        try executeProposalsActionCommand(ed, command);
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -2213,6 +2784,21 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (ed.state.mode == .GitGraph) {
         try handleGitGraphInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .GitDiff) {
+        try handleGitDiffInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .TaskPanel) {
+        try handleTaskPanelInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .Agent) {
+        try handleAgentInput(ed, event);
         return;
     }
 
@@ -2465,6 +3051,18 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .GitGraph => {
             try handleGitGraphInput(ed, event);
+        },
+        .GitDiff => {
+            try handleGitDiffInput(ed, event);
+        },
+        .TaskPanel => {
+            try handleTaskPanelInput(ed, event);
+        },
+        .Agent => {
+            try handleAgentInput(ed, event);
+        },
+        .Proposals => {
+            try handleProposalsInput(ed, event);
         },
         .SaveConfirmation => {
             if (saveConfirmationActionCommandForEvent(ed, event)) |command| {
