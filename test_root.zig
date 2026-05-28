@@ -28,6 +28,8 @@ test {
     _ = @import("src/editor/git/diff_service.zig");
     _ = @import("src/editor/git/workspace_diff.zig");
     _ = @import("src/editor/agent/session.zig");
+    _ = @import("src/editor/agent/backend.zig");
+    _ = @import("src/editor/agent/provider_registry.zig");
     _ = @import("src/editor/agent/manager.zig");
     _ = @import("src/editor/agent/workspace_guard.zig");
     _ = @import("src/editor/agent/tools.zig");
@@ -37,6 +39,8 @@ test {
     _ = @import("src/editor/agent/proposal_manager.zig");
     _ = @import("src/editor/agent/proposal_apply.zig");
     _ = @import("src/editor/agent/mock_implementation.zig");
+    _ = @import("src/editor/agent/openai_client.zig");
+    _ = @import("src/editor/agent/backends/openai.zig");
     _ = @import("src/editor/tasks/command_parser.zig");
     _ = @import("src/editor/tasks/task.zig");
     _ = @import("src/editor/tasks/task_manager.zig");

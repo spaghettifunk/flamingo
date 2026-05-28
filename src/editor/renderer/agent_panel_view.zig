@@ -87,6 +87,12 @@ fn renderControls(editor: anytype, geom: popup.FilesystemPickerGeometry) void {
     writeModeSegment(screen, row, &col, end, "Plan", manager.selected_mode == .plan);
     popup.writeVirtualTruncatedCells(screen, row, &col, end, " ", .command_popup, false);
     writeModeSegment(screen, row, &col, end, "Implementation", manager.selected_mode == .implementation);
+    var provider_buf: [96]u8 = undefined;
+    const provider_text = if (editor.runtime.agent_backend.availabilityMessage()) |message|
+        std.fmt.bufPrint(&provider_buf, "  Provider: {s} ({s})", .{ editor.runtime.agent_backend.kind().label(), message }) catch ""
+    else
+        std.fmt.bufPrint(&provider_buf, "  Provider: {s}", .{editor.runtime.agent_backend.kind().label()}) catch "";
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, provider_text, if (editor.runtime.agent_backend.availabilityMessage() == null) .explorer_dim else .git_diff_deleted, true);
 
     row += 1;
     col = geom.col + 2;

@@ -128,6 +128,7 @@ pub const Editor = struct {
     ) !Editor {
         var runtime = try runtime_mod.EditorRuntime.initWithOptions(allocator, io, runtime_options);
         errdefer runtime.deinit(allocator);
+        try runtime.configureAgentBackend(cfg.agent, env);
         if (runtime.lsp_mgr) |*mgr| {
             if (cfg.languages.protobuf) |protobuf| {
                 if (protobuf.extensions.len > 0) {

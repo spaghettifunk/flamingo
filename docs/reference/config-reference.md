@@ -22,6 +22,27 @@ Terminal applications cannot switch the terminal emulator font automatically. Co
 | --- | --- | --- | --- | --- |
 | `width_percentage` | `u8` | `20` | Explorer width as a percentage of terminal width. Used by viewport and render layout code. | Implemented |
 
+## `[agent]`
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `provider` | `mock` or `openai` | `mock` | Selects the active Agent backend. | Implemented |
+
+## `[agent.openai]`
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `api_key_env` | string | `OPENAI_API_KEY` | Environment variable used to read the OpenAI API key. Secrets are never stored in config. | Implemented |
+| `model` | string | `gpt-5-codex` | OpenAI model used by the Codex backend. | Implemented |
+
+## `[agent.limits]`
+
+| Key | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `max_file_reads` | `usize` | `50` | Maximum file-read tool calls allowed during one session. | Parsed |
+| `max_search_results` | `usize` | `100` | Maximum search results allowed during one session. | Parsed |
+| `max_tool_calls` | `usize` | `100` | Maximum total tool calls allowed during one session. | Parsed |
+
 ## `[author]`
 
 | Key | Type | Default | Description | Status |

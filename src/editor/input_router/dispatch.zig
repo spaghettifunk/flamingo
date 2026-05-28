@@ -1779,9 +1779,15 @@ fn startAgentSession(ed: *editor.Editor) !void {
         else => return err,
     };
     const session = ed.state.agent_manager.findSession(id) orelse return;
-    ed.runtime.mock_agent_worker.startSession(id, session.mode, session.prompt, agentRoot(ed)) catch |err| {
+    ed.runtime.agent_backend.startSession(.{
+        .session_id = id,
+        .mode = session.mode,
+        .prompt = session.prompt,
+        .workspace_root = agentRoot(ed),
+    }) catch |err| {
         const message = switch (err) {
             error.AgentSessionAlreadyRunning => "Agent session is already running.",
+            error.AgentBackendUnavailable => ed.runtime.agent_backend.availabilityMessage() orelse "Agent backend unavailable.",
             else => "Unable to start agent.",
         };
         try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
@@ -1805,12 +1811,16 @@ fn cancelAgentSession(ed: *editor.Editor) void {
         ed.markDirty(.partial);
         return;
     }
-    if (!ed.runtime.mock_agent_worker.hasRunningSession()) {
+    if (!ed.runtime.agent_backend.hasRunningSession()) {
         ed.state.status_message = "No agent session is running";
         ed.markDirty(.partial);
         return;
     }
-    ed.runtime.mock_agent_worker.cancelRunning();
+    if (ed.state.agent_manager.selectedSessionConst()) |session| {
+        ed.runtime.agent_backend.cancelSession(session.id);
+    } else {
+        ed.runtime.agent_backend.cancelSession(0);
+    }
     ed.state.status_message = "Cancelling agent session";
     ed.markDirty(.partial);
 }

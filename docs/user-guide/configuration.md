@@ -19,6 +19,9 @@ When the default user config is selected and missing, Flamingo creates `~/.flami
 | root | `debug` | Implemented. |
 | `[ui]` | `icon_mode` | Implemented. |
 | `[explorer]` | `width_percentage` | Implemented. |
+| `[agent]` | `provider` | Implemented. |
+| `[agent.openai]` | `api_key_env`, `model` | Implemented. |
+| `[agent.limits]` | tool/session limits | Parsed. |
 | `[author]` | `name`, `email` | Implemented as comments author fallback. |
 | `[keybindings.<context>]` | key sequence to canonical command name | Implemented. |
 | `[keybindings.<context>.unbind]` | `keys` array | Implemented. |
@@ -35,6 +38,13 @@ icon_mode = "auto" # auto | nerd_font | unicode | ascii
 
 [explorer]
 width_percentage = 20
+
+[agent]
+provider = "mock" # mock | openai
+
+[agent.openai]
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-5-codex"
 
 [author]
 name = "Your Name"

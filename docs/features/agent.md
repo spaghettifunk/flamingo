@@ -6,7 +6,7 @@ Status: Partial
 
 The Agent panel is the local session framework for a future Codex-like workflow. It tracks prompts, Plan/Implementation mode, session status, structured events, patch proposals, and proposal execution. Plan mode uses deterministic local read-only tools to inspect the workspace and produce a structured plan.
 
-No network calls are made, and the agent does not edit files directly. Implementation mode creates proposals first; approved proposals can then be applied and validated locally.
+The default backend is local and deterministic. The optional OpenAI Codex backend can be selected with `[agent].provider = "openai"` and reads its API key from the configured environment variable only. The agent never edits files directly. Implementation mode creates proposals first; approved proposals can then be applied and validated locally.
 
 ## Usage
 
@@ -30,7 +30,7 @@ No network calls are made, and the agent does not edit files directly. Implement
 
 ## Implementation Notes
 
-Agent sessions are owned by `AgentManager` in editor state. The backend runs on a worker thread and sends event and finish messages through the shared runtime event queue. Plan mode executes a host-controlled read-only tool protocol with `list_files`, `read_file`, `search_text`, `get_git_status`, and `get_git_diff_summary`.
+Agent sessions are owned by `AgentManager` in editor state. Backends are selected through the `AgentBackend` abstraction and run on worker threads that send event and finish messages through the shared runtime event queue. Plan mode executes a host-controlled read-only tool protocol with `list_files`, `read_file`, `search_text`, `get_git_status`, and `get_git_diff_summary`.
 
 Tool calls are validated by the host before execution. Paths must stay inside the workspace root, `.git` internals are rejected, binary and large file reads are summarized, and search/read outputs are capped before they are shown in the panel.
 
@@ -46,6 +46,7 @@ The session event log is capped at 10,000 events.
 - Prompt input is single-line.
 - Plan mode is deterministic and read-only.
 - Implementation mode creates deterministic mock proposals only.
-- There is no OpenAI, Codex CLI, MCP, or LLM integration yet.
+- OpenAI Codex provider support is behind the Agent backend abstraction; live API behavior requires `OPENAI_API_KEY` or the configured env var.
+- There is no Codex CLI, MCP, or local-model integration yet.
 - Validation commands are hardcoded for now.
 - Autonomous patch generation and auto-fix loops are intentionally out of scope.
