@@ -76,6 +76,17 @@ pub fn processBackgroundEvents(editor: anytype, max_fifo_events: usize) !void {
                 };
                 if (editor.state.task_manager.visible) editor.markDirty(.partial);
             },
+            .agent_event => |agent_event| {
+                defer editor.allocator.free(agent_event.text);
+                editor.state.agent_manager.appendEvent(agent_event.id, agent_event.kind, agent_event.text, agent_event.timestamp_ms) catch |err| {
+                    logz.err().fmt("msg", "failed to append agent event: {any}", .{err}).log();
+                };
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
+            .agent_session_finished => |finished| {
+                editor.state.agent_manager.finishSession(finished.id, finished.status, finished.finished_at_ms);
+                if (editor.state.agent_manager.visible) editor.markDirty(.partial);
+            },
             .syntax_parse_result => unreachable,
         }
     }

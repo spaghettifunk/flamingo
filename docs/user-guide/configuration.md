@@ -58,6 +58,7 @@ explorer
 explorer_search
 search
 global_search
+agent
 git_diff
 task_panel
 git_graph

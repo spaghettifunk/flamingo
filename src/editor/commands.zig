@@ -30,6 +30,7 @@ pub const CommandId = enum {
     comments_open,
     comments_refresh,
     git_diff_open,
+    agent_open,
     task_run,
     tasks_open,
     task_stop,
@@ -49,6 +50,15 @@ pub const CommandId = enum {
     task_panel_next_task,
     task_panel_rerun,
     task_panel_cancel,
+    agent_close,
+    agent_submit,
+    agent_backspace,
+    agent_toggle_mode,
+    agent_cancel,
+    agent_scroll_up,
+    agent_scroll_down,
+    agent_page_up,
+    agent_page_down,
     git_graph_open,
     git_graph_close,
     git_graph_move_up,
@@ -208,6 +218,7 @@ pub const CommandCategory = enum {
     explorer,
     dashboard,
     terminal,
+    agent,
     tasks,
     completion,
     picker,
@@ -224,6 +235,7 @@ pub const CommandContext = enum {
     explorer_search,
     search,
     global_search,
+    agent,
     git_diff,
     task_panel,
     git_graph,
@@ -254,8 +266,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 21;
-const command_line_visible_count = 22;
+const command_popup_visible_count = 22;
+const command_line_visible_count = 23;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -407,6 +419,15 @@ const command_metadata = [_]CommandMeta{
         .command_names = &.{"gitdiff"},
         .short_description = "Open workspace Git diff",
         .category = .git,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .agent_open,
+        .canonical_name = "agent.open",
+        .command_names = &.{"agent"},
+        .short_description = "Open mock Agent panel",
+        .category = .agent,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
     },
@@ -942,6 +963,69 @@ const command_metadata = [_]CommandMeta{
         .short_description = "Cancel running task",
         .category = .tasks,
         .contexts = &.{.task_panel},
+    },
+    .{
+        .id = .agent_close,
+        .canonical_name = "agent.close",
+        .short_description = "Close Agent",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_submit,
+        .canonical_name = "agent.submit",
+        .short_description = "Start mock agent session",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_backspace,
+        .canonical_name = "agent.backspace",
+        .short_description = "Delete prompt character",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_toggle_mode,
+        .canonical_name = "agent.toggle_mode",
+        .short_description = "Toggle Agent mode",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_cancel,
+        .canonical_name = "agent.cancel",
+        .short_description = "Cancel running Agent session",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_scroll_up,
+        .canonical_name = "agent.scroll_up",
+        .short_description = "Scroll Agent events up",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_scroll_down,
+        .canonical_name = "agent.scroll_down",
+        .short_description = "Scroll Agent events down",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_page_up,
+        .canonical_name = "agent.page_up",
+        .short_description = "Page Agent events up",
+        .category = .agent,
+        .contexts = &.{.agent},
+    },
+    .{
+        .id = .agent_page_down,
+        .canonical_name = "agent.page_down",
+        .short_description = "Page Agent events down",
+        .category = .agent,
+        .contexts = &.{.agent},
     },
     .{
         .id = .git_graph_close,
@@ -1757,6 +1841,7 @@ test "command lookup resolves canonical names" {
     try std.testing.expectEqual(CommandId.fold_toggle_all, commandByCanonicalName("fold.toggle_all").?);
     try std.testing.expectEqual(CommandId.git_diff_open, commandByCanonicalName("git_diff.open").?);
     try std.testing.expectEqual(CommandId.git_diff_refresh, commandByCanonicalName("git_diff.refresh").?);
+    try std.testing.expectEqual(CommandId.agent_open, commandByCanonicalName("agent.open").?);
     try std.testing.expectEqual(CommandId.task_run, commandByCanonicalName("tasks.run").?);
     try std.testing.expect(commandByCanonicalName("nope") == null);
 }
@@ -1780,6 +1865,7 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "comment", .id = .comment_create },
         .{ .name = "comments", .id = .comments_open },
         .{ .name = "gitdiff", .id = .git_diff_open },
+        .{ .name = "agent", .id = .agent_open },
         .{ .name = "run", .id = .task_run },
         .{ .name = "tasks", .id = .tasks_open },
         .{ .name = "taskstop", .id = .task_stop },
@@ -1826,6 +1912,7 @@ test "command line visible commands preserve current popup order" {
         .comment_create,
         .comments_open,
         .git_diff_open,
+        .agent_open,
         .task_run,
         .tasks_open,
         .task_stop,

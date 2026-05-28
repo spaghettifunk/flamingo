@@ -188,6 +188,20 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `r` | `task_panel.rerun` | Rerun selected task. |
 | `c`, `ctrl+c` | `task_panel.cancel` | Cancel running task. |
 
+## Agent
+
+| Key | Command | Description |
+| --- | --- | --- |
+| `esc` | `agent.close` | Close panel when no session is running. |
+| `enter` | `agent.submit` | Start mock session. |
+| `backspace` | `agent.backspace` | Delete prompt character. |
+| `tab` | `agent.toggle_mode` | Toggle Plan/Implementation mode. |
+| `ctrl+c` | `agent.cancel` | Cancel running session. |
+| `up` | `agent.scroll_up` | Scroll events up. |
+| `down` | `agent.scroll_down` | Scroll events down. |
+| `pageup`, `ctrl+u` | `agent.page_up` | Page events up. |
+| `pagedown`, `ctrl+d` | `agent.page_down` | Page events down. |
+
 ## Git Graph
 
 | Key | Command | Description |

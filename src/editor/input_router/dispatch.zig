@@ -19,6 +19,7 @@ const comments = @import("../comments.zig");
 const multi_cursor = @import("../multi_cursor.zig");
 const command_parser = @import("../tasks/command_parser.zig");
 const task_mod = @import("../tasks/task.zig");
+const agent_mod = @import("../agent/session.zig");
 
 fn commandAllowedInResolvedContext(context: commands.CommandContext, id: commands.CommandId) bool {
     return switch (context) {
@@ -109,6 +110,19 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .task_panel_next_task,
             .task_panel_rerun,
             .task_panel_cancel,
+            => true,
+            else => false,
+        },
+        .agent => switch (id) {
+            .agent_close,
+            .agent_submit,
+            .agent_backspace,
+            .agent_toggle_mode,
+            .agent_cancel,
+            .agent_scroll_up,
+            .agent_scroll_down,
+            .agent_page_up,
+            .agent_page_down,
             => true,
             else => false,
         },
@@ -261,6 +275,7 @@ fn resolveRegistryCommand(ed: *const editor.Editor, context: commands.CommandCon
         .git_graph,
         .git_diff,
         .task_panel,
+        .agent,
         .explorer,
         .explorer_search,
         .dashboard,
@@ -414,6 +429,10 @@ fn gitDiffActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?c
 
 fn taskPanelActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
     return resolveDefaultContextCommand(ed, .task_panel, event);
+}
+
+fn agentActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
+    return resolveDefaultContextCommand(ed, .agent, event);
 }
 
 fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEvent) ?commands.CommandId {
@@ -1699,6 +1718,97 @@ fn executeTaskPanelActionCommand(ed: *editor.Editor, command: commands.CommandId
     }
 }
 
+fn agentEventRows(ed: *const editor.Editor) usize {
+    return @max(ed.height / 2, 1);
+}
+
+fn startAgentSession(ed: *editor.Editor) !void {
+    const prompt = std.mem.trim(u8, ed.state.agent_manager.prompt_input.items, " \t\r\n");
+    if (prompt.len == 0) {
+        ed.state.status_message = "Agent prompt is empty";
+        return;
+    }
+    const id = ed.state.agent_manager.createSession(agent_mod.nowMs(ed.io)) catch |err| switch (err) {
+        error.AgentSessionAlreadyRunning => {
+            ed.state.status_message = "Agent session is already running";
+            return;
+        },
+        error.EmptyPrompt => {
+            ed.state.status_message = "Agent prompt is empty";
+            return;
+        },
+        else => return err,
+    };
+    const session = ed.state.agent_manager.findSession(id) orelse return;
+    ed.runtime.mock_agent_worker.startSession(id, session.mode, session.prompt) catch |err| {
+        const message = switch (err) {
+            error.AgentSessionAlreadyRunning => "Agent session is already running.",
+            else => "Unable to start mock agent.",
+        };
+        try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
+        ed.state.error_message = message;
+        return;
+    };
+}
+
+fn closeAgentPanel(ed: *editor.Editor) void {
+    if (!ed.state.agent_manager.close()) {
+        ed.state.status_message = "Cancel the running agent session first";
+        ed.markDirty(.partial);
+        return;
+    }
+    ed.state.mode = .Normal;
+    ed.markDirty(.full);
+}
+
+fn cancelAgentSession(ed: *editor.Editor) void {
+    if (!ed.runtime.mock_agent_worker.hasRunningSession()) {
+        ed.state.status_message = "No agent session is running";
+        ed.markDirty(.partial);
+        return;
+    }
+    ed.runtime.mock_agent_worker.cancelRunning();
+    ed.state.status_message = "Cancelling agent session";
+    ed.markDirty(.partial);
+}
+
+fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
+    const rows = agentEventRows(ed);
+    switch (command) {
+        .agent_close => closeAgentPanel(ed),
+        .agent_submit => {
+            try startAgentSession(ed);
+            ed.markDirty(.full);
+        },
+        .agent_backspace => {
+            ed.state.agent_manager.backspacePrompt();
+            ed.markDirty(.partial);
+        },
+        .agent_toggle_mode => {
+            ed.state.agent_manager.toggleMode();
+            ed.markDirty(.partial);
+        },
+        .agent_cancel => cancelAgentSession(ed),
+        .agent_scroll_up => {
+            ed.state.agent_manager.scrollUp(1);
+            ed.markDirty(.partial);
+        },
+        .agent_scroll_down => {
+            ed.state.agent_manager.scrollDown(1, rows);
+            ed.markDirty(.partial);
+        },
+        .agent_page_up => {
+            ed.state.agent_manager.scrollUp(rows);
+            ed.markDirty(.partial);
+        },
+        .agent_page_down => {
+            ed.state.agent_manager.scrollDown(rows, rows);
+            ed.markDirty(.partial);
+        },
+        else => unreachable,
+    }
+}
+
 fn executeDashboardActionCommand(ed: *editor.Editor, command: commands.CommandId) !void {
     switch (command) {
         .mode_command => {
@@ -2453,6 +2563,25 @@ fn handleTaskPanelInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 }
 
+fn handleAgentInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
+    if (event.key == .Char and !event.ctrl and !event.alt and event.char == 'q' and
+        (ed.state.agent_manager.prompt_input.items.len == 0 or !ed.state.agent_manager.canEditPrompt()))
+    {
+        closeAgentPanel(ed);
+        return;
+    }
+
+    if (agentActionCommandForEvent(ed, event)) |command| {
+        try executeAgentActionCommand(ed, command);
+        return;
+    }
+
+    if (event.key == .Char and !event.ctrl and !event.alt) {
+        try ed.state.agent_manager.appendPromptChar(event.char);
+        ed.markDirty(.partial);
+    }
+}
+
 pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     if (ed.state.error_message != null) {
         ed.state.error_message = null;
@@ -2478,6 +2607,11 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
 
     if (ed.state.mode == .TaskPanel) {
         try handleTaskPanelInput(ed, event);
+        return;
+    }
+
+    if (ed.state.mode == .Agent) {
+        try handleAgentInput(ed, event);
         return;
     }
 
@@ -2736,6 +2870,9 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
         },
         .TaskPanel => {
             try handleTaskPanelInput(ed, event);
+        },
+        .Agent => {
+            try handleAgentInput(ed, event);
         },
         .SaveConfirmation => {
             if (saveConfirmationActionCommandForEvent(ed, event)) |command| {

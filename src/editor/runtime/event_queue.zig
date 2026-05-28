@@ -3,6 +3,7 @@ const syntax = @import("../syntax.zig");
 const git_status = @import("../git_status.zig");
 const git_diff = @import("../git/diff_service.zig");
 const task_mod = @import("../tasks/task.zig");
+const agent_mod = @import("../agent/session.zig");
 
 pub const QueueError = error{
     QueueClosed,
@@ -59,6 +60,20 @@ pub const Event = union(enum) {
     task_failed_to_start: struct {
         id: u64,
         message: []u8,
+        finished_at_ms: i64,
+    },
+
+    /// Owned agent event text. Whoever consumes or discards this event must free it.
+    agent_event: struct {
+        id: u64,
+        kind: agent_mod.AgentEventKind,
+        text: []u8,
+        timestamp_ms: i64,
+    },
+
+    agent_session_finished: struct {
+        id: u64,
+        status: agent_mod.AgentSessionStatus,
         finished_at_ms: i64,
     },
 };
@@ -128,6 +143,8 @@ pub const EventQueue = struct {
             .task_output,
             .task_finished,
             .task_failed_to_start,
+            .agent_event,
+            .agent_session_finished,
             => try self.pushFifo(event),
             .syntax_parse_result => |result| try self.pushSyntaxResult(result),
         }
@@ -275,6 +292,10 @@ pub const EventQueue = struct {
             .task_failed_to_start => |failure| {
                 self.allocator.free(failure.message);
             },
+            .agent_event => |event| {
+                self.allocator.free(event.text);
+            },
+            .agent_session_finished => {},
         }
     }
 };

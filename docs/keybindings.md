@@ -112,6 +112,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:font-info`              |                                 | Show icon mode and terminal font guidance                  |
 | `:gitdiff`                |                                 | Open the workspace Git Diff panel                          |
 | `:gitdiff-refresh`        | `:diff-refresh`, `:git-refresh` | Refresh current file Git diff gutter markers               |
+| `:agent`                  |                                 | Open the mock Agent session panel                          |
 | `:run <command>`          |                                 | Run a non-interactive task from the workspace root          |
 | `:tasks`                  |                                 | Open the task output panel                                 |
 | `:taskstop`               |                                 | Cancel the currently running task                          |
@@ -234,6 +235,21 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Rerun selected task  | `r`                     |
 | Close task panel     | `q` or `Esc`            |
 
+### Agent Panel
+
+| Action                 | Keybinding              |
+| :--------------------- | :---------------------- |
+| Open Agent panel       | `:agent`                |
+| Start mock session     | `Enter`                 |
+| Toggle Plan/Implementation | `Tab`              |
+| Delete prompt character | `Backspace`            |
+| Cancel running session | `Ctrl+c`                |
+| Scroll events up       | `Up`                    |
+| Scroll events down     | `Down`                  |
+| Page events up         | `PageUp`, `Ctrl+u`      |
+| Page events down       | `PageDown`, `Ctrl+d`    |
+| Close Agent panel      | `Esc`                   |
+
 ### LSP Completion
 
 | Action                 | Keybinding            |
@@ -306,6 +322,11 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 [keybindings.task_panel]
 "c" = "task_panel.cancel"
 "r" = "task_panel.rerun"
+
+[keybindings.agent]
+"enter" = "agent.submit"
+"tab" = "agent.toggle_mode"
+"ctrl+c" = "agent.cancel"
 
 [keybindings.normal.unbind]
 keys = ["ctrl+w"]

@@ -870,6 +870,19 @@ const default_bindings = [_]Binding{
     .{ .context = .task_panel, .sequence = keyChar('c'), .command = .task_panel_cancel },
     .{ .context = .task_panel, .sequence = ctrlChar('c'), .command = .task_panel_cancel },
 
+    // Agent.
+    .{ .context = .agent, .sequence = keySpecial(.Esc), .command = .agent_close },
+    .{ .context = .agent, .sequence = keySpecial(.Enter), .command = .agent_submit },
+    .{ .context = .agent, .sequence = keySpecial(.Backspace), .command = .agent_backspace },
+    .{ .context = .agent, .sequence = keyChar('\t'), .command = .agent_toggle_mode },
+    .{ .context = .agent, .sequence = ctrlChar('c'), .command = .agent_cancel },
+    .{ .context = .agent, .sequence = keySpecial(.Up), .command = .agent_scroll_up },
+    .{ .context = .agent, .sequence = keySpecial(.Down), .command = .agent_scroll_down },
+    .{ .context = .agent, .sequence = keySpecial(.PageUp), .command = .agent_page_up },
+    .{ .context = .agent, .sequence = ctrlChar('u'), .command = .agent_page_up },
+    .{ .context = .agent, .sequence = keySpecial(.PageDown), .command = .agent_page_down },
+    .{ .context = .agent, .sequence = ctrlChar('d'), .command = .agent_page_down },
+
     // Git Graph.
     .{ .context = .git_graph, .sequence = keySpecial(.Esc), .command = .git_graph_close },
     .{ .context = .git_graph, .sequence = keyChar('q'), .command = .git_graph_close },

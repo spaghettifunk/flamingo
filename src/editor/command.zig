@@ -24,6 +24,7 @@ pub const Command = enum {
     comment,
     comments,
     git_diff,
+    agent,
     run,
     tasks,
     task_stop,
@@ -48,6 +49,7 @@ pub const Command = enum {
             .comment => .comment_create,
             .comments => .comments_open,
             .git_diff => .git_diff_open,
+            .agent => .agent_open,
             .run => .task_run,
             .tasks => .tasks_open,
             .task_stop => .task_stop,
@@ -90,6 +92,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .comment_create => .comment,
         .comments_open => .comments,
         .git_diff_open => .git_diff,
+        .agent_open => .agent,
         .task_run => .run,
         .tasks_open => .tasks,
         .task_stop => .task_stop,
@@ -302,6 +305,10 @@ pub fn execute(ed: *editor.Editor) !void {
         .git_diff => {
             if (!requireNoMoreArgs(ed, &it)) return;
             try openGitDiffPanel(ed);
+        },
+        .agent => {
+            if (!requireNoMoreArgs(ed, &it)) return;
+            openAgentPanel(ed);
         },
         .run => {
             const tail = commandTail(command_input, cmd);
@@ -525,6 +532,16 @@ fn taskRoot(ed: *editor.Editor) ?[]const u8 {
 pub fn openTaskPanel(ed: *editor.Editor) void {
     ed.state.task_manager.open();
     ed.state.mode = .TaskPanel;
+    ed.state.explorer_focused = false;
+    ed.state.todo_panel.focused = false;
+    ed.state.comments_panel.focused = false;
+    ed.terminal_panel.blur();
+    ed.markDirty(.full);
+}
+
+pub fn openAgentPanel(ed: *editor.Editor) void {
+    ed.state.agent_manager.open();
+    ed.state.mode = .Agent;
     ed.state.explorer_focused = false;
     ed.state.todo_panel.focused = false;
     ed.state.comments_panel.focused = false;
@@ -834,6 +851,7 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.help, Command.fromString("help").?);
     try std.testing.expectEqual(Command.todos, Command.fromString("todos").?);
     try std.testing.expectEqual(Command.git_diff, Command.fromString("gitdiff").?);
+    try std.testing.expectEqual(Command.agent, Command.fromString("agent").?);
     try std.testing.expectEqual(Command.run, Command.fromString("run").?);
     try std.testing.expectEqual(Command.tasks, Command.fromString("tasks").?);
     try std.testing.expectEqual(Command.task_stop, Command.fromString("taskstop").?);

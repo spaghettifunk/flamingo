@@ -15,6 +15,7 @@ Flamingo stores its top-level mode in `EditorMode` in `src/editor/state/state.zi
 | `OpenFilePrompt` | Legacy direct open-file prompt. | TODO: verify current user entry path. | `enter` or `esc`. | The mode exists in code, but dashboard file opening now uses `FilesystemPicker`. |
 | `GitDiff` | Read-only workspace diff panel. | `:gitdiff`. | `q` or `esc`. | Shows changed files and unified hunks for unstaged changes. |
 | `TaskPanel` | Non-interactive task output panel. | `:run <command>` or `:tasks`. | `q` or `esc`. | Streams stdout/stderr from workspace-root commands and supports cancellation. |
+| `Agent` | Mock agent session panel. | `:agent`. | `esc` when no session is running. | Captures a prompt, toggles Plan/Implementation mode, and streams deterministic mock events. |
 | `GitGraph` | Read-only Git commit graph panel. | `:git-graph` or `:ggraph`. | `q` or `esc`. | Blocks other mode handling while active. |
 | `Help` | Help popup generated from commands and keybindings. | `:help`. | `q` or `esc`. | Shows resolved defaults, overrides, and unbound keys. |
 | `Terminal` | Focused integrated terminal panel. | `ctrl+t`. | `esc`. | Printable input is sent to the PTY where supported. |

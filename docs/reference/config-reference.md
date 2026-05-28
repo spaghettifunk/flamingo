@@ -68,6 +68,7 @@ Supported contexts:
 | `explorer_search` | Explorer search prompt controls. | Implemented |
 | `search` | Current-buffer search controls. | Implemented |
 | `global_search` | Project search controls. | Implemented |
+| `agent` | Agent panel controls. | Implemented |
 | `git_diff` | Git Diff panel controls. | Implemented |
 | `task_panel` | Task output panel controls. | Implemented |
 | `git_graph` | Git Graph panel controls. | Implemented |

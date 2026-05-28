@@ -27,6 +27,8 @@ test {
     _ = @import("src/editor/git/unified_diff_parser.zig");
     _ = @import("src/editor/git/diff_service.zig");
     _ = @import("src/editor/git/workspace_diff.zig");
+    _ = @import("src/editor/agent/session.zig");
+    _ = @import("src/editor/agent/manager.zig");
     _ = @import("src/editor/tasks/command_parser.zig");
     _ = @import("src/editor/tasks/task.zig");
     _ = @import("src/editor/tasks/task_manager.zig");
@@ -45,5 +47,6 @@ test {
     _ = @import("src/editor/renderer/git_graph_panel_view.zig");
     _ = @import("src/editor/renderer/git_diff_panel_view.zig");
     _ = @import("src/editor/renderer/task_panel_view.zig");
+    _ = @import("src/editor/renderer/agent_panel_view.zig");
     _ = @import("src/editor/terminal_panel.zig");
 }
