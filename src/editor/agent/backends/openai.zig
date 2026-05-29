@@ -190,9 +190,8 @@ pub const OpenAIBackend = struct {
             .kind = kind,
             .text = owned,
             .timestamp_ms = agent.nowMs(self.io),
-        } }) catch |err| {
+        } }) catch {
             self.allocator.free(owned);
-            logz.debug().fmt("msg", "dropping OpenAI agent event: {any}", .{err}).log();
         };
     }
 
@@ -203,9 +202,8 @@ pub const OpenAIBackend = struct {
             .kind = kind,
             .text = owned,
             .timestamp_ms = agent.nowMs(self.io),
-        } }) catch |err| {
+        } }) catch {
             self.allocator.free(owned);
-            logz.debug().fmt("msg", "dropping OpenAI agent event: {any}", .{err}).log();
         };
     }
 
@@ -214,8 +212,8 @@ pub const OpenAIBackend = struct {
             .id = id,
             .status = status,
             .finished_at_ms = agent.nowMs(self.io),
-        } }) catch |err| {
-            logz.debug().fmt("msg", "dropping OpenAI finish event: {any}", .{err}).log();
+        } }) catch {
+            return;
         };
     }
 
@@ -226,9 +224,8 @@ pub const OpenAIBackend = struct {
             .kind = kind,
             .message = owned,
             .timestamp_ms = agent.nowMs(self.io),
-        } }) catch |err| {
+        } }) catch {
             self.allocator.free(owned);
-            logz.debug().fmt("msg", "dropping OpenAI audit event: {any}", .{err}).log();
         };
     }
 };
@@ -336,9 +333,8 @@ const StreamSink = struct {
             return;
         }
         self.backend.audit(self.session_id, .tool_allowed, decision.message orelse "proposal allowed");
-        self.backend.queue.push(.{ .agent_proposal_created = draft }) catch |err| {
+        self.backend.queue.push(.{ .agent_proposal_created = draft }) catch {
             draft.deinit(self.backend.allocator);
-            logz.debug().fmt("msg", "dropping OpenAI proposal event: {any}", .{err}).log();
         };
     }
 };

@@ -255,6 +255,63 @@ test "Dashboard: Ctrl+O opens filesystem picker in open-file mode" {
     try std.testing.expectEqual(.open_file, ed.state.filesystem_picker.mode);
 }
 
+test "Agent panel: Enter edits multiline prompt and Esc closes panel" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    ed.state.agent_manager.open();
+    ed.state.mode = .Agent;
+
+    try feedText(&ed, "first");
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Enter)});
+    try feedText(&ed, "second");
+
+    try std.testing.expectEqualStrings("first\nsecond", ed.state.agent_manager.prompt_input.items);
+    try std.testing.expect(ed.state.agent_manager.visible);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expect(!ed.state.agent_manager.visible);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+}
+
+test "Agent panel: Ctrl+S starts session from prompt" {
+    const a = std.testing.allocator;
+    var ed = try editor_mod.Editor.init(a, std.testing.io, .{
+        .agent = .{ .provider = "openai" },
+    });
+    defer ed.deinit();
+    ed.width = 80;
+    ed.height = 24;
+
+    ed.state.agent_manager.open();
+    ed.state.mode = .Agent;
+
+    try feedText(&ed, "plan this change");
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyCtrl('s')});
+
+    try std.testing.expect(ed.state.agent_manager.visible);
+    try std.testing.expectEqual(editor_mod.EditorMode.Agent, ed.state.mode);
+    try std.testing.expect(ed.state.agent_manager.active_session_id == null);
+    const session = ed.state.agent_manager.selectedSessionConst().?;
+    try std.testing.expectEqualStrings("plan this change", session.prompt);
+    try std.testing.expectEqual(.failed, session.status);
+    try std.testing.expectEqualStrings("OpenAI API key environment variable is missing", ed.state.error_message.?);
+}
+
+test "Task panel: Esc closes panel without returning to dashboard mode" {
+    const a = std.testing.allocator;
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+
+    ed.state.task_manager.open();
+    ed.state.mode = .TaskPanel;
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Esc)});
+    try std.testing.expect(!ed.state.task_manager.visible);
+    try std.testing.expectEqual(editor_mod.EditorMode.Normal, ed.state.mode);
+}
+
 test "FilesystemPicker: Up Down and configured submit key are routed through picker actions" {
     const a = std.testing.allocator;
     const io = std.testing.io;

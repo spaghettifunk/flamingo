@@ -19,11 +19,12 @@ The default backend is local and deterministic. The optional OpenAI Codex backen
 
 | Key | Action |
 | --- | --- |
-| `enter` | Start a session with the current prompt. |
+| `ctrl+s` | Start a session with the current prompt. |
+| `enter` | Insert a prompt newline. |
 | `tab` | Toggle Plan/Implementation mode. |
 | `backspace` | Delete one prompt character. |
-| `up`, `down` | Scroll events. |
-| `pageup`, `pagedown` | Page through events. |
+| `up`, `down` | Scroll the prompt while editing, otherwise scroll events. |
+| `pageup`, `pagedown` | Page the prompt while editing, otherwise page events. |
 | `ctrl+u`, `ctrl+d` | Page through events. |
 | `ctrl+c` | Cancel the running session or active execution. |
 | `esc` | Close the panel when no session is running. |
@@ -43,7 +44,7 @@ The session event log is capped at 10,000 events.
 ## Limitations
 
 - Only one agent session can run at a time.
-- Prompt input is single-line.
+- Prompt editing is multiline, but cursor navigation inside the prompt is limited to append/backspace and vertical scrolling.
 - Plan mode is deterministic and read-only.
 - Implementation mode creates deterministic mock proposals only.
 - OpenAI Codex provider support is behind the Agent backend abstraction; live API behavior requires `OPENAI_API_KEY` or the configured env var.

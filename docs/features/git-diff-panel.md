@@ -19,8 +19,8 @@ Open the panel:
 | Action | Key |
 | --- | --- |
 | Close panel | `q` or `esc` |
-| Move selection up | `up` or `k` |
-| Move selection down | `down` or `j` |
+| Move selection up | `up` |
+| Move selection down | `down` |
 | Page up/down | `pageup`, `pagedown`, `ctrl+u`, `ctrl+d` |
 | Open selected file | `enter` |
 | Refresh | `r` |

@@ -167,8 +167,8 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | Key | Command | Description |
 | --- | --- | --- |
 | `esc`, `q` | `git_diff.close` | Close panel. |
-| `up`, `k` | `git_diff.move_up` | Move selection up. |
-| `down`, `j` | `git_diff.move_down` | Move selection down. |
+| `up` | `git_diff.move_up` | Move selection up. |
+| `down` | `git_diff.move_down` | Move selection down. |
 | `pageup`, `ctrl+u` | `git_diff.page_up` | Page selection up. |
 | `pagedown`, `ctrl+d` | `git_diff.page_down` | Page selection down. |
 | `r` | `git_diff.refresh_panel` | Refresh diff. |
@@ -179,8 +179,8 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | Key | Command | Description |
 | --- | --- | --- |
 | `esc`, `q` | `task_panel.close` | Close panel. |
-| `up`, `k` | `task_panel.scroll_up` | Scroll output up. |
-| `down`, `j` | `task_panel.scroll_down` | Scroll output down. |
+| `up` | `task_panel.scroll_up` | Scroll output up. |
+| `down` | `task_panel.scroll_down` | Scroll output down. |
 | `pageup`, `ctrl+u` | `task_panel.page_up` | Page output up. |
 | `pagedown`, `ctrl+d` | `task_panel.page_down` | Page output down. |
 | `[` | `task_panel.previous_task` | Select previous task. |
@@ -193,7 +193,8 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | Key | Command | Description |
 | --- | --- | --- |
 | `esc` | `agent.close` | Close panel when no session is running. |
-| `enter` | `agent.submit` | Start mock session. |
+| `ctrl+s` | `agent.submit` | Start session. |
+| `enter` | `agent.insert_newline` | Insert prompt newline. |
 | `backspace` | `agent.backspace` | Delete prompt character. |
 | `tab` | `agent.toggle_mode` | Toggle Plan/Implementation mode. |
 | `ctrl+c` | `agent.cancel` | Cancel running session or active execution. |
@@ -207,8 +208,8 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | Key | Command | Description |
 | --- | --- | --- |
 | `esc`, `q` | `git_graph.close` | Close panel. |
-| `up`, `k` | `git_graph.move_up` | Move to previous commit. |
-| `down`, `j` | `git_graph.move_down` | Move to next commit. |
+| `up` | `git_graph.move_up` | Move to previous commit. |
+| `down` | `git_graph.move_down` | Move to next commit. |
 | `pageup`, `pagedown` | page commands | Page selection. |
 | `gg` | `git_graph.first` | First commit. |
 | `G` | `git_graph.last` | Last loaded commit. |

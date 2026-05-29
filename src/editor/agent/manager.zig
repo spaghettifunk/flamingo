@@ -21,6 +21,7 @@ pub const AgentManager = struct {
     event_scroll: usize = 0,
     visible: bool = false,
     prompt_input: std.ArrayListUnmanaged(u8) = .empty,
+    prompt_scroll: usize = 0,
     selected_mode: agent.AgentMode = .plan,
 
     pub fn init(allocator: std.mem.Allocator) AgentManager {
@@ -56,6 +57,11 @@ pub const AgentManager = struct {
         try self.prompt_input.append(self.allocator, ch);
     }
 
+    pub fn appendPromptNewline(self: *AgentManager) !void {
+        if (!self.canEditPrompt()) return;
+        try self.prompt_input.append(self.allocator, '\n');
+    }
+
     pub fn backspacePrompt(self: *AgentManager) void {
         if (!self.canEditPrompt() or self.prompt_input.items.len == 0) return;
         _ = self.prompt_input.pop();
@@ -68,6 +74,28 @@ pub const AgentManager = struct {
 
     pub fn clearPrompt(self: *AgentManager) void {
         self.prompt_input.clearRetainingCapacity();
+        self.prompt_scroll = 0;
+    }
+
+    pub fn promptLineCount(self: *const AgentManager) usize {
+        if (self.prompt_input.items.len == 0) return 1;
+        var count: usize = 1;
+        for (self.prompt_input.items) |ch| {
+            if (ch == '\n') count += 1;
+        }
+        return count;
+    }
+
+    pub fn scrollPromptUp(self: *AgentManager, amount: usize) void {
+        self.prompt_scroll = self.prompt_scroll -| amount;
+    }
+
+    pub fn scrollPromptDown(self: *AgentManager, amount: usize) void {
+        self.prompt_scroll +|= amount;
+    }
+
+    pub fn clampPromptScroll(self: *AgentManager, total_rows: usize, visible_rows: usize) void {
+        self.prompt_scroll = @min(self.prompt_scroll, total_rows -| visible_rows);
     }
 
     pub fn createSession(self: *AgentManager, now_ms: i64) StartError!u64 {
@@ -304,6 +332,26 @@ test "agent manager rejects concurrent sessions" {
     try manager.prompt_input.appendSlice(allocator, "one");
     _ = try manager.createSession(1);
     try std.testing.expectError(error.AgentSessionAlreadyRunning, manager.createSession(2));
+}
+
+test "agent manager supports multiline prompt scrolling" {
+    const allocator = std.testing.allocator;
+    var manager = AgentManager.init(allocator);
+    defer manager.deinit();
+
+    try manager.prompt_input.appendSlice(allocator, "one");
+    try manager.appendPromptNewline();
+    try manager.prompt_input.appendSlice(allocator, "two");
+    try manager.appendPromptNewline();
+    try manager.prompt_input.appendSlice(allocator, "three");
+
+    try std.testing.expectEqual(@as(usize, 3), manager.promptLineCount());
+    manager.scrollPromptDown(10);
+    try std.testing.expectEqual(@as(usize, 10), manager.prompt_scroll);
+    manager.clampPromptScroll(manager.promptLineCount(), 2);
+    try std.testing.expectEqual(@as(usize, 1), manager.prompt_scroll);
+    manager.scrollPromptUp(1);
+    try std.testing.expectEqual(@as(usize, 0), manager.prompt_scroll);
 }
 
 test "agent manager stores context package and toggles details" {

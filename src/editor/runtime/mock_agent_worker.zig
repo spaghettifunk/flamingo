@@ -264,9 +264,8 @@ pub const MockAgentWorker = struct {
             .kind = kind,
             .text = owned,
             .timestamp_ms = agent.nowMs(self.io),
-        } }) catch |err| {
+        } }) catch {
             self.allocator.free(owned);
-            logz.debug().fmt("msg", "dropping agent event: {any}", .{err}).log();
         };
     }
 
@@ -277,9 +276,8 @@ pub const MockAgentWorker = struct {
             .kind = kind,
             .text = owned,
             .timestamp_ms = agent.nowMs(self.io),
-        } }) catch |err| {
+        } }) catch {
             self.allocator.free(owned);
-            logz.debug().fmt("msg", "dropping agent event: {any}", .{err}).log();
         };
     }
 
@@ -288,8 +286,8 @@ pub const MockAgentWorker = struct {
             .id = id,
             .status = status,
             .finished_at_ms = agent.nowMs(self.io),
-        } }) catch |err| {
-            logz.debug().fmt("msg", "dropping agent finish event: {any}", .{err}).log();
+        } }) catch {
+            return;
         };
     }
 
@@ -300,9 +298,8 @@ pub const MockAgentWorker = struct {
             .kind = kind,
             .message = owned,
             .timestamp_ms = agent.nowMs(self.io),
-        } }) catch |err| {
+        } }) catch {
             self.allocator.free(owned);
-            logz.debug().fmt("msg", "dropping agent audit event: {any}", .{err}).log();
         };
     }
 };

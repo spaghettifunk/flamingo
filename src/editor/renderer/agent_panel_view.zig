@@ -5,7 +5,7 @@ const popup = @import("popup.zig");
 const render_mod = @import("virtual_screen.zig");
 
 const title = " Agent ";
-const footer_text = "Enter run  Tab mode  Arrows scroll  PgUp/PgDn page  Ctrl+C cancel  Esc close";
+const footer_text = "Ctrl+S run  Enter newline  Tab mode  Arrows/PgUp/PgDn scroll  Ctrl+C cancel  Esc close";
 
 pub fn renderVirtualAgentPanel(editor: anytype) void {
     if (!editor.state.agent_manager.visible) return;
@@ -21,7 +21,9 @@ pub fn renderVirtualAgentPanel(editor: anytype) void {
     fillRows(screen, geom, .command_popup);
     renderControls(editor, geom);
 
-    const body_start = geom.row + 6;
+    const prompt_rows = promptTextAreaRows(geom);
+    const controls_rows = 5 + prompt_rows;
+    const body_start = geom.row + controls_rows + 1;
     const bottom_row = geom.row + geom.height - 1;
     const footer_row = bottom_row - 1;
     const footer_sep_row = footer_row - 1;
@@ -80,28 +82,32 @@ fn renderControls(editor: anytype, geom: popup.FilesystemPickerGeometry) void {
     const screen = &editor.renderer.screen;
     const manager = &editor.state.agent_manager;
     const end = geom.col + geom.width - 1;
+    const prompt_rows = promptTextAreaRows(geom);
+    const prompt_start_row = geom.row + 3;
 
     var row = geom.row + 1;
     var col = geom.col + 2;
+    var backend = editor.runtime.agentBackend();
     popup.writeVirtualTruncatedCells(screen, row, &col, end, "Mode: ", .explorer_dim, false);
     writeModeSegment(screen, row, &col, end, "Plan", manager.selected_mode == .plan);
     popup.writeVirtualTruncatedCells(screen, row, &col, end, " ", .command_popup, false);
     writeModeSegment(screen, row, &col, end, "Implementation", manager.selected_mode == .implementation);
     var provider_buf: [96]u8 = undefined;
-    const provider_text = if (editor.runtime.agent_backend.availabilityMessage()) |message|
-        std.fmt.bufPrint(&provider_buf, "  Provider: {s} ({s})", .{ editor.runtime.agent_backend.kind().label(), message }) catch ""
+    const provider_text = if (backend.availabilityMessage()) |message|
+        std.fmt.bufPrint(&provider_buf, "  Provider: {s} ({s})", .{ backend.kind().label(), message }) catch ""
     else
-        std.fmt.bufPrint(&provider_buf, "  Provider: {s}", .{editor.runtime.agent_backend.kind().label()}) catch "";
-    popup.writeVirtualTruncatedCells(screen, row, &col, end, provider_text, if (editor.runtime.agent_backend.availabilityMessage() == null) .explorer_dim else .git_diff_deleted, true);
+        std.fmt.bufPrint(&provider_buf, "  Provider: {s}", .{backend.kind().label()}) catch "";
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, provider_text, if (backend.availabilityMessage() == null) .explorer_dim else .git_diff_deleted, true);
 
     row += 1;
     col = geom.col + 2;
     popup.writeVirtualTruncatedCells(screen, row, &col, end, "Prompt: ", .explorer_dim, false);
-    const prompt_style: render_mod.RenderStyle = if (manager.canEditPrompt()) .command_popup_prompt else .explorer_dim;
-    const prompt_text = if (manager.prompt_input.items.len > 0) manager.prompt_input.items else "type a request";
-    popup.writeVirtualTruncatedCells(screen, row, &col, end, prompt_text, prompt_style, true);
+    const prompt_hint = if (manager.prompt_input.items.len == 0) "type a request" else "";
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, prompt_hint, .explorer_dim, true);
 
-    row += 1;
+    renderPromptTextArea(screen, geom, prompt_start_row, prompt_rows, manager);
+
+    row = prompt_start_row + prompt_rows;
     col = geom.col + 2;
     const session = manager.selectedSessionConst();
     if (session) |selected| {
@@ -127,7 +133,86 @@ fn renderControls(editor: anytype, geom: popup.FilesystemPickerGeometry) void {
         popup.writeVirtualTruncatedCells(screen, row, &col, end, "Context: none", .explorer_dim, false);
     }
 
-    popup.drawPickerSeparator(screen, geom.row + 5, geom.col, geom.width, .command_popup_border);
+    popup.drawPickerSeparator(screen, geom.row + 5 + prompt_rows, geom.col, geom.width, .command_popup_border);
+}
+
+fn promptTextAreaRows(geom: popup.FilesystemPickerGeometry) usize {
+    return @min(@as(usize, 8), @max(@as(usize, 3), geom.height / 5));
+}
+
+fn lineVisualRows(line: []const u8, width: usize) usize {
+    if (line.len == 0) return 1;
+    return (line.len + width - 1) / width;
+}
+
+fn promptVisualRows(text: []const u8, width: usize) usize {
+    if (text.len == 0) return 1;
+    var rows: usize = 0;
+    var line_start: usize = 0;
+    for (text, 0..) |ch, index| {
+        if (ch != '\n') continue;
+        rows += lineVisualRows(text[line_start..index], width);
+        line_start = index + 1;
+    }
+    rows += lineVisualRows(text[line_start..], width);
+    return rows;
+}
+
+fn promptVisualSliceAt(text: []const u8, width: usize, target_row: usize) []const u8 {
+    if (text.len == 0) return if (target_row == 0) "" else "";
+
+    var visual_row: usize = 0;
+    var line_start: usize = 0;
+    for (text, 0..) |ch, index| {
+        if (ch != '\n') continue;
+        if (visualSliceInLine(text[line_start..index], width, target_row, &visual_row)) |slice| return slice;
+        line_start = index + 1;
+    }
+    return visualSliceInLine(text[line_start..], width, target_row, &visual_row) orelse "";
+}
+
+fn visualSliceInLine(line: []const u8, width: usize, target_row: usize, visual_row: *usize) ?[]const u8 {
+    if (line.len == 0) {
+        if (visual_row.* == target_row) return line;
+        visual_row.* += 1;
+        return null;
+    }
+
+    var start: usize = 0;
+    while (start < line.len) {
+        const end = @min(start + width, line.len);
+        if (visual_row.* == target_row) return line[start..end];
+        visual_row.* += 1;
+        start = end;
+    }
+    return null;
+}
+
+fn renderPromptTextArea(
+    screen: *render_mod.VirtualScreen,
+    geom: popup.FilesystemPickerGeometry,
+    start_row: usize,
+    rows: usize,
+    manager: anytype,
+) void {
+    if (rows == 0) return;
+    const end = geom.col + geom.width - 1;
+    const style: render_mod.RenderStyle = if (manager.canEditPrompt()) .command_popup_prompt else .explorer_dim;
+    const text_start_col = geom.col + 4;
+    const text_width = @max(@as(usize, 1), end -| text_start_col + 1);
+    manager.clampPromptScroll(promptVisualRows(manager.prompt_input.items, text_width), rows);
+    for (0..rows) |offset| {
+        const row = start_row + offset;
+        popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
+        var col = geom.col + 2;
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, "| ", .explorer_dim, false);
+        if (manager.prompt_input.items.len == 0 and offset == 0) {
+            popup.writeVirtualTruncatedCells(screen, row, &col, end, "type a request", .explorer_dim, true);
+            continue;
+        }
+        const line = promptVisualSliceAt(manager.prompt_input.items, text_width, manager.prompt_scroll + offset);
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, line, style, true);
+    }
 }
 
 fn writeModeSegment(

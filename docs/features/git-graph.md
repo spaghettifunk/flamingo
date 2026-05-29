@@ -24,8 +24,8 @@ Default controls:
 | Action | Key |
 | --- | --- |
 | Close panel | `q` or `esc` |
-| Move selection up | `up` or `k` |
-| Move selection down | `down` or `j` |
+| Move selection up | `up` |
+| Move selection down | `down` |
 | Page up/down | `pageup`, `pagedown` |
 | First commit | `gg` |
 | Last loaded commit | `G` |
@@ -51,4 +51,3 @@ Repository root detection starts from project root, explorer root, current file 
 - It depends on the `git` executable.
 - It loads at most 500 commits.
 - Empty repositories display no commit rows.
-

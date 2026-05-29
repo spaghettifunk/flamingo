@@ -157,7 +157,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | Action                 | Keybinding           |
 | :--------------------- | :------------------- |
 | **Open TODO Panel**    | `:todos`             |
-| **Move Selection**     | `Up / Down` or `j/k` |
+| **Move Selection**     | `Up / Down`          |
 | **Open Selected TODO** | `Enter` or `o`       |
 | **Refresh Code TODOs** | `r`                  |
 | **New Manual TODO**    | `n`                  |
@@ -190,7 +190,7 @@ Comments are available for `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, and `.or
 | Action              | Keybinding                |
 | :------------------ | :------------------------ |
 | **Open Git Graph**  | `:git-graph` or `:ggraph` |
-| **Move Selection**  | `Up / Down` or `j/k`      |
+| **Move Selection**  | `Up / Down`               |
 | **Page Selection**  | `PageUp / PageDown`       |
 | **First Commit**    | `gg`                      |
 | **Last Commit**     | `G`                       |
@@ -213,8 +213,8 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Action              | Keybinding              |
 | :------------------ | :---------------------- |
 | Close panel         | `q`, `Esc`              |
-| Move selection up   | `k`, `Up`               |
-| Move selection down | `j`, `Down`             |
+| Move selection up   | `Up`                    |
+| Move selection down | `Down`                  |
 | Page up             | `PageUp`, `Ctrl+u`      |
 | Page down           | `PageDown`, `Ctrl+d`    |
 | Refresh diff        | `r`                     |
@@ -227,8 +227,8 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Open task panel      | `:tasks`                |
 | Run task             | `:run <command>`        |
 | Cancel running task  | `c`, `Ctrl+c`, `:taskstop` |
-| Scroll output up     | `k`, `Up`               |
-| Scroll output down   | `j`, `Down`             |
+| Scroll output up     | `Up`                    |
+| Scroll output down   | `Down`                  |
 | Page output up       | `PageUp`, `Ctrl+u`      |
 | Page output down     | `PageDown`, `Ctrl+d`    |
 | Select previous task | `[`                     |
@@ -241,7 +241,8 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | Action                 | Keybinding              |
 | :--------------------- | :---------------------- |
 | Open Agent panel       | `:agent`                |
-| Start session          | `Enter`                 |
+| Start session          | `Ctrl+s`                |
+| Insert prompt newline  | `Enter`                 |
 | Toggle Plan/Implementation | `Tab`              |
 | Delete prompt character | `Backspace`            |
 | Cancel running session/execution | `Ctrl+c`      |
@@ -340,7 +341,8 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 "r" = "task_panel.rerun"
 
 [keybindings.agent]
-"enter" = "agent.submit"
+"ctrl+s" = "agent.submit"
+"enter" = "agent.insert_newline"
 "tab" = "agent.toggle_mode"
 "ctrl+c" = "agent.cancel"
 "a" = "agent.approval_approve"

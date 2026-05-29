@@ -58,7 +58,7 @@ Canonical command names are the strings used in config keybinding tables. They a
 | TODOs              | `todos.open`, `todo_panel.new`, `todo_panel.toggle`, `todo_panel.open_selected`                    | `src/editor/commands.zig` |
 | Comments           | `comments.create`, `comments.open`, `comments_panel.reply`, `comments_panel.open_selected`         | `src/editor/commands.zig` |
 | Git                | `git_diff.open`, `git_diff.refresh`, `git_diff.refresh_panel`, `git_graph.open`, `git_graph.refresh` | `src/editor/commands.zig` |
-| Agent              | `agent.open`, `agent.context`, `agent.submit`, `agent.toggle_mode`, `agent.cancel`, `agent.page_down`, `proposals.approve_apply` | `src/editor/commands.zig` |
+| Agent              | `agent.open`, `agent.context`, `agent.submit`, `agent.insert_newline`, `agent.toggle_mode`, `agent.cancel`, `agent.page_down`, `proposals.approve_apply` | `src/editor/commands.zig` |
 | Tasks              | `tasks.run`, `tasks.open`, `tasks.stop`, `task_panel.cancel`, `task_panel.rerun`                   | `src/editor/commands.zig` |
 | Terminal           | `terminal.toggle`, `terminal.unfocus`, `terminal.scroll_bottom`                                    | `src/editor/commands.zig` |
 | Completion and LSP | `completion.trigger`, `completion.accept`, `lsp.goto_definition`                                   | `src/editor/commands.zig` |

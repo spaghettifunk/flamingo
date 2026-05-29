@@ -26,7 +26,7 @@ pub const EditorRuntime = struct {
     task_worker: task_worker.TaskWorker,
     mock_agent_worker: mock_agent_worker.MockAgentWorker,
     openai_agent_backend: openai_backend.OpenAIBackend,
-    agent_backend: agent_backend.AgentBackend,
+    agent_backend_kind: agent_backend.AgentBackendKind,
     lsp_mgr: ?lsp_manager.LspManager = null,
     fps_sample_start_ns: ?i96 = null,
     fps_frame_count: usize = 0,
@@ -66,7 +66,7 @@ pub const EditorRuntime = struct {
             try git_diff_worker.GitDiffWorker.start(allocator, io, queue);
         errdefer if (diff_worker) |worker| worker.stop();
 
-        var runtime = EditorRuntime{
+        const runtime = EditorRuntime{
             .event_queue = queue,
             .syntax_parse_worker = parser_worker,
             .git_worker = git_worker,
@@ -74,18 +74,21 @@ pub const EditorRuntime = struct {
             .task_worker = task_worker.TaskWorker.init(allocator, io, queue),
             .mock_agent_worker = mock_agent_worker.MockAgentWorker.init(allocator, io, queue),
             .openai_agent_backend = openai_backend.OpenAIBackend.init(allocator, io, queue),
-            .agent_backend = undefined,
+            .agent_backend_kind = .mock,
             .lsp_mgr = mgr,
             .perf_sampler = perf.PerfSampler.initFromEnv(),
         };
-        runtime.agent_backend = mock_backend.asBackend(&runtime.mock_agent_worker);
         return runtime;
     }
 
     pub fn configureAgentBackend(self: *EditorRuntime, cfg: config.AgentConfig, env: anytype) !void {
         self.mock_agent_worker.configurePolicy(@import("../agent/policy.zig").AgentPolicyConfig.fromAgentConfig(cfg));
         try self.openai_agent_backend.configure(cfg, env);
-        self.agent_backend = switch (provider_registry.kindFromConfig(cfg) catch .mock) {
+        self.agent_backend_kind = provider_registry.kindFromConfig(cfg) catch .mock;
+    }
+
+    pub fn agentBackend(self: *EditorRuntime) agent_backend.AgentBackend {
+        return switch (self.agent_backend_kind) {
             .mock => mock_backend.asBackend(&self.mock_agent_worker),
             .openai_codex => self.openai_agent_backend.asBackend(),
         };

@@ -121,6 +121,7 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .agent_close,
             .agent_submit,
             .agent_backspace,
+            .agent_insert_newline,
             .agent_toggle_mode,
             .agent_cancel,
             .agent_approval_approve,
@@ -1698,7 +1699,7 @@ fn executeTaskPanelActionCommand(ed: *editor.Editor, command: commands.CommandId
     switch (command) {
         .task_panel_close => {
             ed.state.task_manager.close();
-            ed.state.mode = if (ed.state.tabs.items.len == 0) .Dashboard else .Normal;
+            ed.state.mode = .Normal;
             ed.markDirty(.full);
         },
         .task_panel_scroll_up => {
@@ -1783,6 +1784,8 @@ fn startAgentSession(ed: *editor.Editor) !void {
         else => return err,
     };
     const session = ed.state.agent_manager.findSession(id) orelse return;
+    const session_mode = session.mode;
+    const session_prompt = session.prompt;
     var active_snapshot: ?[]u8 = null;
     defer if (active_snapshot) |snapshot| ed.allocator.free(snapshot);
     const active_buffer = if (ed.state.currentTab()) |tab| active: {
@@ -1806,7 +1809,7 @@ fn startAgentSession(ed: *editor.Editor) !void {
         ed.config.agent.validation.commands,
         active_buffer,
     );
-    const package = builder.build(session, session.prompt, session.mode) catch |err| {
+    const package = builder.build(session, session_prompt, session_mode) catch |err| {
         const message = switch (err) {
             error.OutOfMemory => "Unable to build agent context: out of memory.",
             else => "Unable to build agent context.",
@@ -1816,17 +1819,19 @@ fn startAgentSession(ed: *editor.Editor) !void {
         return;
     };
     ed.state.agent_manager.attachContextPackage(id, package);
-    const context = &(ed.state.agent_manager.findSession(id) orelse return).context_package.?;
-    ed.runtime.agent_backend.startSession(.{
+    const started_session = ed.state.agent_manager.findSession(id) orelse return;
+    const context = &started_session.context_package.?;
+    var backend = ed.runtime.agentBackend();
+    backend.startSession(.{
         .session_id = id,
-        .mode = session.mode,
-        .prompt = session.prompt,
+        .mode = started_session.mode,
+        .prompt = started_session.prompt,
         .workspace_root = agentRoot(ed),
         .context = context,
     }) catch |err| {
         const message = switch (err) {
             error.AgentSessionAlreadyRunning => "Agent session is already running.",
-            error.AgentBackendUnavailable => ed.runtime.agent_backend.availabilityMessage() orelse "Agent backend unavailable.",
+            error.AgentBackendUnavailable => backend.availabilityMessage() orelse "Agent backend unavailable.",
             else => "Unable to start agent.",
         };
         try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
@@ -1850,15 +1855,16 @@ fn cancelAgentSession(ed: *editor.Editor) void {
         ed.markDirty(.partial);
         return;
     }
-    if (!ed.runtime.agent_backend.hasRunningSession()) {
+    var backend = ed.runtime.agentBackend();
+    if (!backend.hasRunningSession()) {
         ed.state.status_message = "No agent session is running";
         ed.markDirty(.partial);
         return;
     }
     if (ed.state.agent_manager.selectedSessionConst()) |session| {
-        ed.runtime.agent_backend.cancelSession(session.id);
+        backend.cancelSession(session.id);
     } else {
-        ed.runtime.agent_backend.cancelSession(0);
+        backend.cancelSession(0);
     }
     ed.state.status_message = "Cancelling agent session";
     ed.markDirty(.partial);
@@ -1876,6 +1882,10 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.state.agent_manager.backspacePrompt();
             ed.markDirty(.partial);
         },
+        .agent_insert_newline => {
+            try ed.state.agent_manager.appendPromptNewline();
+            ed.markDirty(.partial);
+        },
         .agent_toggle_mode => {
             ed.state.agent_manager.toggleMode();
             ed.markDirty(.partial);
@@ -1890,19 +1900,35 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.markDirty(.partial);
         },
         .agent_scroll_up => {
-            ed.state.agent_manager.scrollUp(1);
+            if (ed.state.agent_manager.canEditPrompt()) {
+                ed.state.agent_manager.scrollPromptUp(1);
+            } else {
+                ed.state.agent_manager.scrollUp(1);
+            }
             ed.markDirty(.partial);
         },
         .agent_scroll_down => {
-            ed.state.agent_manager.scrollDown(1, rows);
+            if (ed.state.agent_manager.canEditPrompt()) {
+                ed.state.agent_manager.scrollPromptDown(1);
+            } else {
+                ed.state.agent_manager.scrollDown(1, rows);
+            }
             ed.markDirty(.partial);
         },
         .agent_page_up => {
-            ed.state.agent_manager.scrollUp(rows);
+            if (ed.state.agent_manager.canEditPrompt()) {
+                ed.state.agent_manager.scrollPromptUp(rows);
+            } else {
+                ed.state.agent_manager.scrollUp(rows);
+            }
             ed.markDirty(.partial);
         },
         .agent_page_down => {
-            ed.state.agent_manager.scrollDown(rows, rows);
+            if (ed.state.agent_manager.canEditPrompt()) {
+                ed.state.agent_manager.scrollPromptDown(rows);
+            } else {
+                ed.state.agent_manager.scrollDown(rows, rows);
+            }
             ed.markDirty(.partial);
         },
         else => unreachable,
@@ -2790,6 +2816,15 @@ fn handleAgentInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     if (agentActionCommandForEvent(ed, event)) |command| {
+        if ((command == .agent_approval_approve or command == .agent_approval_deny) and
+            ed.state.agent_manager.selectedPendingApproval() == null)
+        {
+            if (event.key == .Char and !event.ctrl and !event.alt) {
+                try ed.state.agent_manager.appendPromptChar(event.char);
+                ed.markDirty(.partial);
+            }
+            return;
+        }
         try executeAgentActionCommand(ed, command);
         return;
     }

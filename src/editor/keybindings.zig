@@ -843,9 +843,7 @@ const default_bindings = [_]Binding{
     .{ .context = .git_diff, .sequence = keySpecial(.Esc), .command = .git_diff_close },
     .{ .context = .git_diff, .sequence = keyChar('q'), .command = .git_diff_close },
     .{ .context = .git_diff, .sequence = keySpecial(.Up), .command = .git_diff_move_up },
-    .{ .context = .git_diff, .sequence = keyChar('k'), .command = .git_diff_move_up },
     .{ .context = .git_diff, .sequence = keySpecial(.Down), .command = .git_diff_move_down },
-    .{ .context = .git_diff, .sequence = keyChar('j'), .command = .git_diff_move_down },
     .{ .context = .git_diff, .sequence = keySpecial(.PageUp), .command = .git_diff_page_up },
     .{ .context = .git_diff, .sequence = ctrlChar('u'), .command = .git_diff_page_up },
     .{ .context = .git_diff, .sequence = keySpecial(.PageDown), .command = .git_diff_page_down },
@@ -857,9 +855,7 @@ const default_bindings = [_]Binding{
     .{ .context = .task_panel, .sequence = keySpecial(.Esc), .command = .task_panel_close },
     .{ .context = .task_panel, .sequence = keyChar('q'), .command = .task_panel_close },
     .{ .context = .task_panel, .sequence = keySpecial(.Up), .command = .task_panel_scroll_up },
-    .{ .context = .task_panel, .sequence = keyChar('k'), .command = .task_panel_scroll_up },
     .{ .context = .task_panel, .sequence = keySpecial(.Down), .command = .task_panel_scroll_down },
-    .{ .context = .task_panel, .sequence = keyChar('j'), .command = .task_panel_scroll_down },
     .{ .context = .task_panel, .sequence = keySpecial(.PageUp), .command = .task_panel_page_up },
     .{ .context = .task_panel, .sequence = ctrlChar('u'), .command = .task_panel_page_up },
     .{ .context = .task_panel, .sequence = keySpecial(.PageDown), .command = .task_panel_page_down },
@@ -872,7 +868,8 @@ const default_bindings = [_]Binding{
 
     // Agent.
     .{ .context = .agent, .sequence = keySpecial(.Esc), .command = .agent_close },
-    .{ .context = .agent, .sequence = keySpecial(.Enter), .command = .agent_submit },
+    .{ .context = .agent, .sequence = ctrlChar('s'), .command = .agent_submit },
+    .{ .context = .agent, .sequence = keySpecial(.Enter), .command = .agent_insert_newline },
     .{ .context = .agent, .sequence = keySpecial(.Backspace), .command = .agent_backspace },
     .{ .context = .agent, .sequence = keyChar('\t'), .command = .agent_toggle_mode },
     .{ .context = .agent, .sequence = ctrlChar('c'), .command = .agent_cancel },
@@ -889,9 +886,7 @@ const default_bindings = [_]Binding{
     .{ .context = .proposals, .sequence = keySpecial(.Esc), .command = .proposals_close },
     .{ .context = .proposals, .sequence = keyChar('q'), .command = .proposals_close },
     .{ .context = .proposals, .sequence = keySpecial(.Up), .command = .proposals_move_up },
-    .{ .context = .proposals, .sequence = keyChar('k'), .command = .proposals_move_up },
     .{ .context = .proposals, .sequence = keySpecial(.Down), .command = .proposals_move_down },
-    .{ .context = .proposals, .sequence = keyChar('j'), .command = .proposals_move_down },
     .{ .context = .proposals, .sequence = keySpecial(.PageUp), .command = .proposals_page_up },
     .{ .context = .proposals, .sequence = ctrlChar('u'), .command = .proposals_page_up },
     .{ .context = .proposals, .sequence = keySpecial(.PageDown), .command = .proposals_page_down },
@@ -906,9 +901,7 @@ const default_bindings = [_]Binding{
     .{ .context = .git_graph, .sequence = keySpecial(.Esc), .command = .git_graph_close },
     .{ .context = .git_graph, .sequence = keyChar('q'), .command = .git_graph_close },
     .{ .context = .git_graph, .sequence = keySpecial(.Up), .command = .git_graph_move_up },
-    .{ .context = .git_graph, .sequence = keyChar('k'), .command = .git_graph_move_up },
     .{ .context = .git_graph, .sequence = keySpecial(.Down), .command = .git_graph_move_down },
-    .{ .context = .git_graph, .sequence = keyChar('j'), .command = .git_graph_move_down },
     .{ .context = .git_graph, .sequence = keySpecial(.PageUp), .command = .git_graph_page_up },
     .{ .context = .git_graph, .sequence = keySpecial(.PageDown), .command = .git_graph_page_down },
     .{ .context = .git_graph, .sequence = charSeq("gg"), .command = .git_graph_first },
@@ -1382,6 +1375,8 @@ test "terminal help prompt completion and save-confirmation contexts resolve con
         .{ .context = .git_graph, .keys = keyChar('q'), .command = .git_graph_close },
         .{ .context = .git_graph, .keys = keySpecial(.Down), .command = .git_graph_move_down },
         .{ .context = .git_graph, .keys = charSeq("gg"), .command = .git_graph_first },
+        .{ .context = .agent, .keys = ctrlChar('s'), .command = .agent_submit },
+        .{ .context = .agent, .keys = keySpecial(.Enter), .command = .agent_insert_newline },
         .{ .context = .completion, .keys = keySpecial(.Down), .command = .completion_next },
         .{ .context = .completion, .keys = keySpecial(.Up), .command = .completion_previous },
         .{ .context = .completion, .keys = keySpecial(.Enter), .command = .completion_accept },
@@ -1404,6 +1399,14 @@ test "terminal help prompt completion and save-confirmation contexts resolve con
     try std.testing.expect(registry.resolve(.terminal, keyChar('a')) == .none);
     try std.testing.expect(registry.resolve(.prompt, keyChar('a')) == .none);
     try std.testing.expect(registry.resolve(.completion, keyChar('a')) == .none);
+    try std.testing.expect(registry.resolve(.git_graph, keyChar('j')) == .none);
+    try std.testing.expect(registry.resolve(.git_graph, keyChar('k')) == .none);
+    try std.testing.expect(registry.resolve(.git_diff, keyChar('j')) == .none);
+    try std.testing.expect(registry.resolve(.git_diff, keyChar('k')) == .none);
+    try std.testing.expect(registry.resolve(.task_panel, keyChar('j')) == .none);
+    try std.testing.expect(registry.resolve(.task_panel, keyChar('k')) == .none);
+    try std.testing.expect(registry.resolve(.proposals, keyChar('j')) == .none);
+    try std.testing.expect(registry.resolve(.proposals, keyChar('k')) == .none);
 }
 
 test "command-line context resolves action keys and leaves text raw" {

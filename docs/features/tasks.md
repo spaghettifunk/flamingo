@@ -20,8 +20,8 @@ The command is tokenized into argv directly. Flamingo supports whitespace, singl
 
 | Key | Action |
 | --- | --- |
-| `j`, `down` | Scroll output down. |
-| `k`, `up` | Scroll output up. |
+| `down` | Scroll output down. |
+| `up` | Scroll output up. |
 | `pagedown`, `ctrl+d` | Page output down. |
 | `pageup`, `ctrl+u` | Page output up. |
 | `[`, `]` | Select previous or next task. |
