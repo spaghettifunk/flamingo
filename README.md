@@ -10,41 +10,36 @@ Flamingo is under active development. It is useful for experimentation, hacking 
 
 The repository currently has a compact docs set and a growing implementation. Some workflows are implemented but still evolving, especially project tooling, LSP integration, configuration validation, and long-running background work.
 
-## Features
+## Installation
 
-Implemented:
+The recommended installation path on macOS and Linux is Homebrew:
 
-- Modal editing with Dashboard, Normal, Insert, Command, Search, Global Search, Help, Terminal, Git Graph, and prompt/picker modes.
-- Configurable context-specific keybindings via TOML.
-- Command prompt and command popup backed by command metadata.
-- File tabs, file open/save/write-all/quit-all flows, and save confirmation for unsaved buffers.
-- File explorer, filesystem picker, new-file, rename-file, delete-file, open-file, open-folder, and workspace creation flows.
-- Normal-mode navigation, jump history, line jumps, matching-bracket jumps, horizontal scrolling, folding, selections, clipboard operations, and multi-cursor editing support.
-- Project search/global search with a preview-oriented UI.
-- Tree-sitter syntax highlighting for Zig, Go, TOML, YAML, JSON, Markdown, and Protocol Buffers.
-- Virtual-screen renderer with diffed terminal output.
-- Integrated terminal panel on supported platforms.
-- TODO panel for code TODO/FIXME-style items and manual workspace TODOs.
-- Comments workflow for supported prose file types, stored under the workspace `.flamingo` directory.
-- Git status integration and a read-only Git commit graph panel.
-- LSP client plumbing for diagnostics, completions, and go-to-definition where the relevant language server is available.
-- Help popup generated from the resolved command/keybinding registry.
-- Rendering performance benchmark target.
+```bash
+brew install spaghettifunk/tap/flamingo
+```
 
-Partial or still evolving:
+Or tap the repository first:
 
-- LSP server management expects external language servers; automatic server installation is not implemented.
-- Global search exists, but regex search, background indexing, and a persistent search index are still roadmap items.
-- Theme/plugin customization is limited; default language plugins are registered in source.
-- Documentation is intentionally lightweight and does not yet cover every internal subsystem.
+```bash
+brew tap spaghettifunk/tap
+brew install flamingo
+```
 
-## Screenshots / Demo
+After installation, start the editor with:
 
-Screenshots and recordings have not been added yet.
+```bash
+flamingo
+```
+
+Check the installed binary with:
+
+```bash
+flamingo --version
+flamingo --help
+```
 
 ## Requirements
 
-- Zig 0.16.0 or newer, as declared in `build.zig.zon`.
 - A terminal environment capable of running a raw-mode terminal editor.
 - `git` for Git status and Git Graph features.
 - Optional language servers for LSP features:
@@ -53,36 +48,20 @@ Screenshots and recordings have not been added yet.
   - `vscode-json-languageserver` for JSON
   - `yaml-language-server` for YAML
   - `taplo lsp stdio` for TOML
-  - `buf lsp serve` for Protocol Buffers (`brew install bufbuild/buf/buf`)
+  - `buf lsp serve` for Protocol Buffers
 
-Zig dependencies are declared in `build.zig.zon`; vendored tree-sitter grammars live under `vendor/`.
+## Usage
 
-## Quick Start
-
-Build and run the editor:
+Open Flamingo in the current working directory:
 
 ```bash
-zig build run
+flamingo
 ```
 
-Run with arguments passed to Flamingo:
+Pass paths or other arguments to Flamingo as supported by the current CLI:
 
 ```bash
-zig build run -- <args>
-```
-
-Build the binary without running it:
-
-```bash
-zig build
-./zig-out/bin/flamingo
-```
-
-Non-interactive checks are available for packaging and CI:
-
-```bash
-flamingo --version
-flamingo --help
+flamingo <args>
 ```
 
 On startup, Flamingo uses the selected config path in this order:
@@ -90,32 +69,6 @@ On startup, Flamingo uses the selected config path in this order:
 - `--config <path>`
 - `FLAMINGO_CONFIG`
 - `~/.flamingo/config.toml`, created from the embedded default config if needed
-
-## Development
-
-Common validation commands:
-
-```bash
-zig build
-zig build test
-zig build perf
-```
-
-Format changed Zig files with:
-
-```bash
-zig fmt <files>
-```
-
-The build defines the main editor executable, a test step rooted at `test_root.zig`, and a rendering performance benchmark executable.
-
-### Release Process
-
-Flamingo uses a manual, tag-driven GitHub Actions release workflow for v1. This avoids publishing a release on every merge to `main`.
-
-1. Merge release-ready changes to `main`.
-2. Run the `release` workflow manually with the desired version, such as `0.1.0`.
-3. The workflow validates the version, builds and tests Flamingo, creates tag `v<version>` from `main`, generates a changelog from commits since the previous `v*` tag, packages the macOS binary, uploads `SHA256SUMS.txt`, and creates the GitHub Release.
 
 ## Configuration
 
@@ -130,41 +83,61 @@ Keybindings map key sequences to canonical command names from `src/editor/comman
 
 See the repository default config at [src/config/default_config.toml](src/config/default_config.toml) and the root sample config at [config.toml](config.toml).
 
-## Keybindings And Commands
-
-Flamingo is driven by command metadata and a resolved keybinding registry. The `:help` popup reflects defaults, overrides, and unbound keys, while `:` opens command mode for commands such as `:w`, `:q`, `:search`, `:todos`, `:comments`, and `:git-graph`.
-
 For the current keybinding and command reference, see [docs/keybindings.md](docs/keybindings.md).
 
-## Documentation
+## Development
 
-Project documentation lives in [`docs/`](docs/index.md).
+Development requires Zig 0.16.0 or newer, as declared in `build.zig.zon`.
 
-## Architecture
+Build and run from source:
 
-The codebase is organized around a small number of editor subsystems:
+```bash
+zig build run
+```
 
-- `src/main.zig` handles startup, config selection, logging, terminal cleanup, and editor launch.
-- `src/config.zig` parses TOML config and builds the keybinding registry.
-- `src/editor/` contains editor state, command dispatch, buffer/tab models, filesystem workflows, panels, search, comments, TODOs, Git Graph, syntax integration, and rendering.
-- `src/editor/renderer/` contains the virtual-screen renderer and UI views.
-- `src/editor/runtime/` contains event queue, background workers, key profiling, and runtime loop pieces.
-- `src/lsp/` contains LSP client, manager, protocol, and RPC code.
-- `src/plugin/manager.zig` registers built-in language plugin metadata.
-- `src/perf/` and `src/perf_bench.zig` contain rendering benchmark support.
+Pass arguments through the Zig build runner:
 
-## Roadmap / Project Direction
+```bash
+zig build run -- <args>
+```
 
-Current project direction, based on the code and roadmap, includes:
+Build the binary without running it:
 
-- improving editing performance, including future buffer data-structure work
-- expanding documentation and eventually adding a docs website
-- improving global search with regex, background indexing, and persistent indexing
-- tightening configuration validation and user-facing settings flows
-- improving LSP behavior while keeping language-server installation explicit for now
-- evolving theme/plugin customization over time
+```bash
+zig build
+./zig-out/bin/flamingo
+```
 
-See [docs/roadmap.md](docs/roadmap.md) for the current loose roadmap.
+Run validation:
+
+```bash
+zig build
+zig build test
+zig build perf
+```
+
+Format changed Zig files with:
+
+```bash
+zig fmt <files>
+```
+
+Zig dependencies are declared in `build.zig.zon`; vendored tree-sitter grammars live under `vendor/`.
+
+The build defines the main editor executable, a test step rooted at `test_root.zig`, and a rendering performance benchmark executable.
+
+## Release Process
+
+Flamingo uses a manual, tag-driven GitHub Actions release workflow for v1. This avoids publishing a release on every merge to `main`.
+
+1. Merge release-ready changes to `main`.
+2. Run the `release` workflow manually with the desired version, such as `0.1.0`.
+3. The workflow validates the version, builds and tests Flamingo, creates tag `v<version>` from `main`, generates a changelog from commits since the previous `v*` tag, packages the macOS binary, uploads `SHA256SUMS.txt`, and creates the GitHub Release.
+4. Update the Formula in the [homebrew-tap](https://github.com/spaghettifunk/homebrew-tap)
+
+## Project Docs
+
+Project documentation lives in [`docs/`](docs/index.md). See [docs/roadmap.md](docs/roadmap.md) for the current loose roadmap.
 
 ## Contributing
 
