@@ -274,7 +274,7 @@ Diff markers appear beside line numbers for files opened inside a Git repository
 | **Trigger Completion** | `CTRL + Space` or `.` |
 | **Next Item**          | `Down`                |
 | **Previous Item**      | `Up`                  |
-| **Accept Selection**   | `Enter`               |
+| **Accept Selection**   | `Enter` or `Tab`      |
 | **Cancel Completion**  | `Esc`                 |
 
 ### Global Search

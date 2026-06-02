@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const logz = @import("logz");
 const config = @import("../../../config.zig");
 const backend = @import("../backend.zig");
@@ -74,6 +75,8 @@ pub const OpenAIBackend = struct {
     pub fn startSession(self: *OpenAIBackend, request: backend.AgentRequest) backend.AgentBackendError!void {
         if (self.api_key == null or self.model.len == 0) return error.AgentBackendUnavailable;
         try self.prepareForStart();
+
+        logz.debug().fmt("msg", "openai startSession: Session ID {d}, Mode: {s}", .{ request.session_id, @tagName(request.mode) }).log();
 
         const owned_prompt = try self.allocator.dupe(u8, request.prompt);
         errdefer self.allocator.free(owned_prompt);
@@ -151,13 +154,16 @@ pub const OpenAIBackend = struct {
         self.emit(.status, "Starting OpenAI Codex session.", owned.session_id);
         if (self.isCancelled()) return self.finish(owned.session_id, .cancelled);
 
+        logz.debug().fmt("msg", "openai run: Fetching response stream from OpenAI (model: {s})", .{self.model}).log();
         var client = openai_client.OpenAIClient.init(self.allocator, self.io, self.api_key.?, self.model);
         const stream = client.fetchResponseStream(.{ .mode = owned.mode, .prompt = owned.prompt }) catch |err| {
+            logz.debug().fmt("msg", "openai run: OpenAI request failed (session {d}): {s}", .{ owned.session_id, @errorName(err) }).log();
             self.emitFmt(.agent_error, owned.session_id, "OpenAI request failed: {s}", .{@errorName(err)});
             self.finish(owned.session_id, .failed);
             return;
         };
         defer self.allocator.free(stream);
+        logz.debug().fmt("msg", "openai run: Stream fetched successfully for session {d}", .{owned.session_id}).log();
 
         var sink = StreamSink{
             .backend = self,
@@ -168,6 +174,7 @@ pub const OpenAIBackend = struct {
         };
         openai_client.parseSseEvents(self.allocator, stream, &sink) catch |err| {
             if (err != error.OpenAIToolLimitReached) {
+                logz.debug().fmt("msg", "openai run: OpenAI stream parsing failed (session {d}): {s}", .{ owned.session_id, @errorName(err) }).log();
                 self.emitFmt(.agent_error, owned.session_id, "OpenAI stream failed: {s}", .{@errorName(err)});
             }
             self.finish(owned.session_id, .failed);
@@ -258,18 +265,26 @@ const StreamSink = struct {
         switch (event.kind) {
             .message_delta => if (event.text.len > 0) self.backend.emit(.assistant_message, event.text, self.session_id),
             .tool_call => try self.handleToolCall(event.tool_name, event.tool_arguments),
-            .completed => self.backend.emit(.status, "OpenAI stream complete.", self.session_id),
-            .error_message => self.backend.emit(.agent_error, event.text, self.session_id),
+            .completed => {
+                logz.debug().fmt("msg", "openai StreamSink: Stream completed (session {d})", .{self.session_id}).log();
+                self.backend.emit(.status, "OpenAI stream complete.", self.session_id);
+            },
+            .error_message => {
+                logz.debug().fmt("msg", "openai StreamSink: Stream error (session {d}): {s}", .{ self.session_id, event.text }).log();
+                self.backend.emit(.agent_error, event.text, self.session_id);
+            },
         }
     }
 
     fn handleToolCall(self: *StreamSink, name: []const u8, arguments: []const u8) !void {
+        logz.debug().fmt("msg", "openai handleToolCall: Session {d} requested tool '{s}' with arguments '{s}'", .{ self.session_id, name, arguments }).log();
         if (std.mem.eql(u8, name, "propose_patch")) {
             try self.handlePatchProposal(arguments);
             return;
         }
 
         const call = parseToolCall(self.backend.allocator, self.session_id, self.next_tool_call_id, name, arguments) catch |err| {
+            logz.debug().fmt("msg", "openai handleToolCall: Session {d} rejected tool call {s}: {s}", .{ self.session_id, name, @errorName(err) }).log();
             self.backend.emitFmt(.agent_error, self.session_id, "Rejected tool call {s}: {s}", .{ name, @errorName(err) });
             return;
         };
@@ -294,11 +309,16 @@ const StreamSink = struct {
         self.policy_state = executor.policy_state;
         defer result.deinit(self.backend.allocator);
 
+        logz.debug().fmt("msg", "openai handleToolCall: Session {d} executed tool '{s}', success={}", .{ self.session_id, name, result.ok }).log();
+
         const result_text = tools.formatToolResult(self.backend.allocator, result) catch {
+            logz.debug().fmt("msg", "openai handleToolCall: Session {d} failed to format result of '{s}'", .{ self.session_id, name }).log();
             self.backend.emit(.tool_result, "tool result unavailable", self.session_id);
             return;
         };
         defer self.backend.allocator.free(result_text);
+
+        logz.debug().fmt("tool_result", "\n{s}", .{result_text}).log();
         self.backend.emit(.tool_result, result_text, self.session_id);
     }
 
@@ -312,10 +332,14 @@ const StreamSink = struct {
             arguments,
             agent.nowMs(self.backend.io),
         ) catch |err| {
+            logz.debug().fmt("msg", "openai handlePatchProposal: Session {d} rejected patch proposal build: {s}", .{ self.session_id, @errorName(err) }).log();
             self.backend.emitFmt(.agent_error, self.session_id, "Rejected patch proposal: {s}", .{@errorName(err)});
             return;
         };
         errdefer draft.deinit(self.backend.allocator);
+
+        logz.debug().fmt("msg", "openai handlePatchProposal: Session {d} proposed patch for file '{s}': '{s}'", .{ self.session_id, draft.file_path, draft.description }).log();
+
         var engine = policy.AgentPolicyEngine.init(self.backend.allocator, self.backend.io, self.workspace_root, self.backend.policy_config);
         self.backend.audit(self.session_id, .tool_requested, "create_patch_proposal");
         const decision = engine.evaluate(&self.policy_state, .{
@@ -324,6 +348,9 @@ const StreamSink = struct {
             .path = draft.file_path,
             .reason = draft.description,
         });
+
+        logz.debug().fmt("msg", "openai handlePatchProposal policy evaluation: decision={s}, msg={s}", .{ @tagName(decision.decision), decision.message orelse "" }).log();
+
         if (decision.decision != .allow) {
             const message = decision.message orelse "patch proposal denied by policy";
             self.backend.audit(self.session_id, .tool_denied, message);

@@ -268,6 +268,7 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `down` | `completion.next` | Next completion. |
 | `up` | `completion.previous` | Previous completion. |
 | `enter` | `completion.accept` | Accept completion. |
+| `tab` | `completion.accept` | Accept completion. |
 | `esc` | `completion.cancel` | Cancel completion. |
 
 ## Save Confirmation

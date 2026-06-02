@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const logz = @import("logz");
 const terminal = @import("../../terminal.zig");
 const editor = @import("../editor.zig");
@@ -942,6 +943,7 @@ fn executeNormalModeActionCommand(ed: *editor.Editor, command: commands.CommandI
             ed.state.mode = .Search;
             ed.state.search_buffer.clearRetainingCapacity();
             if (ed.state.search_system) |*s| s.clear();
+            ed.markDirty(.full);
         },
         .completion_auto_trigger, .completion_trigger => {},
         else => unreachable,
@@ -973,6 +975,7 @@ fn closeSearch(ed: *editor.Editor) void {
     ed.state.mode = .Normal;
     if (ed.state.search_system) |*s| s.clear();
     ed.state.search_buffer.clearRetainingCapacity();
+    ed.markDirty(.full);
 }
 
 fn moveCursorToActiveSearchMatch(ed: *editor.Editor) void {
@@ -1001,18 +1004,21 @@ fn executeSearchActionCommand(ed: *editor.Editor, command: commands.CommandId) !
             if (ed.state.search_buffer.items.len > 0) {
                 ed.state.search_buffer.shrinkRetainingCapacity(ed.state.search_buffer.items.len - 1);
                 try refreshSearchFromBuffer(ed);
+                ed.markDirty(.full);
             }
         },
         .search_next_match => {
             if (ed.state.search_system) |*s| {
                 s.nextMatch();
                 moveCursorToActiveSearchMatch(ed);
+                ed.markDirty(.partial);
             }
         },
         .search_previous_match => {
             if (ed.state.search_system) |*s| {
                 s.prevMatch();
                 moveCursorToActiveSearchMatch(ed);
+                ed.markDirty(.partial);
             }
         },
         else => unreachable,
@@ -1786,6 +1792,8 @@ fn startAgentSession(ed: *editor.Editor) !void {
     const session = ed.state.agent_manager.findSession(id) orelse return;
     const session_mode = session.mode;
     const session_prompt = session.prompt;
+    if (!builtin.is_test) logz.debug().fmt("msg", "startAgentSession: Starting agent session {d} (mode: {s}) with prompt: '{s}'", .{ id, @tagName(session_mode), prompt }).log();
+
     var active_snapshot: ?[]u8 = null;
     defer if (active_snapshot) |snapshot| ed.allocator.free(snapshot);
     const active_buffer = if (ed.state.currentTab()) |tab| active: {
@@ -1814,10 +1822,19 @@ fn startAgentSession(ed: *editor.Editor) !void {
             error.OutOfMemory => "Unable to build agent context: out of memory.",
             else => "Unable to build agent context.",
         };
+        if (!builtin.is_test) logz.debug().fmt("msg", "startAgentSession: Context package build failed (session {d}): {s}", .{ id, message }).log();
         try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
         ed.state.error_message = message;
         return;
     };
+    if (!builtin.is_test) logz.debug().fmt("msg", "startAgentSession: Context package built successfully (session {d})", .{id}).log();
+    if (ed.config.debug) {
+        if (package.formatDetails(ed.allocator)) |details| {
+            defer ed.allocator.free(details);
+            if (!builtin.is_test) logz.debug().fmt("context_details", "\n{s}", .{details}).log();
+        } else |_| {}
+    }
+
     ed.state.agent_manager.attachContextPackage(id, package);
     const started_session = ed.state.agent_manager.findSession(id) orelse return;
     const context = &started_session.context_package.?;
@@ -1834,10 +1851,12 @@ fn startAgentSession(ed: *editor.Editor) !void {
             error.AgentBackendUnavailable => backend.availabilityMessage() orelse "Agent backend unavailable.",
             else => "Unable to start agent.",
         };
+        if (!builtin.is_test) logz.debug().fmt("msg", "startAgentSession: Agent backend start failed (session {d}): {s}", .{ id, message }).log();
         try ed.state.agent_manager.failToStart(id, message, agent_mod.nowMs(ed.io));
         ed.state.error_message = message;
         return;
     };
+    if (!builtin.is_test) logz.debug().fmt("msg", "startAgentSession: Agent backend session started successfully (session {d})", .{id}).log();
 }
 
 fn closeAgentPanel(ed: *editor.Editor) void {
@@ -3107,6 +3126,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
             } else if (event.key == .Char and !event.ctrl and !event.alt) {
                 try ed.state.search_buffer.append(ed.allocator, event.char);
                 try refreshSearchFromBuffer(ed);
+                ed.markDirty(.full);
             }
         },
         .GlobalSearch => {

@@ -289,6 +289,13 @@ pub fn renderVirtualStatus(editor: anytype, ctx: anytype, row: usize) void {
     }
 }
 
+pub fn searchCursorTerminalCol(editor: anytype) usize {
+    const prefix_cells = render_mod.displayCellCount(" SEARCH ") +
+        render_mod.displayCellCount(editor.icons.status_separator_right) +
+        render_mod.displayCellCount(" ");
+    return prefix_cells + render_mod.displayCellCount("/") + render_mod.displayCellCount(editor.state.search_buffer.items) + 1;
+}
+
 pub fn writeVirtualStatusText(editor: anytype, row: usize, col: *usize, text: []const u8, style: render_mod.RenderStyle) void {
     if (col.* >= editor.width) return;
     editor.renderer.screen.writeText(row, col.*, text, style);
@@ -315,6 +322,16 @@ pub fn writeVirtualStatusLeft(editor: anytype, row: usize, col: *usize, tab: ?*T
         writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_command);
         writeVirtualStatusText(editor, row, col, " Open file: ", .status_file);
         writeVirtualStatusText(editor, row, col, editor.state.command_buffer.items, .status_file);
+        return;
+    }
+    if (editor.state.mode == .Search) {
+        writeVirtualStatusText(editor, row, col, " SEARCH ", .status_mode_search);
+        writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_search);
+        writeVirtualStatusText(editor, row, col, " ", .status_file);
+        var search_buf: [160]u8 = undefined;
+        const search_text = buildStatusText(editor, tab, &search_buf) catch "/";
+        writeVirtualStatusText(editor, row, col, search_text, .status_file);
+        writeVirtualStatusText(editor, row, col, editor.icons.status_separator_right, .status_sep_file);
         return;
     }
 

@@ -947,6 +947,7 @@ const default_bindings = [_]Binding{
     .{ .context = .completion, .sequence = keySpecial(.Down), .command = .completion_next },
     .{ .context = .completion, .sequence = keySpecial(.Up), .command = .completion_previous },
     .{ .context = .completion, .sequence = keySpecial(.Enter), .command = .completion_accept },
+    .{ .context = .completion, .sequence = keyChar('\t'), .command = .completion_accept },
     .{ .context = .completion, .sequence = keySpecial(.Esc), .command = .completion_cancel },
 
     // Save confirmation.
@@ -1380,6 +1381,7 @@ test "terminal help prompt completion and save-confirmation contexts resolve con
         .{ .context = .completion, .keys = keySpecial(.Down), .command = .completion_next },
         .{ .context = .completion, .keys = keySpecial(.Up), .command = .completion_previous },
         .{ .context = .completion, .keys = keySpecial(.Enter), .command = .completion_accept },
+        .{ .context = .completion, .keys = keyChar('\t'), .command = .completion_accept },
         .{ .context = .completion, .keys = keySpecial(.Esc), .command = .completion_cancel },
         .{ .context = .prompt, .keys = keySpecial(.Esc), .command = .prompt_cancel },
         .{ .context = .prompt, .keys = keyChar('y'), .command = .prompt_confirm },
@@ -1639,6 +1641,7 @@ test "popup help search terminal picker dashboard and explorer defaults exist" {
         .{ .context = .explorer, .keys = altChar('n'), .command = .explorer_new_file },
         .{ .context = .explorer_search, .keys = keySpecial(.Esc), .command = .explorer_search_cancel },
         .{ .context = .completion, .keys = keySpecial(.Enter), .command = .completion_accept },
+        .{ .context = .completion, .keys = keyChar('\t'), .command = .completion_accept },
         .{ .context = .save_confirmation, .keys = keyChar('s'), .command = .save_confirmation_save },
     };
 

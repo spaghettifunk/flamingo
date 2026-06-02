@@ -668,14 +668,9 @@ pub const Editor = struct {
             }
 
             if (self.completionCommandForEvent(event) != null and self.modeAllowsCompletion()) {
-                if (tab.buf.filename != null) {
-                    if (self.runtime.lsp_mgr) |*mgr| {
-                        const mc = tab.mainCursor();
-                        mgr.requestCompletion(tab.buf.filename.?, mc.row, mc.col) catch |err| {
-                            logz.err().fmt("msg", "Failed to request completion: {any}", .{err}).log();
-                        };
-                    }
-                }
+                editor_lsp.requestCompletionAtCursor(self, true);
+            } else {
+                editor_lsp.maybeRequestCompletionAfterInput(self, event);
             }
         }
     }
@@ -822,6 +817,26 @@ fn makeFastMoveTestEditorWithLineCount(allocator: std.mem.Allocator, line_count:
     return ed;
 }
 
+fn makeCompletionPrefixTestEditor(allocator: std.mem.Allocator, line: []const u8) !Editor {
+    var ed = try Editor.init(allocator, std.testing.io, .{});
+    errdefer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    var first = buf.lines.orderedRemove(0);
+    first.deinit();
+    try buf.lines.append(allocator, try buffer.Line.fromSlice(allocator, line));
+
+    try ed.addTab(buf);
+    try ed.currentTab().?.buf.setFilename("main.zig");
+    ed.state.mode = .Insert;
+    ed.width = 80;
+    ed.height = 24;
+    ed.state.render_dirty = false;
+    ed.state.force_full_render = false;
+    return ed;
+}
+
 fn makeFoldTestEditor(allocator: std.mem.Allocator) !Editor {
     var ed = try Editor.init(allocator, std.testing.io, .{});
     errdefer ed.deinit();
@@ -942,6 +957,34 @@ test "Editor command mode status uses command segment label" {
 
     try std.testing.expectEqual(render_mod.RenderStyle.status_mode_command, ed.statusModeStyle());
     try std.testing.expect(std.mem.indexOf(u8, status_text, "COMMAND") != null);
+}
+
+test "Editor search status renders typed query" {
+    const cfg = config.Config{};
+    var ed = try Editor.init(std.testing.allocator, std.testing.io, cfg);
+    defer ed.deinit();
+    ed.width = 80;
+    ed.height = 24;
+
+    var buf = try buffer.Buffer.init(std.testing.allocator);
+    for ("flamingo editor", 0..) |ch, i| {
+        try buf.insertChar(0, i, ch);
+    }
+    try std.testing.expect(try ed.state.addTab(ed.allocator, buf));
+
+    ed.state.mode = .Search;
+    try ed.state.search_buffer.appendSlice(ed.allocator, "fla");
+    try ed.state.search_system.?.update(&ed.currentTab().?.buf, ed.state.search_buffer.items);
+
+    var out = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer out.deinit();
+    try ed.renderBenchmarkFrame(&out.writer);
+
+    const rendered = out.written();
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "SEARCH") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "/fla") != null);
+    try std.testing.expectEqual(ed.statusTerminalRow(), ed.renderer.screen.cursor_row);
+    try std.testing.expectEqual(statusline.searchCursorTerminalCol(&ed), ed.renderer.screen.cursor_col);
 }
 
 test "Editor status includes branch file context and diagnostics" {
@@ -1426,14 +1469,63 @@ test "completion trigger keys resolve from normal and insert contexts" {
     try std.testing.expectEqual(commands.CommandId.completion_trigger, ed.completionCommandForEvent(.{ .key = .Char, .char = 'j', .ctrl = true }).?);
 }
 
+test "completion identifier prefix length scans current word" {
+    var all = try makeCompletionPrefixTestEditor(std.testing.allocator, "all");
+    defer all.deinit();
+    all.currentTab().?.mainCursor().col = 3;
+    try std.testing.expectEqual(@as(usize, 3), editor_lsp.identifierPrefixLen(all.currentTab().?));
+
+    var dotted = try makeCompletionPrefixTestEditor(std.testing.allocator, "foo.all");
+    defer dotted.deinit();
+    dotted.currentTab().?.mainCursor().col = 7;
+    try std.testing.expectEqual(@as(usize, 3), editor_lsp.identifierPrefixLen(dotted.currentTab().?));
+
+    var short = try makeCompletionPrefixTestEditor(std.testing.allocator, "a");
+    defer short.deinit();
+    short.currentTab().?.mainCursor().col = 1;
+    try std.testing.expectEqual(@as(usize, 1), editor_lsp.identifierPrefixLen(short.currentTab().?));
+
+    var punctuation = try makeCompletionPrefixTestEditor(std.testing.allocator, "foo.");
+    defer punctuation.deinit();
+    punctuation.currentTab().?.mainCursor().col = 4;
+    try std.testing.expectEqual(@as(usize, 0), editor_lsp.identifierPrefixLen(punctuation.currentTab().?));
+
+    var underscored = try makeCompletionPrefixTestEditor(std.testing.allocator, "alloc_1");
+    defer underscored.deinit();
+    underscored.currentTab().?.mainCursor().col = 7;
+    try std.testing.expectEqual(@as(usize, 7), editor_lsp.identifierPrefixLen(underscored.currentTab().?));
+}
+
+test "automatic completion trigger is limited to insert identifier prefixes" {
+    var ed = try makeCompletionPrefixTestEditor(std.testing.allocator, "al");
+    defer ed.deinit();
+    ed.currentTab().?.mainCursor().col = 2;
+
+    try std.testing.expect(editor_lsp.shouldRequestCompletionAfterInput(&ed, .{ .key = .Char, .char = 'l' }));
+
+    ed.state.mode = .Normal;
+    try std.testing.expect(!editor_lsp.shouldRequestCompletionAfterInput(&ed, .{ .key = .Char, .char = 'l' }));
+
+    ed.state.mode = .Insert;
+    try std.testing.expect(!editor_lsp.shouldRequestCompletionAfterInput(&ed, .{ .key = .Char, .char = '.' }));
+
+    ed.currentTab().?.mainCursor().col = 1;
+    try std.testing.expect(!editor_lsp.shouldRequestCompletionAfterInput(&ed, .{ .key = .Char, .char = 'a' }));
+}
+
 test "completion popup controls resolve through completion context" {
     const allocator = std.testing.allocator;
     var ed = try makeFastMoveTestEditor(allocator);
     defer ed.deinit();
 
+    var first_item = std.json.ObjectMap{};
+    try first_item.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, "first") });
+    var second_item = std.json.ObjectMap{};
+    try second_item.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, "second") });
+
     var arr = std.json.Array.init(allocator);
-    try arr.append(.{ .string = try allocator.dupe(u8, "first") });
-    try arr.append(.{ .string = try allocator.dupe(u8, "second") });
+    try arr.append(.{ .object = first_item });
+    try arr.append(.{ .object = second_item });
     ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
 
     try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Down }));
@@ -1444,6 +1536,44 @@ test "completion popup controls resolve through completion context" {
 
     try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Esc }));
     try std.testing.expect(!ed.state.lsp_ui.completion_active);
+}
+
+test "completion popup stays open for underscore identifier input" {
+    const allocator = std.testing.allocator;
+    var ed = try makeFastMoveTestEditor(allocator);
+    defer ed.deinit();
+
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .string = try allocator.dupe(u8, "with_underscore") });
+    ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
+
+    try std.testing.expect(!try ed.handleCompletionInput(.{ .key = .Char, .char = '_' }));
+    try std.testing.expect(ed.state.lsp_ui.completion_active);
+}
+
+test "completion accept replaces typed prefix with first matching item" {
+    const allocator = std.testing.allocator;
+    var ed = try makeCompletionPrefixTestEditor(allocator, "all");
+    defer ed.deinit();
+    ed.currentTab().?.mainCursor().col = 3;
+
+    var arena_item = std.json.ObjectMap{};
+    try arena_item.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, "arena") });
+    var allocator_item = std.json.ObjectMap{};
+    try allocator_item.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, "allocator") });
+
+    var arr = std.json.Array.init(allocator);
+    try arr.append(.{ .object = arena_item });
+    try arr.append(.{ .object = allocator_item });
+    ed.state.lsp_ui.replaceCompletion(.{ .array = arr });
+
+    try std.testing.expectEqual(@as(usize, 1), editor_lsp.matchingCompletionCount(ed.currentTab().?, ed.state.lsp_ui.completionItems()));
+    try std.testing.expect(try ed.handleCompletionInput(.{ .key = .Char, .char = '\t' }));
+    try std.testing.expect(!ed.state.lsp_ui.completion_active);
+
+    const line = try ed.currentTab().?.buf.lines.items[0].slice(allocator);
+    defer allocator.free(line);
+    try std.testing.expectEqualStrings("allocator", line);
 }
 
 test "completion accept inserts selected item" {

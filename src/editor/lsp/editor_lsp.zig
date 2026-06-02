@@ -93,6 +93,12 @@ pub fn handleLspEvent(editor: anytype, plugin_name: []const u8, message: []const
                     mgr.freeValue(items);
                     return;
                 }
+                if (completionItemsFromValue(items).?.len == 0) {
+                    mgr.freeValue(items);
+                    editor.state.lsp_ui.clearCompletion();
+                    editor.markDirty(.partial);
+                    return;
+                }
                 editor.state.lsp_ui.replaceCompletion(items);
                 editor.markDirty(.partial);
             },
@@ -257,8 +263,66 @@ pub fn flushPendingLspChanges(editor: anytype, force: bool) !void {
     }
 }
 
+pub fn requestCompletionAtCursor(editor: anytype, force_flush: bool) void {
+    const tab = editor.currentTab() orelse return;
+    const filename = tab.buf.filename orelse return;
+
+    if (force_flush) {
+        flushPendingLspChanges(editor, true) catch |err| {
+            logz.err().fmt("msg", "Failed to flush LSP changes before completion request: {any}", .{err}).log();
+        };
+    }
+
+    if (editor.runtime.lsp_mgr) |*mgr| {
+        const mc = tab.mainCursor();
+        mgr.requestCompletion(filename, mc.row, mc.col) catch |err| {
+            logz.err().fmt("msg", "Failed to request completion: {any}", .{err}).log();
+        };
+    }
+}
+
+pub fn maybeRequestCompletionAfterInput(editor: anytype, event: terminal.KeyEvent) void {
+    if (!shouldRequestCompletionAfterInput(editor, event)) return;
+    requestCompletionAtCursor(editor, true);
+}
+
+pub fn shouldRequestCompletionAfterInput(editor: anytype, event: terminal.KeyEvent) bool {
+    if (editor.state.mode != .Insert) return false;
+    if (!isPlainIdentifierCharEvent(event)) return false;
+    if (editor.runtime.lsp_mgr == null) return false;
+
+    const tab = editor.currentTab() orelse return false;
+    if (tab.multi_cursor.active) return false;
+    if (tab.buf.filename == null) return false;
+    return identifierPrefixLen(tab) >= 2;
+}
+
 pub fn modeAllowsCompletion(editor: anytype) bool {
     return editor.state.mode == .Normal or editor.state.mode == .Insert;
+}
+
+pub fn identifierPrefixLen(tab: anytype) usize {
+    const mc = tab.mainCursor();
+    if (mc.row >= tab.buf.lines.items.len) return 0;
+    const line = &tab.buf.lines.items[mc.row];
+    var col = @min(mc.col, line.len());
+    var count: usize = 0;
+    while (col > 0) {
+        const ch = line.byteAt(col - 1) orelse break;
+        if (!isIdentifierChar(ch)) break;
+        count += 1;
+        col -= 1;
+    }
+    return count;
+}
+
+pub fn matchingCompletionCount(tab: anytype, items: []std.json.Value) usize {
+    var count: usize = 0;
+    for (items) |value| {
+        const item = completion_menu.completionItemObject(value) orelse continue;
+        if (completionItemMatchesTabPrefix(tab, item)) count += 1;
+    }
+    return count;
 }
 
 pub fn handleCompletionInput(editor: anytype, event: terminal.KeyEvent) !bool {
@@ -268,27 +332,34 @@ pub fn handleCompletionInput(editor: anytype, event: terminal.KeyEvent) !bool {
     if (completionActionCommandForEvent(editor, event)) |command| {
         switch (command) {
             .completion_previous => {
-                if (editor.state.lsp_ui.completion_selected > 0) {
-                    editor.state.lsp_ui.completion_selected -= 1;
-                } else if (items.len > 0) {
-                    editor.state.lsp_ui.completion_selected = items.len - 1;
+                const tab = editor.currentTab() orelse return true;
+                if (previousMatchingCompletionIndex(tab, items, editor.state.lsp_ui.completion_selected)) |idx| {
+                    editor.state.lsp_ui.completion_selected = idx;
+                } else {
+                    editor.state.lsp_ui.clearCompletion();
                 }
                 return true;
             },
             .completion_next => {
-                if (editor.state.lsp_ui.completion_selected < items.len - 1) {
-                    editor.state.lsp_ui.completion_selected += 1;
+                const tab = editor.currentTab() orelse return true;
+                if (nextMatchingCompletionIndex(tab, items, editor.state.lsp_ui.completion_selected)) |idx| {
+                    editor.state.lsp_ui.completion_selected = idx;
                 } else {
-                    editor.state.lsp_ui.completion_selected = 0;
+                    editor.state.lsp_ui.clearCompletion();
                 }
                 return true;
             },
             .completion_accept => {
-                if (items.len == 0) {
+                const tab = editor.currentTab() orelse {
                     editor.state.lsp_ui.clearCompletion();
                     return false;
-                }
-                const item = completion_menu.completionItemObject(items[editor.state.lsp_ui.completion_selected]) orelse {
+                };
+                const selected_idx = selectedMatchingCompletionIndex(tab, items, editor.state.lsp_ui.completion_selected) orelse {
+                    editor.state.lsp_ui.clearCompletion();
+                    return false;
+                };
+                editor.state.lsp_ui.completion_selected = selected_idx;
+                const item = completion_menu.completionItemObject(items[selected_idx]) orelse {
                     editor.state.lsp_ui.clearCompletion();
                     return false;
                 };
@@ -296,17 +367,21 @@ pub fn handleCompletionInput(editor: anytype, event: terminal.KeyEvent) !bool {
                     editor.state.lsp_ui.clearCompletion();
                     return false;
                 };
-                const insertText = completion_menu.completionItemString(item, "insertText") orelse label;
+                const insertText = completionItemInsertText(item) orelse label;
 
-                // Insert the completion
-                if (editor.currentTab()) |tab| {
-                    const mc = tab.mainCursor();
-                    // Simple insertion for now.
-                    // TODO: handle overwrite and snippets.
-                    for (insertText) |c| {
-                        try tab.buf.insertChar(mc.row, mc.col, c);
-                        mc.col += 1;
-                    }
+                const mc = tab.mainCursor();
+                var prefix_len = identifierPrefixLen(tab);
+                while (prefix_len > 0 and mc.col > 0) : (prefix_len -= 1) {
+                    _ = try tab.buf.deleteCharBack(mc.row, mc.col);
+                    mc.col -= 1;
+                }
+                mc.preferred_col = null;
+
+                // Simple insertion for now.
+                // TODO: handle overwrite, textEdit ranges, and snippets.
+                for (insertText) |c| {
+                    try tab.buf.insertChar(mc.row, mc.col, c);
+                    mc.col += 1;
                 }
 
                 editor.state.lsp_ui.clearCompletion();
@@ -322,7 +397,7 @@ pub fn handleCompletionInput(editor: anytype, event: terminal.KeyEvent) !bool {
 
     switch (event.key) {
         .Char => {
-            if (!std.ascii.isAlphanumeric(event.char)) {
+            if (!isIdentifierChar(event.char)) {
                 editor.state.lsp_ui.clearCompletion();
                 return false;
             }
@@ -345,12 +420,16 @@ pub fn diagnosticUri(value: std.json.Value) ?[]const u8 {
 }
 
 pub fn isValidCompletionValue(value: std.json.Value) bool {
-    if (value == .array) return true;
+    return completionItemsFromValue(value) != null;
+}
+
+fn completionItemsFromValue(value: std.json.Value) ?[]std.json.Value {
+    if (value == .array) return value.array.items;
     if (value == .object) {
-        const items = value.object.get("items") orelse return false;
-        return items == .array;
+        const items = value.object.get("items") orelse return null;
+        if (items == .array) return items.array.items;
     }
-    return false;
+    return null;
 }
 
 pub fn completionItemObject(value: std.json.Value) ?std.json.ObjectMap {
@@ -359,6 +438,73 @@ pub fn completionItemObject(value: std.json.Value) ?std.json.ObjectMap {
 
 pub fn completionItemString(item: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     return completion_menu.completionItemString(item, key);
+}
+
+fn selectedMatchingCompletionIndex(tab: anytype, items: []std.json.Value, selected_idx: usize) ?usize {
+    if (items.len == 0) return null;
+    if (selected_idx < items.len) {
+        if (completion_menu.completionItemObject(items[selected_idx])) |item| {
+            if (completionItemMatchesTabPrefix(tab, item)) return selected_idx;
+        }
+    }
+    return firstMatchingCompletionIndex(tab, items);
+}
+
+fn firstMatchingCompletionIndex(tab: anytype, items: []std.json.Value) ?usize {
+    for (items, 0..) |value, idx| {
+        const item = completion_menu.completionItemObject(value) orelse continue;
+        if (completionItemMatchesTabPrefix(tab, item)) return idx;
+    }
+    return null;
+}
+
+fn nextMatchingCompletionIndex(tab: anytype, items: []std.json.Value, selected_idx: usize) ?usize {
+    if (items.len == 0) return null;
+    var offset: usize = 1;
+    while (offset <= items.len) : (offset += 1) {
+        const idx = (selected_idx + offset) % items.len;
+        const item = completion_menu.completionItemObject(items[idx]) orelse continue;
+        if (completionItemMatchesTabPrefix(tab, item)) return idx;
+    }
+    return null;
+}
+
+fn previousMatchingCompletionIndex(tab: anytype, items: []std.json.Value, selected_idx: usize) ?usize {
+    if (items.len == 0) return null;
+    var offset: usize = 1;
+    while (offset <= items.len) : (offset += 1) {
+        const idx = (selected_idx + items.len - (offset % items.len)) % items.len;
+        const item = completion_menu.completionItemObject(items[idx]) orelse continue;
+        if (completionItemMatchesTabPrefix(tab, item)) return idx;
+    }
+    return null;
+}
+
+fn completionItemMatchesTabPrefix(tab: anytype, item: std.json.ObjectMap) bool {
+    const candidate = completionItemFilterText(item) orelse return false;
+    const mc = tab.mainCursor();
+    if (mc.row >= tab.buf.lines.items.len) return false;
+    const line = &tab.buf.lines.items[mc.row];
+    const prefix_len = identifierPrefixLen(tab);
+    if (prefix_len == 0) return true;
+    if (candidate.len < prefix_len or mc.col < prefix_len) return false;
+    const start_col = mc.col - prefix_len;
+    for (0..prefix_len) |i| {
+        const ch = line.byteAt(start_col + i) orelse return false;
+        if (candidate[i] != ch) return false;
+    }
+    return true;
+}
+
+fn completionItemFilterText(item: std.json.ObjectMap) ?[]const u8 {
+    return completion_menu.completionItemString(item, "filterText") orelse
+        completionItemInsertText(item) orelse
+        completion_menu.completionItemString(item, "label");
+}
+
+fn completionItemInsertText(item: std.json.ObjectMap) ?[]const u8 {
+    return completion_menu.completionItemString(item, "insertText") orelse
+        completion_menu.completionItemString(item, "filterText");
 }
 
 fn completionActionCommandForEvent(editor: anytype, event: terminal.KeyEvent) ?commands.CommandId {
@@ -375,4 +521,12 @@ fn completionActionCommandForEvent(editor: anytype, event: terminal.KeyEvent) ?c
         => command,
         else => null,
     };
+}
+
+fn isPlainIdentifierCharEvent(event: terminal.KeyEvent) bool {
+    return event.key == .Char and !event.ctrl and !event.alt and !event.shift and isIdentifierChar(event.char);
+}
+
+fn isIdentifierChar(ch: u8) bool {
+    return std.ascii.isAlphanumeric(ch) or ch == '_';
 }

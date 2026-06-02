@@ -156,7 +156,7 @@ pub fn setVirtualCursor(editor: anytype, ctx: RenderContext) void {
         return;
     }
     if (editor.state.mode == .Search) {
-        editor.renderer.screen.setCursor(viewport_mod.statusTerminalRow(editor), 2 + editor.state.search_buffer.items.len);
+        editor.renderer.screen.setCursor(viewport_mod.statusTerminalRow(editor), statusline.searchCursorTerminalCol(editor));
         return;
     }
     if (editor.state.mode == .OpenFilePrompt) {

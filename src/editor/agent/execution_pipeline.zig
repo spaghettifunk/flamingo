@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const logz = @import("logz");
 const agent = @import("session.zig");
 const policy = @import("policy.zig");
 const proposal_apply = @import("proposal_apply.zig");
@@ -11,6 +13,7 @@ pub const validation_commands = [_][]const u8{
 };
 
 pub fn approveApplyAndStart(ed: anytype, proposal_id: u64) void {
+    logz.debug().fmt("msg", "execution_pipeline approveApplyAndStart: Proposal ID {d}", .{proposal_id}).log();
     const selected = ed.state.proposal_manager.getProposalConst(proposal_id) orelse {
         ed.state.status_message = "No proposal selected";
         return;
@@ -73,6 +76,7 @@ pub fn approveApplyAndStart(ed: anytype, proposal_id: u64) void {
 }
 
 pub fn onTaskStarted(ed: anytype, task_id: u64, started_at_ms: i64) void {
+    logz.debug().fmt("msg", "execution_pipeline onTaskStarted: Task ID {d}", .{task_id}).log();
     const execution_item = ed.state.execution_manager.markTaskStarted(task_id, started_at_ms) catch return;
     appendExecutionEventById(ed, execution_item.id, .execution_validation_task_started, "Running validation: {s}", .{
         taskCommand(execution_item, task_id),
@@ -81,6 +85,7 @@ pub fn onTaskStarted(ed: anytype, task_id: u64, started_at_ms: i64) void {
 }
 
 pub fn onTaskFinished(ed: anytype, task_id: u64, status: task_mod.TaskStatus, exit_code: ?i32, finished_at_ms: i64) void {
+    logz.debug().fmt("msg", "execution_pipeline onTaskFinished: Task ID {d}, Status={s}, ExitCode={?d}", .{ task_id, status.label(), exit_code }).log();
     const execution_item = ed.state.execution_manager.markTaskFinished(task_id, status, exit_code, finished_at_ms) catch return;
     const execution_id = execution_item.id;
     const command = taskCommand(execution_item, task_id);
@@ -112,6 +117,7 @@ pub fn onTaskFinished(ed: anytype, task_id: u64, status: task_mod.TaskStatus, ex
 }
 
 pub fn onTaskFailedToStart(ed: anytype, task_id: u64, message: []const u8, finished_at_ms: i64) void {
+    logz.debug().fmt("msg", "execution_pipeline onTaskFailedToStart: Task ID {d}, Error='{s}'", .{ task_id, message }).log();
     const execution_item = ed.state.execution_manager.markTaskFinished(task_id, .failed, null, finished_at_ms) catch return;
     failExecution(ed, execution_item.id, message, "Validation task failed to start. Open :tasks to inspect output. Review changes with :gitdiff.");
 }
@@ -178,6 +184,7 @@ fn startNextValidationCommand(ed: anytype, execution_id: u64) void {
     const commands = configuredValidationCommands(ed);
     if (execution_item.next_validation_index >= commands.len) return;
     const command = commands[execution_item.next_validation_index];
+    logz.debug().fmt("msg", "execution_pipeline startNextValidationCommand: Session {d}, Exec {d}, Command: '{s}'", .{ execution_item.session_id, execution_id, command }).log();
     const root = agentRoot(ed);
     const policy_result = evaluateValidationPolicy(ed, execution_item.session_id, execution_id, command);
     switch (policy_result) {
@@ -234,6 +241,7 @@ fn evaluateProposalApplyPolicy(ed: anytype, session_id: u64, proposal_id: u64, p
         .path = path,
         .reason = description,
     });
+    logz.debug().fmt("msg", "execution_pipeline evaluateProposalApplyPolicy: Session {d}, Proposal {d}, Path '{s}', Decision={s}, Msg={s}", .{ session_id, proposal_id, path, @tagName(decision.decision), decision.message orelse "" }).log();
     switch (decision.decision) {
         .allow => {
             ed.state.agent_manager.appendAuditEvent(session_id, .tool_allowed, decision.message orelse "proposal apply allowed", now) catch {};
@@ -270,6 +278,7 @@ fn evaluateValidationPolicy(ed: anytype, session_id: u64, execution_id: u64, com
         .command_display = command,
         .reason = "Validate applied proposal.",
     });
+    logz.debug().fmt("msg", "execution_pipeline evaluateValidationPolicy: Session {d}, Exec {d}, Command '{s}', Decision={s}, Msg={s}", .{ session_id, execution_id, command, @tagName(decision.decision), decision.message orelse "" }).log();
     switch (decision.decision) {
         .allow => return .allowed,
         .deny => {

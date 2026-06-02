@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const logz = @import("logz");
 const agent = @import("../agent/session.zig");
 const audit = @import("../agent/audit.zig");
@@ -72,6 +73,8 @@ pub const MockAgentWorker = struct {
     ) StartError!void {
         try self.prepareForStart();
 
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock startSession: Session ID {d}, Mode: {s}", .{ id, @tagName(mode) }).log();
+
         const owned_prompt = try self.allocator.dupe(u8, prompt);
         errdefer self.allocator.free(owned_prompt);
         const owned_workspace_root = try self.allocator.dupe(u8, workspace_root);
@@ -140,6 +143,8 @@ pub const MockAgentWorker = struct {
             self.mutex.unlock(self.io);
         }
 
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock run: Thread started for session {d}", .{owned_request.id}).log();
+
         self.emit(.status, "User prompt received.", owned_request.id);
         const context_summary = owned_request.context.formatCompactSummary(self.allocator) catch null;
         if (context_summary) |text| {
@@ -155,22 +160,29 @@ pub const MockAgentWorker = struct {
     }
 
     fn runPlanScript(self: *MockAgentWorker, id: u64, prompt: []const u8, workspace_root: []const u8) void {
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock runPlanScript: Session {d} starting plan with prompt: '{s}'", .{ id, prompt }).log();
         var executor = tool_executor.AgentToolExecutor.initWithPolicy(self.allocator, self.io, workspace_root, id, .plan, self.policy_config, self.queue);
         var planner = readonly_planner.ReadOnlyPlanner.init(self.allocator, &executor, id);
         var emitter = WorkerPlannerEmitter{ .worker = self, .id = id };
         planner.run(prompt, &emitter) catch |err| switch (err) {
-            error.Cancelled => return,
+            error.Cancelled => {
+                if (!builtin.is_test) logz.debug().fmt("msg", "mock runPlanScript: Session {d} cancelled", .{id}).log();
+                return;
+            },
             else => {
+                if (!builtin.is_test) logz.debug().fmt("msg", "mock runPlanScript: Session {d} failed: {s}", .{ id, @errorName(err) }).log();
                 self.emitFmt(.agent_error, id, "Plan session failed: {s}", .{@errorName(err)});
                 self.finish(id, .failed);
                 return;
             },
         };
         if (self.pauseOrCancel(id)) return;
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock runPlanScript: Session {d} completed successfully", .{id}).log();
         self.finish(id, .completed);
     }
 
     fn runImplementationScript(self: *MockAgentWorker, id: u64, prompt: []const u8, workspace_root: []const u8) void {
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock runImplementationScript: Session {d} starting implementation with prompt: '{s}'", .{ id, prompt }).log();
         self.emit(.status, "Starting implementation session.", id);
         if (self.pauseOrCancel(id)) return;
 
@@ -181,6 +193,7 @@ pub const MockAgentWorker = struct {
             .session_id = id,
             .input = .{ .search_text = .{ .query = query, .max_results = 10 } },
         };
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock runImplementationScript: Session {d} executing mock search tool (query: '{s}')", .{ id, query }).log();
         const call_text = tools.formatToolCall(self.allocator, call) catch null;
         if (call_text) |text| {
             defer self.allocator.free(text);
@@ -191,16 +204,23 @@ pub const MockAgentWorker = struct {
         const result_text = tools.formatToolResult(self.allocator, result) catch null;
         if (result_text) |text| {
             defer self.allocator.free(text);
+            if (!builtin.is_test) {
+                logz.debug().fmt("msg", "mock runImplementationScript: Search tool result received, success={}", .{result.ok}).log();
+                logz.debug().fmt("tool_result", "\n{s}", .{text}).log();
+            }
             self.emit(if (result.ok) .tool_result else .agent_error, text, id);
         }
         if (self.pauseOrCancel(id)) return;
 
         self.emit(.assistant_message, "Preparing patch proposal.", id);
         var draft = mock_implementation.buildMockProposalDraft(self.allocator, id, prompt, agent.nowMs(self.io)) catch |err| {
+            if (!builtin.is_test) logz.debug().fmt("msg", "mock runImplementationScript: Session {d} proposal generation failed: {s}", .{ id, @errorName(err) }).log();
             self.emitFmt(.proposal_failed, id, "Proposal generation failed: {s}", .{@errorName(err)});
             self.finish(id, .failed);
             return;
         };
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock runImplementationScript: Proposed patch for file '{s}': '{s}'", .{ draft.file_path, draft.description }).log();
+
         var engine = policy.AgentPolicyEngine.init(self.allocator, self.io, workspace_root, self.policy_config);
         self.emitAudit(id, .tool_requested, "create_patch_proposal");
         const decision = engine.evaluate(&executor.policy_state, .{
@@ -209,6 +229,8 @@ pub const MockAgentWorker = struct {
             .path = draft.file_path,
             .reason = draft.description,
         });
+        if (!builtin.is_test) logz.debug().fmt("msg", "mock runImplementationScript policy evaluation: decision={s}, msg={s}", .{ @tagName(decision.decision), decision.message orelse "" }).log();
+
         if (decision.decision != .allow) {
             const message = decision.message orelse "patch proposal denied by policy";
             self.emitAudit(id, .tool_denied, message);
@@ -221,6 +243,7 @@ pub const MockAgentWorker = struct {
         self.emitAudit(id, .tool_allowed, decision.message orelse "proposal allowed");
         self.queue.push(.{ .agent_proposal_created = draft }) catch |err| {
             draft.deinit(self.allocator);
+            if (!builtin.is_test) logz.debug().fmt("msg", "mock runImplementationScript: Session {d} failed to queue proposal: {s}", .{ id, @errorName(err) }).log();
             self.emitFmt(.proposal_failed, id, "Proposal could not be queued: {s}", .{@errorName(err)});
             self.finish(id, .failed);
             return;
