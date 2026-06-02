@@ -289,7 +289,9 @@ fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: 
     }
 
     if (event_rows == 0) return;
-    manager.clampScroll(event_rows);
+    const event_content_width = eventContentWidth(geom);
+    const total_event_rows = sessionVisualRows(session, event_content_width);
+    manager.clampScrollRows(total_event_rows, event_rows);
 
     if (session.events.items.len == 0) {
         var col = geom.col + 2;
@@ -297,14 +299,7 @@ fn renderBody(editor: anytype, geom: popup.FilesystemPickerGeometry, start_row: 
         return;
     }
 
-    for (0..event_rows) |offset| {
-        const index = manager.event_scroll + offset;
-        const row = event_start + offset;
-        if (index >= session.events.items.len) break;
-        const event = session.events.items[index];
-        popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
-        renderEventRow(screen, row, geom, event);
-    }
+    renderEventRows(screen, geom, event_start, event_rows, session, manager.event_scroll);
 }
 
 fn renderContextSummary(screen: *render_mod.VirtualScreen, row: usize, geom: popup.FilesystemPickerGeometry, session: anytype) void {
@@ -476,12 +471,107 @@ fn renderExecutionBlock(screen: *render_mod.VirtualScreen, geom: popup.Filesyste
     }
 }
 
-fn renderEventRow(screen: *render_mod.VirtualScreen, row: usize, geom: popup.FilesystemPickerGeometry, event: agent.AgentEvent) void {
+fn eventContentWidth(geom: popup.FilesystemPickerGeometry) usize {
+    const start_col = geom.col + 2;
+    const end = geom.col + geom.width - 1;
+    return @max(@as(usize, 1), end -| start_col + 1);
+}
+
+fn sessionVisualRows(session: anytype, content_width: usize) usize {
+    var rows: usize = 0;
+    for (session.events.items) |event| {
+        rows += eventVisualRows(event, content_width);
+    }
+    return rows;
+}
+
+fn eventVisualRows(event: agent.AgentEvent, content_width: usize) usize {
+    const prefix_width = eventPrefixWidth(event);
+    const text_width = @max(@as(usize, 1), content_width -| prefix_width);
+    return textVisualRows(event.text, text_width);
+}
+
+fn eventPrefixWidth(event: agent.AgentEvent) usize {
+    return event.kind.label().len + 2;
+}
+
+fn textVisualRows(text: []const u8, width: usize) usize {
+    if (text.len == 0) return 1;
+    var rows: usize = 0;
+    var line_start: usize = 0;
+    for (text, 0..) |ch, index| {
+        if (ch != '\n') continue;
+        rows += lineVisualRows(text[line_start..index], width);
+        line_start = index + 1;
+    }
+    rows += lineVisualRows(text[line_start..], width);
+    return rows;
+}
+
+fn renderEventRows(
+    screen: *render_mod.VirtualScreen,
+    geom: popup.FilesystemPickerGeometry,
+    start_row: usize,
+    rows: usize,
+    session: anytype,
+    scroll_row: usize,
+) void {
+    var skipped: usize = 0;
+    var drawn: usize = 0;
+    const content_width = eventContentWidth(geom);
+
+    for (session.events.items) |event| {
+        const visual_rows = eventVisualRows(event, content_width);
+        if (skipped + visual_rows <= scroll_row) {
+            skipped += visual_rows;
+            continue;
+        }
+
+        var event_row_offset = scroll_row -| skipped;
+        while (event_row_offset < visual_rows and drawn < rows) : (event_row_offset += 1) {
+            const row = start_row + drawn;
+            popup.drawPickerRow(screen, row, geom.col, geom.width, .command_popup_border, .command_popup);
+            renderEventVisualRow(screen, row, geom, event, event_row_offset);
+            drawn += 1;
+        }
+        skipped += visual_rows;
+        if (drawn >= rows) break;
+    }
+}
+
+fn renderEventVisualRow(
+    screen: *render_mod.VirtualScreen,
+    row: usize,
+    geom: popup.FilesystemPickerGeometry,
+    event: agent.AgentEvent,
+    visual_row: usize,
+) void {
     var col = geom.col + 2;
     const end = geom.col + geom.width - 1;
-    popup.writeVirtualTruncatedCells(screen, row, &col, end, event.kind.label(), eventStyle(event.kind), false);
-    popup.writeVirtualTruncatedCells(screen, row, &col, end, ": ", .explorer_dim, false);
-    popup.writeVirtualTruncatedCells(screen, row, &col, end, event.text, eventStyle(event.kind), true);
+    const prefix_width = eventPrefixWidth(event);
+    const text_width = @max(@as(usize, 1), eventContentWidth(geom) -| prefix_width);
+    if (visual_row == 0) {
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, event.kind.label(), eventStyle(event.kind), false);
+        popup.writeVirtualTruncatedCells(screen, row, &col, end, ": ", .explorer_dim, false);
+    } else {
+        writeSpaces(screen, row, &col, end, prefix_width, .explorer_dim);
+    }
+    const line = promptVisualSliceAt(event.text, text_width, visual_row);
+    popup.writeVirtualTruncatedCells(screen, row, &col, end, line, eventStyle(event.kind), true);
+}
+
+fn writeSpaces(
+    screen: *render_mod.VirtualScreen,
+    row: usize,
+    col: *usize,
+    end: usize,
+    count: usize,
+    style: render_mod.RenderStyle,
+) void {
+    var remaining = count;
+    while (remaining > 0 and col.* <= end) : (remaining -= 1) {
+        popup.writeVirtualTruncatedCells(screen, row, col, end, " ", style, false);
+    }
 }
 
 fn statusStyle(status: agent.AgentSessionStatus) render_mod.RenderStyle {

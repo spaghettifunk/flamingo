@@ -121,6 +121,7 @@ pub const AgentManager = struct {
 
         const session = self.findSession(id).?;
         try session.appendEvent(self.allocator, .user_prompt, prompt, now_ms);
+        self.scrollEventsToBottom();
         return id;
     }
 
@@ -133,6 +134,9 @@ pub const AgentManager = struct {
     ) !void {
         const session = self.findSession(id) orelse return;
         try session.appendEvent(self.allocator, kind, text, timestamp_ms);
+        if (self.selectedSessionConst()) |selected| {
+            if (selected.id == id) self.scrollEventsToBottom();
+        }
     }
 
     pub fn appendAuditEvent(
@@ -254,9 +258,9 @@ pub const AgentManager = struct {
     }
 
     pub fn scrollDown(self: *AgentManager, amount: usize, visible_rows: usize) void {
-        const session = self.selectedSessionConst() orelse return;
-        const max_scroll = session.events.items.len -| visible_rows;
-        self.event_scroll = @min(self.event_scroll + amount, max_scroll);
+        _ = visible_rows;
+        if (self.selectedSessionConst() == null) return;
+        self.event_scroll +|= amount;
     }
 
     pub fn clampScroll(self: *AgentManager, visible_rows: usize) void {
@@ -265,6 +269,14 @@ pub const AgentManager = struct {
             return;
         };
         self.event_scroll = @min(self.event_scroll, session.events.items.len -| visible_rows);
+    }
+
+    pub fn clampScrollRows(self: *AgentManager, total_rows: usize, visible_rows: usize) void {
+        self.event_scroll = @min(self.event_scroll, total_rows -| visible_rows);
+    }
+
+    fn scrollEventsToBottom(self: *AgentManager) void {
+        self.event_scroll = std.math.maxInt(usize);
     }
 
     pub fn hasRunningSession(self: *const AgentManager) bool {

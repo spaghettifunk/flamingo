@@ -1919,7 +1919,7 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.markDirty(.partial);
         },
         .agent_scroll_up => {
-            if (ed.state.agent_manager.canEditPrompt()) {
+            if (shouldScrollAgentPrompt(ed)) {
                 ed.state.agent_manager.scrollPromptUp(1);
             } else {
                 ed.state.agent_manager.scrollUp(1);
@@ -1927,7 +1927,7 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.markDirty(.partial);
         },
         .agent_scroll_down => {
-            if (ed.state.agent_manager.canEditPrompt()) {
+            if (shouldScrollAgentPrompt(ed)) {
                 ed.state.agent_manager.scrollPromptDown(1);
             } else {
                 ed.state.agent_manager.scrollDown(1, rows);
@@ -1935,7 +1935,7 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.markDirty(.partial);
         },
         .agent_page_up => {
-            if (ed.state.agent_manager.canEditPrompt()) {
+            if (shouldScrollAgentPrompt(ed)) {
                 ed.state.agent_manager.scrollPromptUp(rows);
             } else {
                 ed.state.agent_manager.scrollUp(rows);
@@ -1943,7 +1943,7 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
             ed.markDirty(.partial);
         },
         .agent_page_down => {
-            if (ed.state.agent_manager.canEditPrompt()) {
+            if (shouldScrollAgentPrompt(ed)) {
                 ed.state.agent_manager.scrollPromptDown(rows);
             } else {
                 ed.state.agent_manager.scrollDown(rows, rows);
@@ -1952,6 +1952,11 @@ fn executeAgentActionCommand(ed: *editor.Editor, command: commands.CommandId) !v
         },
         else => unreachable,
     }
+}
+
+fn shouldScrollAgentPrompt(ed: *const editor.Editor) bool {
+    const session = ed.state.agent_manager.selectedSessionConst() orelse return ed.state.agent_manager.canEditPrompt();
+    return ed.state.agent_manager.canEditPrompt() and session.events.items.len == 0;
 }
 
 fn closeProposalsPanel(ed: *editor.Editor) void {

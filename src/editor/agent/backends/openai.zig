@@ -156,9 +156,15 @@ pub const OpenAIBackend = struct {
 
         logz.debug().fmt("msg", "openai run: Fetching response stream from OpenAI (model: {s})", .{self.model}).log();
         var client = openai_client.OpenAIClient.init(self.allocator, self.io, self.api_key.?, self.model);
+        defer client.deinit();
         const stream = client.fetchResponseStream(.{ .mode = owned.mode, .prompt = owned.prompt }) catch |err| {
-            logz.debug().fmt("msg", "openai run: OpenAI request failed (session {d}): {s}", .{ owned.session_id, @errorName(err) }).log();
-            self.emitFmt(.agent_error, owned.session_id, "OpenAI request failed: {s}", .{@errorName(err)});
+            if (client.errorDetail()) |detail| {
+                logz.debug().fmt("msg", "openai run: OpenAI request failed (session {d}): {s}; {s}", .{ owned.session_id, @errorName(err), detail }).log();
+                self.emitFmt(.agent_error, owned.session_id, "OpenAI request failed: {s}", .{detail});
+            } else {
+                logz.debug().fmt("msg", "openai run: OpenAI request failed (session {d}): {s}", .{ owned.session_id, @errorName(err) }).log();
+                self.emitFmt(.agent_error, owned.session_id, "OpenAI request failed: {s}", .{@errorName(err)});
+            }
             self.finish(owned.session_id, .failed);
             return;
         };
