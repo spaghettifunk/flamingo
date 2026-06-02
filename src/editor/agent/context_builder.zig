@@ -259,7 +259,7 @@ pub const AgentContextBuilder = struct {
     fn collectPromptPathCandidates(self: *AgentContextBuilder, prompt: []const u8, out: *std.ArrayListUnmanaged(Candidate)) !void {
         var it = std.mem.tokenizeAny(u8, prompt, " \t\r\n\"'`()[]{}<>,;");
         while (it.next()) |raw| {
-            const token = std.mem.trim(u8, raw, ".:!?");
+            const token = trimPromptPathToken(raw);
             if (!looksLikePath(token)) continue;
             try self.appendCandidate(out, token, "mentioned in prompt", null);
         }
@@ -406,6 +406,12 @@ fn looksLikePath(token: []const u8) bool {
     return false;
 }
 
+fn trimPromptPathToken(raw: []const u8) []const u8 {
+    var token = std.mem.trim(u8, raw, ":!?");
+    while (token.len > 0 and token[token.len - 1] == '.') token = token[0 .. token.len - 1];
+    return token;
+}
+
 fn firstSearchKeyword(prompt: []const u8) ?[]const u8 {
     var it = std.mem.tokenizeAny(u8, prompt, " \t\r\n\"'`()[]{}<>,;.:!?/\\");
     while (it.next()) |token| {
@@ -469,12 +475,17 @@ test "context builder extracts prompt paths and excludes secrets" {
         .started_at_ms = 0,
     };
     defer session.deinit(allocator);
-    var builder = AgentContextBuilder.init(allocator, io, root, .{ .max_file_read_bytes = 4096 }, .{}, &.{ "zig build test" }, null);
+    var builder = AgentContextBuilder.init(allocator, io, root, .{ .max_file_read_bytes = 4096 }, .{}, &.{"zig build test"}, null);
     var package = try builder.build(&session, session.prompt, .plan);
     defer package.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), package.relevant_files.items.len);
     try std.testing.expectEqualStrings("src/main.zig", package.relevant_files.items[0].path);
     try std.testing.expect(package.notes.items.len >= 1);
+}
+
+test "context builder prompt path trimming preserves dotfiles" {
+    try std.testing.expectEqualStrings(".env", trimPromptPathToken(".env"));
+    try std.testing.expectEqualStrings("src/main.zig", trimPromptPathToken("src/main.zig."));
 }
 
 test "context builder rejects git internals keys outside workspace and binary files" {
@@ -499,7 +510,7 @@ test "context builder rejects git internals keys outside workspace and binary fi
         .started_at_ms = 0,
     };
     defer session.deinit(allocator);
-    var builder = AgentContextBuilder.init(allocator, io, root, .{ .max_file_read_bytes = 4096 }, .{}, &.{ "zig build test" }, null);
+    var builder = AgentContextBuilder.init(allocator, io, root, .{ .max_file_read_bytes = 4096 }, .{}, &.{"zig build test"}, null);
     var package = try builder.build(&session, session.prompt, .plan);
     defer package.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), package.relevant_files.items.len);
@@ -531,7 +542,7 @@ test "context builder truncates files and total budget" {
         root,
         .{ .max_file_read_bytes = 1024 },
         .{ .max_context_files = 8, .max_context_file_bytes = 32, .max_context_total_bytes = 4096 },
-        &.{ "zig build test" },
+        &.{"zig build test"},
         null,
     );
     var package = try builder.build(&session, session.prompt, .plan);
@@ -564,7 +575,7 @@ test "context builder includes active buffer content" {
         root,
         .{ .max_file_read_bytes = 1024 },
         .{},
-        &.{ "zig build test" },
+        &.{"zig build test"},
         .{ .path = "src/live.zig", .content = "unsaved\n" },
     );
     var package = try builder.build(&session, session.prompt, .plan);
