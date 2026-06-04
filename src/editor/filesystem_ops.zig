@@ -142,6 +142,25 @@ pub fn createFileNoOverwrite(
     _ = allocator;
 }
 
+pub fn createDirectoryNoOverwrite(io: std.Io, path: []const u8, create_parents: bool) !void {
+    if (path.len == 0) return error.EmptyPath;
+    if (std.Io.Dir.cwd().statFile(io, path, .{})) |_| return error.PathAlreadyExists else |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    }
+
+    if (std.fs.path.dirname(path)) |parent| {
+        if (create_parents) {
+            try std.Io.Dir.cwd().createDirPath(io, parent);
+        } else {
+            const parent_stat = std.Io.Dir.cwd().statFile(io, parent, .{}) catch return error.ParentMissing;
+            if (parent_stat.kind != .directory) return error.ParentMissing;
+        }
+    }
+
+    try std.Io.Dir.cwd().createDir(io, path, .default_dir);
+}
+
 pub fn renameNoOverwrite(io: std.Io, old_path: []const u8, new_path: []const u8) !void {
     if (old_path.len == 0 or new_path.len == 0) return error.EmptyPath;
     _ = std.Io.Dir.cwd().statFile(io, old_path, .{}) catch return error.FileNotFound;
@@ -363,7 +382,7 @@ pub fn userMessage(err: anyerror) []const u8 {
     return switch (err) {
         error.EmptyPath, error.InvalidPath => "Invalid path",
         error.OutsideProjectRoot => "Path is outside project root",
-        error.PathAlreadyExists => "File already exists",
+        error.PathAlreadyExists => "Path already exists",
         error.FileNotFound => "File does not exist",
         error.ParentMissing => "Parent directory does not exist",
         error.ExpectedFile => "Expected a file",
@@ -409,6 +428,40 @@ test "create and rename refuse existing destinations" {
     try std.testing.expectError(error.PathAlreadyExists, createFileNoOverwrite(allocator, io, a, false));
     try createFileNoOverwrite(allocator, io, b, false);
     try std.testing.expectError(error.PathAlreadyExists, renameNoOverwrite(io, a, b));
+}
+
+test "createDirectoryNoOverwrite creates only missing directories" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    const dir_path = try std.fs.path.join(allocator, &.{ root, "new-folder" });
+    defer allocator.free(dir_path);
+
+    try createDirectoryNoOverwrite(io, dir_path, false);
+    const stat = try std.Io.Dir.cwd().statFile(io, dir_path, .{});
+    try std.testing.expectEqual(.directory, stat.kind);
+    try std.testing.expectError(error.PathAlreadyExists, createDirectoryNoOverwrite(io, dir_path, false));
+}
+
+test "createDirectoryNoOverwrite can create missing parents" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = path_buf[0..try tmp.dir.realPath(io, &path_buf)];
+    const dir_path = try std.fs.path.join(allocator, &.{ root, "nested", "child" });
+    defer allocator.free(dir_path);
+
+    try std.testing.expectError(error.ParentMissing, createDirectoryNoOverwrite(io, dir_path, false));
+    try createDirectoryNoOverwrite(io, dir_path, true);
+    const stat = try std.Io.Dir.cwd().statFile(io, dir_path, .{});
+    try std.testing.expectEqual(.directory, stat.kind);
 }
 
 test "deleteRegularFile refuses directories" {

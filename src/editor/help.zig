@@ -279,6 +279,25 @@ test "help registry has rows and includes help command" {
     try std.testing.expect(found);
 }
 
+test "help includes explorer new folder keybinding" {
+    const registry = keybindings.defaultRegistry();
+    var found = false;
+    var keys_buf: [160]u8 = undefined;
+
+    for (0..registryTotalRows(&registry)) |i| {
+        switch (registryRowAt(&registry, i).?) {
+            .command => |command| {
+                if (command.meta.id != .explorer_new_folder) continue;
+                const keys = formatCommandKeys(command.meta, &registry, &keys_buf);
+                found = std.mem.indexOf(u8, keys, "explorer: alt+shift+n") != null;
+            },
+            .category => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
 test "help registry starts with modes category" {
     const registry = keybindings.defaultRegistry();
     const first = registryRowAt(&registry, 0) orelse return error.ExpectedRow;

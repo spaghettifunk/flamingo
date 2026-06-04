@@ -1560,7 +1560,7 @@ test "Command popup: typing and backspace update suggestions" {
     try std.testing.expectEqual(@as(usize, 4), ed.state.command_popup.suggestions.items.len);
 }
 
-test "Command popup: tab moves suggestion selection without editing input" {
+test "Command popup: tab accepts selected suggestion" {
     const a = std.testing.allocator;
     var ed = try th.makeEditor(a, &[_][]const u8{""});
     defer ed.deinit();
@@ -1568,25 +1568,13 @@ test "Command popup: tab moves suggestion selection without editing input" {
     try feed(&ed, &[_]terminal.KeyEvent{
         th.keyChar(':'),
         th.keyChar('w'),
+        th.keySpecial(.Down),
         th.keyChar('\t'),
     });
-    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
-    try std.testing.expectEqual(@as(?usize, 1), ed.state.command_popup.selected_index);
+    try std.testing.expectEqualStrings("wall", ed.state.command_popup.input.items);
 
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
-    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
-    try std.testing.expectEqual(@as(?usize, 2), ed.state.command_popup.selected_index);
-
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
-    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
-    try std.testing.expectEqual(@as(?usize, 3), ed.state.command_popup.selected_index);
-
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('\t')});
-    try std.testing.expectEqualStrings("w", ed.state.command_popup.input.items);
-    try std.testing.expectEqual(@as(?usize, 0), ed.state.command_popup.selected_index);
-
-    try feed(&ed, &[_]terminal.KeyEvent{th.keyChar('!')});
-    try std.testing.expectEqualStrings("w!", ed.state.command_popup.input.items);
+    try feed(&ed, &[_]terminal.KeyEvent{th.keySpecial(.Backspace)});
+    try std.testing.expectEqualStrings("wal", ed.state.command_popup.input.items);
 }
 
 test "Command popup: arrows move suggestion selection without editing input" {
@@ -2296,6 +2284,28 @@ test "Shift+Up: extends selection" {
 }
 
 // ── Explorer & tab control ────────────────────────────────────────────────────
+
+test "Explorer: Option+N opens new file prompt while dashboard is active" {
+    const a = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root_path);
+
+    var ed = try th.makeEmptyEditor(a);
+    defer ed.deinit();
+    try attachFocusedExplorer(a, io, &ed, root_path);
+    try std.testing.expectEqual(editor_mod.EditorMode.Dashboard, ed.state.mode);
+
+    try feed(&ed, &[_]terminal.KeyEvent{th.keyOptionChar('n')});
+
+    try std.testing.expectEqual(editor_mod.EditorMode.Prompt, ed.state.mode);
+    try std.testing.expect(ed.state.prompt_popup.visible);
+    try std.testing.expectEqual(prompt_mod.PromptKind.explorer_new_file, ed.state.prompt_popup.kind);
+    try std.testing.expectEqualStrings(root_path, ed.state.prompt_popup.context_path);
+}
 
 test "configured default Ctrl+B toggles explorer_visible" {
     const a = std.testing.allocator;

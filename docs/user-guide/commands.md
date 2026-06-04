@@ -47,6 +47,7 @@ Most command arguments are split on spaces. `:run` uses a small argv parser with
 | `:taskstop`                                         | none               | Cancel the currently running task.                                       |
 | `:git-graph`, `:ggraph`                             | none               | Open the read-only Git commit graph panel.                               |
 | `:newFile`, `:nf`                                   | path               | Create a new file and open it.                                           |
+| `:newFolder`                                        | path               | Create a new folder.                                                     |
 | `:renameFile`, `:rf`                                | old path, new path | Rename a file and update open buffers.                                   |
 | `:deleteFile`, `:df`                                | path               | Delete a regular file that is not open in the editor.                    |
 | `:<number>`                                         | line number        | Jump to the line number.                                                 |
@@ -57,7 +58,7 @@ See [../reference/command-reference.md](../reference/command-reference.md) for t
 
 ## Command Popup
 
-The command popup shows a bounded set of command suggestions. `tab` and `down` select the next suggestion; `up` selects the previous suggestion. `enter` accepts the selected suggestion before execution.
+The command popup shows a bounded set of command suggestions. `tab` accepts the selected suggestion, `down` selects the next suggestion, and `up` selects the previous suggestion. `enter` accepts the selected suggestion before execution.
 
 ## Limitations
 

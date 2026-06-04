@@ -38,6 +38,7 @@ Command metadata lives in `src/editor/commands.zig`. Colon command execution liv
 | `:df`              | path               | Alias for `:deleteFile`.                                                                 | `src/editor/commands.zig` |
 | `:newFile`         | path               | Create a new file and open it.                                                           | `src/editor/command.zig`  |
 | `:nf`              | path               | Alias for `:newFile`.                                                                    | `src/editor/commands.zig` |
+| `:newFolder`       | path               | Create a new folder.                                                                     | `src/editor/command.zig`  |
 | `:<number>`        | line number        | Jump to line.                                                                            | `src/editor/command.zig`  |
 | `:goto`            | line number        | Jump to line.                                                                            | `src/editor/command.zig`  |
 | `:line`            | line number        | Jump to line.                                                                            | `src/editor/command.zig`  |
@@ -49,11 +50,11 @@ Canonical command names are the strings used in config keybinding tables. They a
 | Category           | Examples                                                                                           | Source                    |
 | ------------------ | -------------------------------------------------------------------------------------------------- | ------------------------- |
 | App and tabs       | `app.quit_flamingo`, `app.close_tab`, `app.next_tab`, `app.previous_tab`, `app.cycle_panel_focus`  | `src/editor/commands.zig` |
-| File               | `file.write`, `file.write_all`, `file.write_quit`, `file.rename`, `file.delete`, `file.new`        | `src/editor/commands.zig` |
+| File               | `file.write`, `file.write_all`, `file.write_quit`, `file.rename`, `file.delete`, `file.new`, `file.new_folder` | `src/editor/commands.zig` |
 | Modes              | `mode.normal`, `mode.insert`, `mode.command`, `mode.search`                                        | `src/editor/commands.zig` |
 | Navigation         | `navigation.move_up`, `navigation.goto_file_start`, `navigation.goto_line`, `navigation.jump_back` | `src/editor/commands.zig` |
 | Search             | `search.open`, `search.next_match`, `search.accept`, `global_search.accept`                        | `src/editor/commands.zig` |
-| Explorer           | `explorer.toggle`, `explorer.open_selected`, `explorer.rename`, `explorer.delete`                  | `src/editor/commands.zig` |
+| Explorer           | `explorer.toggle`, `explorer.open_selected`, `explorer.new_file`, `explorer.new_folder`, `explorer.rename`, `explorer.delete` | `src/editor/commands.zig` |
 | Dashboard          | `dashboard.new_file`, `dashboard.open_file`, `dashboard.settings`                                  | `src/editor/commands.zig` |
 | TODOs              | `todos.open`, `todo_panel.new`, `todo_panel.toggle`, `todo_panel.open_selected`                    | `src/editor/commands.zig` |
 | Comments           | `comments.create`, `comments.open`, `comments_panel.reply`, `comments_panel.open_selected`         | `src/editor/commands.zig` |
@@ -69,7 +70,7 @@ For all canonical names, inspect the `command_metadata` table in `src/editor/com
 ## Argument Notes
 
 - `:w [path]` and `:wq [path]` set the current buffer filename when a path is provided.
-- `:newFile`, `:renameFile`, and `:deleteFile` split arguments on spaces.
+- `:newFile`, `:newFolder`, `:renameFile`, and `:deleteFile` split arguments on spaces.
 - `:run <command>` tokenizes command argv with whitespace, quotes, and backslash escaping, and does not execute through a shell.
 - File operation paths reject whitespace and quotes.
 - Project-relative paths are resolved inside the active project root when one exists.

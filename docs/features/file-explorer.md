@@ -6,7 +6,7 @@ Implemented.
 
 ## Overview
 
-The file explorer is a tree panel rooted at the active project folder. It can expand/collapse directories, open files, search paths, and start new-file, rename, and delete prompts for regular files.
+The file explorer is a tree panel rooted at the active project folder. It can expand/collapse directories, open files, search paths, and start new-file, new-folder, rename, and delete prompts for regular files.
 
 ## How To Use It
 
@@ -20,6 +20,7 @@ The file explorer is a tree panel rooted at the active project folder. It can ex
 | Cancel explorer search | `esc` |
 | Search backspace | `backspace` |
 | New file from selected directory | `alt+n` |
+| New folder from selected directory | `alt+shift+n` |
 | Rename selected file | `alt+r` |
 | Delete selected file | `alt+delete` or `alt+backspace` |
 
@@ -46,4 +47,3 @@ The explorer hides `.`, `..`, `.git`, `.zig-cache`, and `.DS_Store`. It displays
 - Folder rename is not supported in the explorer prompt.
 - Delete operations only delete regular files through the current UI path.
 - Explorer search is synchronous and literal case-insensitive matching.
-

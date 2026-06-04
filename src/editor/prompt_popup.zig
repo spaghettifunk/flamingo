@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const PromptKind = enum {
     explorer_new_file,
+    explorer_new_folder,
     explorer_rename,
     explorer_delete_confirm,
     todo_new,

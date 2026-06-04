@@ -20,7 +20,7 @@ icon_mode = "auto"
 #
 # [keybindings.command_line]
 # "enter" = "command.execute"
-# "tab" = "command.suggestion_next"
+# "tab" = "command.suggestion_accept"
 # "esc" = "command.cancel"
 #
 # [keybindings.search]

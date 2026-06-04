@@ -78,7 +78,8 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | --- | --- | --- |
 | `esc` | `command.cancel` | Close command prompt. |
 | `backspace` | `command.backspace` | Delete previous character. |
-| `tab`, `down` | `command.suggestion_next` | Next suggestion. |
+| `tab` | `command.suggestion_accept` | Accept selected suggestion. |
+| `down` | `command.suggestion_next` | Next suggestion. |
 | `up` | `command.suggestion_previous` | Previous suggestion. |
 | `enter` | `command.execute` | Execute command. |
 
@@ -104,6 +105,7 @@ Default bindings are defined in `src/editor/keybindings.zig`.
 | `enter` | `explorer.open_selected` | Open file or toggle directory. |
 | `/` | `explorer.search_open` | Start explorer search. |
 | `alt+n` | `explorer.new_file` | New file. |
+| `alt+shift+n` | `explorer.new_folder` | New folder. |
 | `alt+r` | `explorer.rename` | Rename selected file. |
 | `alt+delete`, `alt+backspace` | `explorer.delete` | Delete selected file. |
 

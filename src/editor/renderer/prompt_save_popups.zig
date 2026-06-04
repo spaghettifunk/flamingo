@@ -6,6 +6,7 @@ const popup = @import("popup.zig");
 pub fn promptFooter(kind: prompt_popup.PromptKind) []const u8 {
     return switch (kind) {
         .explorer_new_file => "Enter create  Backspace edit  Esc cancel",
+        .explorer_new_folder => "Enter create  Backspace edit  Esc cancel",
         .explorer_rename => "Enter rename  Backspace edit  Esc cancel",
         .explorer_delete_confirm => "Enter/y confirm  Esc/n cancel",
         .todo_new => "Enter create  Backspace edit  Esc cancel",

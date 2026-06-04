@@ -1,5 +1,25 @@
 const editor = @import("editor.zig");
 
+pub fn deleteSelection(ed: *editor.Editor) !bool {
+    const tab = ed.currentTab() orelse return false;
+    const mc = tab.mainCursor();
+    const ss = mc.selection_start orelse return false;
+    const start = if (ss.row < mc.row or (ss.row == mc.row and ss.col < mc.col)) ss else editor.Pos{ .row = mc.row, .col = mc.col };
+    const end = if (ss.row < mc.row or (ss.row == mc.row and ss.col < mc.col)) editor.Pos{ .row = mc.row, .col = mc.col } else ss;
+
+    if (start.row == end.row and start.col == end.col) {
+        mc.selection_start = null;
+        return false;
+    }
+
+    try tab.buf.deleteRange(start.row, start.col, end.row, end.col);
+    mc.row = start.row;
+    mc.col = start.col;
+    mc.selection_start = null;
+    mc.preferred_col = null;
+    return true;
+}
+
 pub fn copy(ed: *editor.Editor) !void {
     const tab = ed.currentTab() orelse return;
     const mc = tab.mainCursor();
@@ -70,6 +90,8 @@ pub fn paste(ed: *editor.Editor) !void {
 }
 
 pub fn deleteWordBack(ed: *editor.Editor) !void {
+    if (try deleteSelection(ed)) return;
+
     const tab = ed.currentTab() orelse return;
     const mc = tab.mainCursor();
     const end = editor.Pos{ .row = mc.row, .col = mc.col };

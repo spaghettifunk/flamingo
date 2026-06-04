@@ -105,6 +105,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | `:wall`                   | `:wa`                           | Write (Save) all modified buffers                          |
 | `:wq [path]`              |                                 | Save and Quit                                              |
 | `:newFile <path>`         | `:nf`                           | Create a new file at `<path>` and open it                  |
+| `:newFolder <path>`       |                                 | Create a new folder at `<path>`                            |
 | `:renameFile <old> <new>` | `:rf`                           | Rename file from `<old>` to `<new>`                        |
 | `:deleteFile <path>`      | `:df`                           | Delete file at `<path>`                                    |
 | `:search`                 |                                 | Open project-wide Global Search                            |
@@ -139,6 +140,7 @@ Execute these by pressing `:` and typing the command followed by `Enter`.
 | **Move Selection**         | `Up / Down`                                                      |
 | **Open File / Toggle Dir** | `Enter`                                                          |
 | **New File in Dir**        | `Option + N`                                                     |
+| **New Folder in Dir**      | `Option + Shift + N`                                             |
 | **Rename Node**            | `Option + R`                                                     |
 | **Delete Node**            | `Option + Delete`                                                |
 | **Search (Fuzzy)**         | `/`                                                              |
@@ -329,7 +331,7 @@ Flamingo supports context-specific keybinding tables in `config.toml`. Bind keys
 
 [keybindings.command_line]
 "enter" = "command.execute"
-"tab" = "command.suggestion_next"
+"tab" = "command.suggestion_accept"
 "esc" = "command.cancel"
 
 [keybindings.comments_panel]

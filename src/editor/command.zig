@@ -35,6 +35,7 @@ pub const Command = enum {
     rename_file,
     delete_file,
     new_file,
+    new_folder,
 
     pub fn commandId(self: Command) commands.CommandId {
         return switch (self) {
@@ -62,6 +63,7 @@ pub const Command = enum {
             .rename_file => .file_rename,
             .delete_file => .file_delete,
             .new_file => .file_new,
+            .new_folder => .file_new_folder,
         };
     }
 
@@ -107,6 +109,7 @@ fn legacyCommandFromCommandId(id: commands.CommandId) ?Command {
         .file_rename => .rename_file,
         .file_delete => .delete_file,
         .file_new => .new_file,
+        .file_new_folder => .new_folder,
         else => null,
     };
 }
@@ -359,6 +362,21 @@ pub fn execute(ed: *editor.Editor) !void {
                 setFsError(ed, err);
                 return;
             };
+            ed.state.mode = .Normal;
+        },
+        .new_folder => {
+            const input_path = requireArg(ed, &it) orelse return;
+            if (!requireNoMoreArgs(ed, &it)) return;
+            const path = fs_ops.resolveProjectPath(ed.allocator, ed.io, ed.state.project_root, input_path) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            defer ed.allocator.free(path);
+            fs_ops.createDirectoryNoOverwrite(ed.io, path, true) catch |err| {
+                setFsError(ed, err);
+                return;
+            };
+            fs_ops.refreshExplorerBestEffort(ed, path) catch {};
             ed.state.mode = .Normal;
         },
         .rename_file => {
@@ -863,6 +881,28 @@ test ":todos does not overwrite invalid workspace marker file" {
     try std.testing.expect(std.mem.indexOf(u8, ed.state.status_message.?, "not a directory") != null);
 }
 
+test ":newFolder creates a folder inside the project root" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+
+    const root = try testingTmpRoot(allocator, tmp);
+    defer allocator.free(root);
+
+    var ed = try editor.Editor.init(allocator, io, .{});
+    defer ed.deinit();
+    try ed.state.setProjectRoot(allocator, root);
+    try ed.state.command_buffer.appendSlice(allocator, "newFolder nested/child");
+    ed.state.mode = .Command;
+
+    try execute(&ed);
+
+    const stat = try tmp.dir.statFile(io, "nested/child", .{});
+    try std.testing.expectEqual(.directory, stat.kind);
+    try std.testing.expectEqual(editor.EditorMode.Normal, ed.state.mode);
+}
+
 test "Command registry parses command names" {
     try std.testing.expectEqual(Command.quit, Command.fromString("q").?);
     try std.testing.expectEqual(Command.quit_all, Command.fromString("qall").?);
@@ -887,6 +927,7 @@ test "Command registry parses command names" {
     try std.testing.expectEqual(Command.delete_file, Command.fromString("df").?);
     try std.testing.expectEqual(Command.new_file, Command.fromString("newFile").?);
     try std.testing.expectEqual(Command.new_file, Command.fromString("nf").?);
+    try std.testing.expectEqual(Command.new_folder, Command.fromString("newFolder").?);
     try std.testing.expect(Command.fromString("nope") == null);
 }
 

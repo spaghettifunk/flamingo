@@ -20,12 +20,18 @@ pub const KeyChord = struct {
     }
 
     pub fn fromEvent(event: terminal.KeyEvent) KeyChord {
+        var ch = event.char;
+        var shift = event.shift;
+        if (event.key == .Char and event.alt and ch >= 'A' and ch <= 'Z') {
+            ch = ch - 'A' + 'a';
+            shift = true;
+        }
         return .{
             .key = event.key,
-            .char = event.char,
+            .char = ch,
             .ctrl = event.ctrl,
             .alt = event.alt,
-            .shift = event.shift,
+            .shift = shift,
         };
     }
 
@@ -456,6 +462,10 @@ pub fn altChar(ch: u8) KeySequence {
     return KeySequence.fromChord(.{ .key = .Char, .char = ch, .alt = true });
 }
 
+pub fn altShiftChar(ch: u8) KeySequence {
+    return KeySequence.fromChord(.{ .key = .Char, .char = ch, .alt = true, .shift = true });
+}
+
 pub fn altKey(key: terminal.Key) KeySequence {
     return KeySequence.fromChord(.{ .key = key, .alt = true });
 }
@@ -769,7 +779,7 @@ const default_bindings = [_]Binding{
     // Command prompt.
     .{ .context = .command_line, .sequence = keySpecial(.Esc), .command = .command_cancel },
     .{ .context = .command_line, .sequence = keySpecial(.Backspace), .command = .command_backspace },
-    .{ .context = .command_line, .sequence = keyChar('\t'), .command = .command_suggestion_next },
+    .{ .context = .command_line, .sequence = keyChar('\t'), .command = .command_suggestion_accept },
     .{ .context = .command_line, .sequence = keySpecial(.Down), .command = .command_suggestion_next },
     .{ .context = .command_line, .sequence = keySpecial(.Up), .command = .command_suggestion_previous },
     .{ .context = .command_line, .sequence = keySpecial(.Enter), .command = .command_execute },
@@ -792,6 +802,7 @@ const default_bindings = [_]Binding{
     .{ .context = .explorer, .sequence = keySpecial(.Enter), .command = .explorer_open_selected },
     .{ .context = .explorer, .sequence = keyChar('/'), .command = .explorer_search_open },
     .{ .context = .explorer, .sequence = altChar('n'), .command = .explorer_new_file },
+    .{ .context = .explorer, .sequence = altShiftChar('n'), .command = .explorer_new_folder },
     .{ .context = .explorer, .sequence = altChar('r'), .command = .explorer_rename },
     .{ .context = .explorer, .sequence = altKey(.Delete), .command = .explorer_delete },
     .{ .context = .explorer, .sequence = altKey(.Backspace), .command = .explorer_delete },
@@ -1236,6 +1247,14 @@ test "same key can resolve differently across contexts" {
     });
 }
 
+test "uppercase key events resolve as shifted character bindings" {
+    const registry = defaultRegistry();
+    try std.testing.expectEqual(commands.CommandId.explorer_new_folder, switch (registry.resolve(.explorer, KeySequence.fromEvent(.{ .key = .Char, .char = 'N', .alt = true }))) {
+        .command => |command| command,
+        else => return error.ExpectedCommand,
+    });
+}
+
 test "dashboard context resolves action keys" {
     const registry = defaultRegistry();
     const cases = [_]struct {
@@ -1420,7 +1439,7 @@ test "command-line context resolves action keys and leaves text raw" {
         .{ .keys = keySpecial(.Enter), .command = .command_execute },
         .{ .keys = keySpecial(.Esc), .command = .command_cancel },
         .{ .keys = keySpecial(.Backspace), .command = .command_backspace },
-        .{ .keys = keyChar('\t'), .command = .command_suggestion_next },
+        .{ .keys = keyChar('\t'), .command = .command_suggestion_accept },
         .{ .keys = keySpecial(.Down), .command = .command_suggestion_next },
         .{ .keys = keySpecial(.Up), .command = .command_suggestion_previous },
     };
@@ -1490,7 +1509,7 @@ test "global search context resolves action keys and leaves query text raw" {
 
     try std.testing.expect(registry.resolve(.global_search, keyChar('f')) == .none);
     try std.testing.expect(registry.resolve(.search, keyChar('\t')) == .none);
-    try std.testing.expectEqual(commands.CommandId.command_suggestion_next, switch (registry.resolve(.command_line, keyChar('\t'))) {
+    try std.testing.expectEqual(commands.CommandId.command_suggestion_accept, switch (registry.resolve(.command_line, keyChar('\t'))) {
         .command => |command| command,
         else => return error.ExpectedCommand,
     });
@@ -1519,6 +1538,7 @@ test "explorer context resolves action keys" {
         .{ .keys = keySpecial(.Enter), .command = .explorer_open_selected },
         .{ .keys = keyChar('/'), .command = .explorer_search_open },
         .{ .keys = altChar('n'), .command = .explorer_new_file },
+        .{ .keys = altShiftChar('n'), .command = .explorer_new_folder },
         .{ .keys = altChar('r'), .command = .explorer_rename },
         .{ .keys = altKey(.Delete), .command = .explorer_delete },
         .{ .keys = altKey(.Backspace), .command = .explorer_delete },
@@ -1621,7 +1641,7 @@ test "popup help search terminal picker dashboard and explorer defaults exist" {
         command: commands.CommandId,
     }{
         .{ .context = .command_line, .keys = keySpecial(.Enter), .command = .command_execute },
-        .{ .context = .command_line, .keys = keyChar('\t'), .command = .command_suggestion_next },
+        .{ .context = .command_line, .keys = keyChar('\t'), .command = .command_suggestion_accept },
         .{ .context = .help, .keys = keyChar('q'), .command = .help_close },
         .{ .context = .help, .keys = keySpecial(.PageDown), .command = .help_page_down },
         .{ .context = .search, .keys = keySpecial(.Down), .command = .search_next_match },
@@ -1639,6 +1659,7 @@ test "popup help search terminal picker dashboard and explorer defaults exist" {
         .{ .context = .dashboard, .keys = ctrlChar('w'), .command = .dashboard_create_workspace },
         .{ .context = .dashboard, .keys = keySpecial(.Enter), .command = .dashboard_select },
         .{ .context = .explorer, .keys = altChar('n'), .command = .explorer_new_file },
+        .{ .context = .explorer, .keys = altShiftChar('n'), .command = .explorer_new_folder },
         .{ .context = .explorer_search, .keys = keySpecial(.Esc), .command = .explorer_search_cancel },
         .{ .context = .completion, .keys = keySpecial(.Enter), .command = .completion_accept },
         .{ .context = .completion, .keys = keyChar('\t'), .command = .completion_accept },

@@ -31,6 +31,7 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
         .command_line => switch (id) {
             .command_cancel,
             .command_backspace,
+            .command_suggestion_accept,
             .command_suggestion_next,
             .command_suggestion_previous,
             .command_execute,
@@ -154,6 +155,7 @@ fn commandAllowedInResolvedContext(context: commands.CommandContext, id: command
             .explorer_open_selected,
             .explorer_search_open,
             .explorer_new_file,
+            .explorer_new_folder,
             .explorer_rename,
             .explorer_delete,
             => true,
@@ -465,6 +467,7 @@ fn explorerFileActionCommandForEvent(ed: *editor.Editor, event: terminal.KeyEven
     const command = resolveDefaultContextCommand(ed, .explorer, event) orelse return null;
     return switch (command) {
         .explorer_new_file,
+        .explorer_new_folder,
         .explorer_rename,
         .explorer_delete,
         => command,
@@ -958,6 +961,7 @@ fn executeCommandLineActionCommand(ed: *editor.Editor, command: commands.Command
             ed.state.command_popup.close();
         },
         .command_backspace => try ed.state.command_popup.backspace(ed.allocator),
+        .command_suggestion_accept => try ed.state.command_popup.acceptSelected(ed.allocator),
         .command_suggestion_next => ed.state.command_popup.tabComplete(),
         .command_suggestion_previous => ed.state.command_popup.selectPrevious(),
         .command_execute => {
@@ -2202,6 +2206,7 @@ fn executeInsertActionCommand(ed: *editor.Editor, command: commands.CommandId) !
                     return;
                 }
                 const mc = tab.mainCursor();
+                if (try actions.deleteSelection(ed)) return;
                 const row = mc.row;
                 var prev_len: usize = 0;
                 if (row > 0) {
@@ -2377,12 +2382,13 @@ fn openExplorerPrompt(ed: *editor.Editor, kind: prompt_popup.PromptKind) !void {
     }
     const node = tree.selectedNode();
     const context_path = switch (kind) {
-        .explorer_new_file => tree.selectedBaseDirectory(),
+        .explorer_new_file, .explorer_new_folder => tree.selectedBaseDirectory(),
         .explorer_rename, .explorer_delete_confirm => if (node) |n| n.absolute_path else return,
         else => unreachable,
     };
     const title = switch (kind) {
         .explorer_new_file => "New File",
+        .explorer_new_folder => "New Folder",
         .explorer_rename => "Rename",
         .explorer_delete_confirm => "Delete",
         else => unreachable,
@@ -2446,6 +2452,7 @@ fn executeExplorerFileActionCommand(ed: *editor.Editor, command: commands.Comman
     clearPendingNormalSequence(ed);
     switch (command) {
         .explorer_new_file => try openExplorerPrompt(ed, .explorer_new_file),
+        .explorer_new_folder => try openExplorerPrompt(ed, .explorer_new_folder),
         .explorer_rename => try openExplorerPrompt(ed, .explorer_rename),
         .explorer_delete => try openExplorerPrompt(ed, .explorer_delete_confirm),
         else => unreachable,
@@ -2500,6 +2507,20 @@ fn applyPrompt(ed: *editor.Editor) !void {
                 ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
                 return;
             };
+            ed.state.prompt_popup.close(ed.allocator);
+            ed.state.mode = .Normal;
+        },
+        .explorer_new_folder => {
+            const path = promptPath(ed, context, input_text) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            defer ed.allocator.free(path);
+            fs_ops.createDirectoryNoOverwrite(ed.io, path, false) catch |err| {
+                ed.state.prompt_popup.error_message = fs_ops.userMessage(err);
+                return;
+            };
+            fs_ops.refreshExplorerBestEffort(ed, path) catch {};
             ed.state.prompt_popup.close(ed.allocator);
             ed.state.mode = .Normal;
         },
@@ -2975,7 +2996,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null and
-        (ed.state.mode == .Normal or ed.state.mode == .Insert))
+        (ed.state.mode == .Normal or ed.state.mode == .Insert or ed.state.mode == .Dashboard))
     {
         if (explorerFileActionCommandForEvent(ed, event)) |command| {
             try executeExplorerFileActionCommand(ed, command);
@@ -2984,7 +3005,7 @@ pub fn handleInput(ed: *editor.Editor, event: terminal.KeyEvent) !void {
     }
 
     if (ed.state.explorer_focused and ed.state.explorer_visible and ed.state.tree != null) {
-        if (ed.state.mode == .Normal or ed.state.mode == .Insert) {
+        if (ed.state.mode == .Normal or ed.state.mode == .Insert or ed.state.mode == .Dashboard) {
             if (ed.state.tree.?.search_active) {
                 if (explorerSearchActionCommandForEvent(ed, event)) |command| {
                     try executeExplorerSearchActionCommand(ed, command);
@@ -3289,4 +3310,33 @@ fn clampCursorToBuffer(tab: *editor.Tab, cursor: *editor.Cursor) void {
             .col = @min(selection_start.col, tab.buf.lines.items[row].len()),
         };
     }
+}
+
+test "insert backspace deletes active selection before previous character" {
+    const allocator = std.testing.allocator;
+    var ed = try editor.Editor.init(allocator, std.testing.io, .{});
+    defer ed.deinit();
+
+    var buf = try buffer.Buffer.init(allocator);
+    errdefer buf.deinit();
+    for ("hello world", 0..) |ch, index| {
+        try buf.insertChar(0, index, ch);
+    }
+    try std.testing.expect(try ed.state.addTab(ed.allocator, buf));
+
+    ed.state.mode = .Insert;
+    const tab = ed.currentTab().?;
+    const cursor = tab.mainCursor();
+    cursor.selection_start = .{ .row = 0, .col = 6 };
+    cursor.row = 0;
+    cursor.col = 11;
+
+    try ed.handleRuntimeKey(.{ .key = .Backspace });
+
+    const line = try tab.buf.lines.items[0].slice(allocator);
+    defer allocator.free(line);
+    try std.testing.expectEqualStrings("hello ", line);
+    try std.testing.expectEqual(@as(usize, 0), cursor.row);
+    try std.testing.expectEqual(@as(usize, 6), cursor.col);
+    try std.testing.expect(cursor.selection_start == null);
 }

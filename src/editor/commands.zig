@@ -16,6 +16,7 @@ pub const CommandId = enum {
     command_execute,
     command_cancel,
     command_backspace,
+    command_suggestion_accept,
     command_suggestion_next,
     command_suggestion_previous,
     help_open,
@@ -106,6 +107,7 @@ pub const CommandId = enum {
     file_rename,
     file_delete,
     file_new,
+    file_new_folder,
     mode_normal,
     mode_insert,
     mode_command,
@@ -174,6 +176,7 @@ pub const CommandId = enum {
     explorer_search_cancel,
     explorer_search_backspace,
     explorer_new_file,
+    explorer_new_folder,
     explorer_rename,
     explorer_delete,
     dashboard_new_file,
@@ -283,8 +286,8 @@ pub const CommandMeta = struct {
     show_in_command_popup: bool = false,
 };
 
-const command_popup_visible_count = 24;
-const command_line_visible_count = 25;
+const command_popup_visible_count = 25;
+const command_line_visible_count = 26;
 
 const command_metadata = [_]CommandMeta{
     .{
@@ -408,6 +411,15 @@ const command_metadata = [_]CommandMeta{
         .command_names = &.{"newFile"},
         .aliases = &.{"nf"},
         .short_description = "Create and open a file",
+        .category = .file,
+        .contexts = &.{.command_line},
+        .show_in_command_popup = true,
+    },
+    .{
+        .id = .file_new_folder,
+        .canonical_name = "file.new_folder",
+        .command_names = &.{"newFolder"},
+        .short_description = "Create a folder",
         .category = .file,
         .contexts = &.{.command_line},
         .show_in_command_popup = true,
@@ -709,6 +721,13 @@ const command_metadata = [_]CommandMeta{
         .id = .command_backspace,
         .canonical_name = "command.backspace",
         .short_description = "Delete previous command prompt character",
+        .category = .prompt,
+        .contexts = &.{.command_line},
+    },
+    .{
+        .id = .command_suggestion_accept,
+        .canonical_name = "command.suggestion_accept",
+        .short_description = "Accept selected command suggestion",
         .category = .prompt,
         .contexts = &.{.command_line},
     },
@@ -1560,6 +1579,13 @@ const command_metadata = [_]CommandMeta{
         .contexts = &.{.explorer},
     },
     .{
+        .id = .explorer_new_folder,
+        .canonical_name = "explorer.new_folder",
+        .short_description = "Create folder from explorer",
+        .category = .explorer,
+        .contexts = &.{.explorer},
+    },
+    .{
         .id = .explorer_rename,
         .canonical_name = "explorer.rename",
         .short_description = "Rename selected explorer file",
@@ -1969,6 +1995,7 @@ test "command lookup resolves canonical names" {
     try std.testing.expectEqual(CommandId.git_diff_refresh, commandByCanonicalName("git_diff.refresh").?);
     try std.testing.expectEqual(CommandId.agent_open, commandByCanonicalName("agent.open").?);
     try std.testing.expectEqual(CommandId.task_run, commandByCanonicalName("tasks.run").?);
+    try std.testing.expectEqual(CommandId.file_new_folder, commandByCanonicalName("file.new_folder").?);
     try std.testing.expect(commandByCanonicalName("nope") == null);
 }
 
@@ -2004,6 +2031,7 @@ test "command lookup resolves command line names and aliases" {
         .{ .name = "git-refresh", .id = .git_diff_refresh },
         .{ .name = "newFile", .id = .file_new },
         .{ .name = "nf", .id = .file_new },
+        .{ .name = "newFolder", .id = .file_new_folder },
         .{ .name = "renameFile", .id = .file_rename },
         .{ .name = "rf", .id = .file_rename },
         .{ .name = "deleteFile", .id = .file_delete },
@@ -2037,6 +2065,7 @@ test "command line visible commands preserve current popup order" {
         .file_rename,
         .file_delete,
         .file_new,
+        .file_new_folder,
         .comment_create,
         .comments_open,
         .git_diff_open,
